@@ -70,6 +70,12 @@ impl Config {
 - OpenAI native compaction threshold ratio: {:.2}
 - Cross-provider failover: {}
 
+**Prompt:**
+- Ignore project AGENTS.md: {}
+- Ignore global ~/.AGENTS.md: {}
+- Load .jcode/AGENTS.md: {}
+- Load .jcode/harness/*.md: {}
+
 **Agent models:**
 - Swarm / subagent: {}
 - Subagent routing entries: {}
@@ -188,6 +194,10 @@ impl Config {
             self.provider.openai_native_compaction_mode.as_str(),
             self.provider.openai_native_compaction_threshold_tokens,
             self.provider.cross_provider_failover.as_str(),
+            self.prompt.ignore_project_agents,
+            self.prompt.ignore_global_agents,
+            self.prompt.load_jcode_agents,
+            self.prompt.load_harness_dir,
             self.agents
                 .swarm_model
                 .as_deref()

@@ -366,6 +366,31 @@ pub struct AgentsConfig {
     pub memory_sidecar_enabled: bool,
 }
 
+/// Prompt and project instruction loading configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PromptConfig {
+    /// Ignore `<project>/AGENTS.md` when building the system prompt.
+    pub ignore_project_agents: bool,
+    /// Ignore `~/.AGENTS.md` when building the system prompt.
+    pub ignore_global_agents: bool,
+    /// Load private project harness instructions from `<project>/.jcode/AGENTS.md`.
+    pub load_jcode_agents: bool,
+    /// Load private project harness modules from `<project>/.jcode/harness/*.md`.
+    pub load_harness_dir: bool,
+}
+
+impl Default for PromptConfig {
+    fn default() -> Self {
+        Self {
+            ignore_project_agents: false,
+            ignore_global_agents: false,
+            load_jcode_agents: true,
+            load_harness_dir: true,
+        }
+    }
+}
+
 /// Automatic end-of-turn code review configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]

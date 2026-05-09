@@ -170,6 +170,22 @@ Track each custom patch as a small commit. Current known customizations:
    - Validation: `cargo test routing --lib` and `cargo check`.
    - Binary reinstall required: yes, because this changes runtime behavior.
 
+5. Private `.jcode/` harness prompt loading
+   - Goal: allow a local, gitignored `.jcode/` directory to act as the user's primary harness without modifying team `AGENTS.md`.
+   - Config surface: `[prompt]` in `~/.jcode/config.toml` or `<project>/.jcode/config.toml`.
+   - Supported prompt files:
+     - `<project>/.jcode/AGENTS.md`
+     - `<project>/.jcode/harness/*.md` loaded in sorted filename order
+     - `<project>/.jcode/prompt-overlay.md`
+   - Important options:
+     - `ignore_project_agents = true` skips team `<project>/AGENTS.md`.
+     - `load_jcode_agents = true` loads private `.jcode/AGENTS.md`.
+     - `load_harness_dir = true` loads private `.jcode/harness/*.md`.
+   - Priority: private `.jcode` instructions load after team/global AGENTS instructions so they have higher prompt priority. If the team harness should be fully ignored, set `ignore_project_agents = true`.
+   - Recommended `.gitignore` for projects where `.jcode` is personal only: `.jcode/`.
+   - Validation: `cargo test private_jcode --lib`, `cargo test prompt_config --lib`, and `cargo check`.
+   - Binary reinstall required: yes, because this changes runtime behavior.
+
 ## Hook design note
 
 The recommended hook strategy is:

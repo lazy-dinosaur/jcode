@@ -173,6 +173,19 @@ cross_provider_failover = "countdown"
 # Set to "zero" if you have premium Copilot and want free requests
 # copilot_premium = "zero"
 
+[prompt]
+# Project prompt/instruction loading.
+# If your repo has a team AGENTS.md but you want to use only your private .jcode harness,
+# set this in <project>/.jcode/config.toml:
+# ignore_project_agents = true
+ignore_project_agents = false
+# Ignore ~/.AGENTS.md if desired.
+ignore_global_agents = false
+# Load private project harness instructions from <project>/.jcode/AGENTS.md.
+load_jcode_agents = true
+# Load private project harness modules from <project>/.jcode/harness/*.md in sorted order.
+load_harness_dir = true
+
 [agents]
 # Default model override for spawned swarm/subagent sessions.
 # swarm_model = "gpt-5.5"

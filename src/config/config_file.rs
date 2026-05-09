@@ -1,6 +1,39 @@
 use super::*;
 use crate::storage::jcode_dir;
+use serde::Deserialize;
 use std::path::{Path, PathBuf};
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct PartialConfig {
+    prompt: PartialPromptConfig,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct PartialPromptConfig {
+    ignore_project_agents: Option<bool>,
+    ignore_global_agents: Option<bool>,
+    load_jcode_agents: Option<bool>,
+    load_harness_dir: Option<bool>,
+}
+
+impl PartialPromptConfig {
+    fn apply_to(self, prompt: &mut PromptConfig) {
+        if let Some(value) = self.ignore_project_agents {
+            prompt.ignore_project_agents = value;
+        }
+        if let Some(value) = self.ignore_global_agents {
+            prompt.ignore_global_agents = value;
+        }
+        if let Some(value) = self.load_jcode_agents {
+            prompt.load_jcode_agents = value;
+        }
+        if let Some(value) = self.load_harness_dir {
+            prompt.load_harness_dir = value;
+        }
+    }
+}
 
 impl Config {
     /// Get the config file path
@@ -58,6 +91,26 @@ impl Config {
         hooks
     }
 
+    /// Build the prompt config effective for a working directory.
+    ///
+    /// Global prompt settings come from `~/.jcode/config.toml`. Project-local settings in
+    /// `<project>/.jcode/config.toml` and `<project>/.jcode/config.local.toml` override only the
+    /// prompt fields they explicitly set.
+    pub fn prompt_for_working_dir(&self, working_dir: Option<&Path>) -> PromptConfig {
+        let mut prompt = self.prompt.clone();
+        if let Some(project_dir) = working_dir.and_then(Self::find_project_config_dir) {
+            for config_path in [
+                project_dir.join(".jcode").join("config.toml"),
+                project_dir.join(".jcode").join("config.local.toml"),
+            ] {
+                if let Some(partial) = Self::load_partial_prompt_from_file(&config_path) {
+                    partial.apply_to(&mut prompt);
+                }
+            }
+        }
+        prompt
+    }
+
     fn find_project_config_dir(working_dir: &Path) -> Option<PathBuf> {
         let start = if working_dir.is_file() {
             working_dir.parent()?
@@ -96,6 +149,34 @@ impl Config {
             Err(err) => {
                 crate::logging::warn(&format!(
                     "Failed to parse project jcode config {}: {err}",
+                    path.display()
+                ));
+                None
+            }
+        }
+    }
+
+    fn load_partial_prompt_from_file(path: &Path) -> Option<PartialPromptConfig> {
+        if !path.exists() {
+            return None;
+        }
+
+        let content = match std::fs::read_to_string(path) {
+            Ok(content) => content,
+            Err(err) => {
+                crate::logging::warn(&format!(
+                    "Failed to read project jcode config {}: {err}",
+                    path.display()
+                ));
+                return None;
+            }
+        };
+
+        match toml::from_str::<PartialConfig>(&content) {
+            Ok(config) => Some(config.prompt),
+            Err(err) => {
+                crate::logging::warn(&format!(
+                    "Failed to parse project jcode prompt config {}: {err}",
                     path.display()
                 ));
                 None

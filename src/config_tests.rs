@@ -116,6 +116,51 @@ fn test_agents_routing_deserializes_from_config() {
 }
 
 #[test]
+fn test_prompt_config_deserializes_from_config() {
+    let cfg: Config = toml::from_str(
+        r#"
+        [prompt]
+        ignore_project_agents = true
+        ignore_global_agents = true
+        load_jcode_agents = false
+        load_harness_dir = false
+        "#,
+    )
+    .expect("config should deserialize");
+
+    assert!(cfg.prompt.ignore_project_agents);
+    assert!(cfg.prompt.ignore_global_agents);
+    assert!(!cfg.prompt.load_jcode_agents);
+    assert!(!cfg.prompt.load_harness_dir);
+}
+
+#[test]
+fn test_project_local_prompt_config_overrides_only_set_fields() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let project = dir.path().join("project");
+    std::fs::create_dir_all(project.join(".jcode")).expect("create .jcode");
+    std::fs::write(
+        project.join(".jcode").join("config.toml"),
+        r#"
+        [prompt]
+        ignore_project_agents = true
+        "#,
+    )
+    .expect("write project config");
+
+    let mut cfg = Config::default();
+    cfg.prompt.load_jcode_agents = false;
+
+    let prompt = cfg.prompt_for_working_dir(Some(&project));
+    assert!(prompt.ignore_project_agents);
+    assert!(
+        !prompt.load_jcode_agents,
+        "unset project fields should preserve global config"
+    );
+    assert!(prompt.load_harness_dir);
+}
+
+#[test]
 fn test_project_local_hooks_append_to_global_hooks() {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let project = dir.path().join("project");
