@@ -215,6 +215,14 @@ memory_sidecar_enabled = false
 # metis = "claude-opus-4.7"
 # momus = "gpt-5.5"
 # atlas = "claude-sonnet-4.6"
+# visual-engineering = "gemini-3.1-pro-preview"
+# ultrabrain = "gpt-5.5"
+# deep = "gpt-5.5"
+# artistry = "gemini-3.1-pro-preview"
+# quick = "claude-haiku-4.5"
+# unspecified-low = "claude-sonnet-4.6"
+# unspecified-high = "claude-sonnet-4.6"
+# writing = "gemini-3-flash-preview"
 
 [ambient]
 # Ambient mode: background agent that maintains your codebase
