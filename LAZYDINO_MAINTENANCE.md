@@ -177,6 +177,7 @@ Track each custom patch as a small commit. Current known customizations:
      - Opus = planner/orchestrator/reviewer/architect brain
      - GPT = executor/coder/researcher/tool-loop runner
      - Gemini = visual/multimodal specialist
+     - Haiku quick/explore routes should use the live catalog ID `claude-haiku-4-5-20251001` when available, rather than the shorter alias, to match the model picker exactly.
    - Validation: `cargo test routing --lib` and `cargo check`.
    - Binary reinstall required: yes, because this changes runtime behavior.
 

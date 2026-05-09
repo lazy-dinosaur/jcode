@@ -51,7 +51,7 @@ pub fn anthropic_api_pricing(model: &str) -> Option<RouteCheapnessEstimate> {
                 "Anthropic API pricing".to_string()
             }),
         )),
-        "claude-haiku-4-5" => Some(RouteCheapnessEstimate::metered(
+        "claude-haiku-4-5" | "claude-haiku-4-5-20251001" => Some(RouteCheapnessEstimate::metered(
             RouteCostSource::PublicApiPricing,
             RouteCostConfidence::Exact,
             usd_to_micros(1.0),

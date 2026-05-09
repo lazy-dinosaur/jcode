@@ -18,6 +18,7 @@ async fn test_available_models() {
     assert!(models.contains(&"claude-opus-4-6[1m]"));
     assert!(models.contains(&"claude-sonnet-4-6"));
     assert!(models.contains(&"claude-sonnet-4-6[1m]"));
+    assert!(models.contains(&"claude-haiku-4-5-20251001"));
     assert!(models.contains(&"claude-haiku-4-5"));
 }
 
