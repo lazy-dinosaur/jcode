@@ -95,6 +95,27 @@ fn test_session_picker_resume_action_deserializes_kebab_case() {
 }
 
 #[test]
+fn test_agents_routing_deserializes_from_config() {
+    let cfg: Config = toml::from_str(
+        r#"
+        [agents.routing]
+        planner = "claude-opus-4.7"
+        coder = "gpt-5.5"
+        "#,
+    )
+    .expect("config should deserialize");
+
+    assert_eq!(
+        cfg.agents.routing.get("planner").map(String::as_str),
+        Some("claude-opus-4.7")
+    );
+    assert_eq!(
+        cfg.agents.routing.get("coder").map(String::as_str),
+        Some("gpt-5.5")
+    );
+}
+
+#[test]
 fn test_project_local_hooks_append_to_global_hooks() {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let project = dir.path().join("project");

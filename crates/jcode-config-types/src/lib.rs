@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Compaction mode
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -357,6 +358,8 @@ pub struct AuthConfig {
 pub struct AgentsConfig {
     /// Optional default model override for spawned swarm/subagent sessions.
     pub swarm_model: Option<String>,
+    /// Optional model routing by subagent type/name, e.g. planner -> claude-opus-4.7.
+    pub routing: BTreeMap<String, String>,
     /// Optional default model override for the memory sidecar.
     pub memory_model: Option<String>,
     /// Whether memory should use the sidecar for relevance/extraction.

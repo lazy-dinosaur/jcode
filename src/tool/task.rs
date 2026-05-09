@@ -32,15 +32,31 @@ impl SubagentTool {
     fn resolve_model(
         requested_model: Option<&str>,
         existing_session_model: Option<&str>,
+        routed_model: Option<&str>,
         parent_subagent_model: Option<&str>,
         provider_model: &str,
     ) -> String {
         requested_model
             .or(existing_session_model)
+            .or(routed_model)
             .or(parent_subagent_model)
             .or(crate::config::config().agents.swarm_model.as_deref())
             .unwrap_or(provider_model)
             .to_string()
+    }
+
+    fn routed_model_for_subagent_type(subagent_type: &str) -> Option<String> {
+        let routing = &crate::config::config().agents.routing;
+        let direct = subagent_type.trim();
+        if direct.is_empty() {
+            return None;
+        }
+
+        routing
+            .get(direct)
+            .or_else(|| routing.get(&direct.to_ascii_lowercase()))
+            .cloned()
+            .filter(|model| !model.trim().is_empty())
     }
 }
 
@@ -139,9 +155,11 @@ impl Tool for SubagentTool {
         };
         let parent_subagent_model = Self::preferred_parent_subagent_model(&ctx.session_id);
         let provider_model = self.provider.model();
+        let routed_model = Self::routed_model_for_subagent_type(&params.subagent_type);
         let resolved_model = Self::resolve_model(
             params.model.as_deref(),
             session.model.as_deref(),
+            routed_model.as_deref(),
             parent_subagent_model.as_deref(),
             &provider_model,
         );
@@ -389,22 +407,39 @@ mod tests {
     }
 
     #[test]
-    fn resolve_model_prefers_explicit_then_existing_then_parent_then_provider() {
+    fn resolve_model_prefers_explicit_then_existing_then_route_then_parent_then_provider() {
         assert_eq!(
             super::SubagentTool::resolve_model(
                 Some("explicit"),
                 Some("existing"),
+                Some("route"),
                 Some("parent"),
                 "provider"
             ),
             "explicit"
         );
         assert_eq!(
-            super::SubagentTool::resolve_model(None, Some("existing"), Some("parent"), "provider"),
+            super::SubagentTool::resolve_model(
+                None,
+                Some("existing"),
+                Some("route"),
+                Some("parent"),
+                "provider"
+            ),
             "existing"
         );
         assert_eq!(
-            super::SubagentTool::resolve_model(None, None, Some("parent"), "provider"),
+            super::SubagentTool::resolve_model(
+                None,
+                None,
+                Some("route"),
+                Some("parent"),
+                "provider"
+            ),
+            "route"
+        );
+        assert_eq!(
+            super::SubagentTool::resolve_model(None, None, None, Some("parent"), "provider"),
             "parent"
         );
         let configured_or_provider = crate::config::config()
@@ -413,7 +448,7 @@ mod tests {
             .as_deref()
             .unwrap_or("provider");
         assert_eq!(
-            super::SubagentTool::resolve_model(None, None, None, "provider"),
+            super::SubagentTool::resolve_model(None, None, None, None, "provider"),
             configured_or_provider
         );
     }

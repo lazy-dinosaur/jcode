@@ -72,6 +72,7 @@ impl Config {
 
 **Agent models:**
 - Swarm / subagent: {}
+- Subagent routing entries: {}
 - Review: {}
 - Judge: {}
 - Memory: {}
@@ -191,6 +192,16 @@ impl Config {
                 .swarm_model
                 .as_deref()
                 .unwrap_or("(inherit current session)"),
+            if self.agents.routing.is_empty() {
+                "(none)".to_string()
+            } else {
+                self.agents
+                    .routing
+                    .iter()
+                    .map(|(name, model)| format!("{name}={model}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            },
             self.autoreview
                 .model
                 .as_deref()

@@ -173,6 +173,36 @@ cross_provider_failover = "countdown"
 # Set to "zero" if you have premium Copilot and want free requests
 # copilot_premium = "zero"
 
+[agents]
+# Default model override for spawned swarm/subagent sessions.
+# swarm_model = "gpt-5.5"
+# Optional memory sidecar model override.
+# memory_model = "claude-sonnet-4.6"
+# Enable memory sidecar extraction/relevance model.
+memory_sidecar_enabled = false
+
+# Optional oh-my-opencode-style subagent model routing by subagent_type.
+# Explicit `model` in the subagent tool still wins over routing.
+# Reused session model also wins over routing.
+#
+# [agents.routing]
+# planner = "claude-opus-4.7"
+# orchestrator = "claude-opus-4.7"
+# reviewer = "claude-opus-4.7"
+# coder = "gpt-5.5"
+# executor = "gpt-5.5"
+# researcher = "gpt-5.5"
+# sisyphus = "claude-opus-4.7"
+# hephaestus = "gpt-5.5"
+# oracle = "gpt-5.5"
+# librarian = "claude-sonnet-4.6"
+# explore = "claude-haiku-4.5"
+# multimodal-looker = "gemini-3.1-pro-preview"
+# prometheus = "claude-opus-4.7"
+# metis = "claude-opus-4.7"
+# momus = "gpt-5.5"
+# atlas = "claude-sonnet-4.6"
+
 [ambient]
 # Ambient mode: background agent that maintains your codebase
 # Enable ambient mode (default: false)

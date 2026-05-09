@@ -153,6 +153,23 @@ Track each custom patch as a small commit. Current known customizations:
    - Validation: `cargo test project_local --lib`.
    - Binary reinstall required: yes, because this changes runtime behavior.
 
+4. oh-my-opencode-style subagent routing
+   - Goal: route subagents to models by `subagent_type`, mirroring the useful part of oh-my-opencode's `agents` / `categories` mapping.
+   - Config surface: `[agents.routing]` in `~/.jcode/config.toml`.
+   - Resolution order:
+     1. explicit `model` argument in the `subagent` tool
+     2. existing reused session model
+     3. `[agents.routing].<subagent_type>`
+     4. parent session preferred subagent model
+     5. `agents.swarm_model`
+     6. current provider model
+   - Recommended high-level policy:
+     - Opus = planner/orchestrator/reviewer/architect brain
+     - GPT = executor/coder/researcher/tool-loop runner
+     - Gemini = visual/multimodal specialist
+   - Validation: `cargo test routing --lib` and `cargo check`.
+   - Binary reinstall required: yes, because this changes runtime behavior.
+
 ## Hook design note
 
 The recommended hook strategy is:
