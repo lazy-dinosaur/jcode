@@ -358,7 +358,9 @@ impl Registry {
         drop(tools);
 
         let started_at = std::time::Instant::now();
-        let result = tool.execute(input.clone(), ctx).await;
+        crate::hooks::pre_tool_use(resolved_name, &input, &ctx).await?;
+        let result = tool.execute(input.clone(), ctx.clone()).await;
+        crate::hooks::post_tool_use(resolved_name, &input, &result, &ctx).await;
         let latency_ms = started_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
 
         crate::telemetry::record_tool_execution(resolved_name, &input, result.is_ok(), latency_ms);

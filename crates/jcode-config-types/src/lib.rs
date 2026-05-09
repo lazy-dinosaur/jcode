@@ -383,6 +383,56 @@ pub struct AutoJudgeConfig {
     pub model: Option<String>,
 }
 
+/// Command hook configuration.
+///
+/// MVP hook support follows the tool lifecycle boundary:
+/// `tool.execute.before` (PreToolUse) and `tool.execute.after` (PostToolUse).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HooksConfig {
+    /// Enable command hooks globally (default: false).
+    pub enabled: bool,
+    /// Command hooks to run for matching events/tools.
+    pub commands: Vec<HookCommandConfig>,
+}
+
+impl Default for HooksConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            commands: Vec::new(),
+        }
+    }
+}
+
+/// A single command hook.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HookCommandConfig {
+    /// Event name, e.g. `tool.execute.before` or `tool.execute.after`.
+    pub event: String,
+    /// Optional tool name matcher. Empty means all tools.
+    pub tool: Option<String>,
+    /// Shell command to execute. Receives JSON payload on stdin.
+    pub command: String,
+    /// Whether jcode should wait for the hook and honor deny decisions.
+    pub blocking: bool,
+    /// Maximum runtime in milliseconds.
+    pub timeout_ms: u64,
+}
+
+impl Default for HookCommandConfig {
+    fn default() -> Self {
+        Self {
+            event: String::new(),
+            tool: None,
+            command: String::new(),
+            blocking: false,
+            timeout_ms: 3000,
+        }
+    }
+}
+
 /// Keybinding configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]

@@ -206,6 +206,27 @@ port = 7643
 # Bind address (0.0.0.0 for LAN/Tailscale reachability)
 bind_addr = "0.0.0.0"
 
+[hooks]
+# Command hooks for tool lifecycle events (default: disabled).
+# Hooks receive a JSON payload on stdin.
+# Blocking hooks may return {"action":"allow"} or {"action":"deny","reason":"..."}.
+enabled = false
+
+# Example: block or allow tool calls before execution.
+# [[hooks.commands]]
+# event = "tool.execute.before"
+# tool = "bash" # optional, use "*" or omit for all tools
+# command = ".jcode/hooks/check-bash.sh"
+# blocking = true
+# timeout_ms = 3000
+
+# Example: log tool results after execution.
+# [[hooks.commands]]
+# event = "tool.execute.after"
+# command = ".jcode/hooks/log-tool.sh"
+# blocking = false
+# timeout_ms = 3000
+
 [safety]
 # Notification settings for ambient mode events
 
