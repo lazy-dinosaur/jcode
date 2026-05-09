@@ -98,6 +98,13 @@ fn test_session_picker_resume_action_deserializes_kebab_case() {
 fn test_agents_routing_deserializes_from_config() {
     let cfg: Config = toml::from_str(
         r#"
+        [agents.profiles.planner]
+        model = "claude-opus-4-7"
+        variant = "max"
+        description = "Architecture and planning coordinator"
+        when = ["the task is ambiguous", "the implementation needs decomposition"]
+        prompt = "Prefer a concise plan before implementation."
+
         [agents.routing]
         planner = "claude-opus-4-7"
         coder = "gpt-5.5"
@@ -112,6 +119,24 @@ fn test_agents_routing_deserializes_from_config() {
     assert_eq!(
         cfg.agents.routing.get("planner").map(String::as_str),
         Some("claude-opus-4-7")
+    );
+    let profile = cfg.agents.profiles.get("planner").expect("profile config");
+    assert_eq!(profile.model.as_deref(), Some("claude-opus-4-7"));
+    assert_eq!(profile.variant.as_deref(), Some("max"));
+    assert_eq!(
+        profile.description.as_deref(),
+        Some("Architecture and planning coordinator")
+    );
+    assert_eq!(
+        profile.when,
+        vec![
+            "the task is ambiguous".to_string(),
+            "the implementation needs decomposition".to_string()
+        ]
+    );
+    assert_eq!(
+        profile.prompt.as_deref(),
+        Some("Prefer a concise plan before implementation.")
     );
     assert_eq!(
         cfg.agents.routing.get("coder").map(String::as_str),

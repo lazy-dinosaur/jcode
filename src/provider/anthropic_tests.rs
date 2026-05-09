@@ -39,6 +39,25 @@ fn test_oauth_beta_headers_require_explicit_1m_suffix() {
     );
 }
 
+#[test]
+fn test_oauth_agent_schema_advertises_flexible_subagent_profiles() {
+    let schema = oauth_agent_input_schema();
+    let subagent_type_schema = &schema["properties"]["subagent_type"];
+
+    assert_eq!(
+        schema["required"],
+        serde_json::json!(["description", "prompt"])
+    );
+    assert!(
+        subagent_type_schema["description"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Configured agent profiles")
+    );
+    assert!(subagent_type_schema["examples"].is_array());
+    assert!(subagent_type_schema.get("enum").is_none());
+}
+
 #[tokio::test]
 async fn test_dangling_tool_use_repair() {
     let provider = AnthropicProvider::new();

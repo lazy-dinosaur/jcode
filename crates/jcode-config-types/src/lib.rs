@@ -358,10 +358,12 @@ pub struct AuthConfig {
 pub struct AgentsConfig {
     /// Optional default model override for spawned swarm/subagent sessions.
     pub swarm_model: Option<String>,
-    /// Optional model routing by subagent type/name, e.g. planner -> claude-opus-4-7.
+    /// Deprecated simple model routing by subagent type/name, e.g. planner -> claude-opus-4-7.
     pub routing: BTreeMap<String, String>,
-    /// Optional richer routing by subagent type/name, including model and reasoning effort.
+    /// Deprecated rich routing by subagent type/name. Prefer `profiles` for new configs.
     pub routes: BTreeMap<String, AgentRouteConfig>,
+    /// Callable agent profiles by subagent type/name, including model, effort, variant, and usage guidance.
+    pub profiles: BTreeMap<String, AgentRouteConfig>,
     /// Optional default model override for the memory sidecar.
     pub memory_model: Option<String>,
     /// Whether memory should use the sidecar for relevance/extraction.
@@ -379,6 +381,12 @@ pub struct AgentRouteConfig {
     /// oh-my-opencode-compatible variant. For GPT/OpenAI this maps to reasoning effort; for
     /// supported Claude models, `max` selects the `[1m]` Claude Max / long-context route.
     pub variant: Option<String>,
+    /// Human-readable role description for this callable agent profile.
+    pub description: Option<String>,
+    /// Guidance for when the coordinator should use this agent profile.
+    pub when: Vec<String>,
+    /// Optional extra instructions prepended to the subagent prompt when this profile is used.
+    pub prompt: Option<String>,
 }
 
 /// Prompt and project instruction loading configuration.

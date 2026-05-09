@@ -9,7 +9,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
 
@@ -22,6 +22,9 @@ pub struct SubagentTool {
 struct ResolvedSubagentRoute {
     model: Option<String>,
     effort: Option<String>,
+    description: Option<String>,
+    when: Vec<String>,
+    prompt: Option<String>,
 }
 
 impl SubagentTool {
@@ -58,10 +61,7 @@ impl SubagentTool {
             return ResolvedSubagentRoute::default();
         }
 
-        let rich_route = agents
-            .routes
-            .get(direct)
-            .or_else(|| agents.routes.get(&direct.to_ascii_lowercase()));
+        let rich_route = Self::profile_for_subagent_type(agents, direct);
         if let Some(route) = rich_route {
             let raw_model = route
                 .model
@@ -78,6 +78,9 @@ impl SubagentTool {
                     .as_deref()
                     .or(route.variant.as_deref())
                     .and_then(Self::normalize_route_effort),
+                description: route.description.clone(),
+                when: route.when.clone(),
+                prompt: route.prompt.clone(),
             };
         }
 
@@ -89,7 +92,24 @@ impl SubagentTool {
                 .cloned()
                 .filter(|model| !model.trim().is_empty()),
             effort: None,
+            description: None,
+            when: Vec::new(),
+            prompt: None,
         }
+    }
+
+    fn profile_for_subagent_type<'a>(
+        agents: &'a crate::config::AgentsConfig,
+        subagent_type: &str,
+    ) -> Option<&'a crate::config::AgentRouteConfig> {
+        let direct = subagent_type.trim();
+        let lower = direct.to_ascii_lowercase();
+        agents
+            .profiles
+            .get(direct)
+            .or_else(|| agents.profiles.get(&lower))
+            .or_else(|| agents.routes.get(direct))
+            .or_else(|| agents.routes.get(&lower))
     }
 
     fn apply_route_variant_to_model(model: &str, variant: Option<&str>) -> String {
@@ -123,12 +143,130 @@ impl SubagentTool {
     fn should_apply_route_effort(model: &str) -> bool {
         model.starts_with("gpt-") || model.starts_with("openai/")
     }
+
+    fn configured_subagent_types() -> Vec<String> {
+        let agents = &crate::config::config().agents;
+        Self::configured_subagent_types_for_agents(agents)
+    }
+
+    fn configured_subagent_types_for_agents(agents: &crate::config::AgentsConfig) -> Vec<String> {
+        let mut types = BTreeSet::new();
+        types.insert("general".to_string());
+        types.extend(agents.profiles.keys().cloned());
+        types.extend(agents.routes.keys().cloned());
+        // Deprecated/simple routing remains a compatibility fallback, so expose those keys too
+        // when a user still has them configured.
+        types.extend(agents.routing.keys().cloned());
+        types.into_iter().collect()
+    }
+
+    fn configured_subagent_type_docs() -> Vec<String> {
+        let agents = &crate::config::config().agents;
+        Self::configured_subagent_type_docs_for_agents(agents)
+    }
+
+    fn configured_subagent_type_docs_for_agents(
+        agents: &crate::config::AgentsConfig,
+    ) -> Vec<String> {
+        let mut docs = Vec::new();
+        let mut seen = BTreeSet::new();
+        docs.push("general: default general-purpose subagent".to_string());
+        seen.insert("general".to_string());
+        for (name, route) in agents.profiles.iter().chain(agents.routes.iter()) {
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            let mut parts = Vec::new();
+            if let Some(description) = route
+                .description
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                parts.push(description.to_string());
+            }
+            if !route.when.is_empty() {
+                parts.push(format!("use when: {}", route.when.join("; ")));
+            }
+            if let Some(model) = route
+                .model
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                parts.push(format!("model: {model}"));
+            }
+            docs.push(if parts.is_empty() {
+                name.clone()
+            } else {
+                format!("{}: {}", name, parts.join("; "))
+            });
+        }
+        for (name, model) in &agents.routing {
+            if seen.insert(name.clone()) {
+                docs.push(format!("{}: legacy route model: {}", name, model));
+            }
+        }
+        docs
+    }
+
+    fn prompt_with_profile(
+        prompt: &str,
+        subagent_type: &str,
+        route: &ResolvedSubagentRoute,
+    ) -> String {
+        let has_description = route
+            .description
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty());
+        let has_prompt = route
+            .prompt
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty());
+        if !has_description && route.when.is_empty() && !has_prompt {
+            return prompt.to_string();
+        }
+
+        let mut output = String::new();
+        output.push_str("<agent_profile>\n");
+        output.push_str(&format!("type: {}\n", subagent_type.trim()));
+        if let Some(description) = route
+            .description
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            output.push_str(&format!("description: {}\n", description));
+        }
+        if !route.when.is_empty() {
+            output.push_str("when_to_use:\n");
+            for item in &route.when {
+                output.push_str(&format!("- {}\n", item));
+            }
+        }
+        if let Some(profile_prompt) = route
+            .prompt
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            output.push_str("instructions:\n");
+            output.push_str(profile_prompt);
+            output.push('\n');
+        }
+        output.push_str("</agent_profile>\n\n");
+        output.push_str(prompt);
+        output
+    }
 }
 
 #[derive(Deserialize)]
 struct SubagentInput {
     description: String,
     prompt: String,
+    #[serde(default = "default_subagent_type")]
     subagent_type: String,
     #[serde(default)]
     model: Option<String>,
@@ -138,6 +276,10 @@ struct SubagentInput {
     output_mode: SubagentOutputMode,
     #[serde(rename = "command", default)]
     _command: Option<String>,
+}
+
+fn default_subagent_type() -> String {
+    "general".to_string()
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
@@ -166,7 +308,17 @@ impl Tool for SubagentTool {
     }
 
     fn parameters_schema(&self) -> Value {
-        json!({
+        let configured_types = Self::configured_subagent_types();
+        let configured_docs = Self::configured_subagent_type_docs();
+        let type_description = if configured_docs.is_empty() {
+            "Subagent type.".to_string()
+        } else {
+            format!(
+                "Subagent type. Configured agent profiles: {}.",
+                configured_docs.join(" | ")
+            )
+        };
+        let mut schema = json!({
             "type": "object",
             "required": ["description", "prompt", "subagent_type"],
             "properties": {
@@ -181,7 +333,7 @@ impl Tool for SubagentTool {
                 },
                 "subagent_type": {
                     "type": "string",
-                    "description": "Subagent type."
+                    "description": type_description
                 },
                 "model": {
                     "type": "string",
@@ -201,7 +353,17 @@ impl Tool for SubagentTool {
                     "description": "Source command."
                 }
             }
-        })
+        });
+        if !configured_types.is_empty()
+            && let Some(subagent_type_schema) = schema
+                .get_mut("properties")
+                .and_then(|properties| properties.get_mut("subagent_type"))
+        {
+            // Keep the schema flexible: models may invent useful ad-hoc types, while configured
+            // profiles are still advertised as examples and explained in the description.
+            subagent_type_schema["examples"] = json!(configured_types);
+        }
+        schema
     }
 
     async fn execute(&self, input: Value, ctx: ToolContext) -> Result<ToolOutput> {
@@ -230,7 +392,7 @@ impl Tool for SubagentTool {
         );
         session.model = Some(resolved_model.clone());
         if session.reasoning_effort.is_none()
-            && let Some(route_effort) = route.effort
+            && let Some(route_effort) = route.effort.clone()
             && Self::should_apply_route_effort(&resolved_model)
         {
             session.reasoning_effort = Some(route_effort);
@@ -301,7 +463,8 @@ impl Tool for SubagentTool {
         );
 
         let start = std::time::Instant::now();
-        let final_text = agent.run_once_capture(&params.prompt).await.map_err(|err| {
+        let prompt = Self::prompt_with_profile(&params.prompt, &params.subagent_type, &route);
+        let final_text = agent.run_once_capture(&prompt).await.map_err(|err| {
             logging::warn(&format!(
                 "[tool:subagent] subagent failed description={} type={} session_id={} model={} error={}",
                 params.description,
@@ -457,7 +620,35 @@ mod tests {
         SubagentInput, SubagentOutputMode, format_compact_subagent_history, format_subagent_output,
         subagent_display_title,
     };
+    use crate::config::{AgentRouteConfig, AgentsConfig};
+    use crate::message::{Message, ToolDefinition};
     use crate::protocol::HistoryMessage;
+    use crate::provider::{EventStream, Provider};
+    use jcode_tool_core::Tool;
+    use std::sync::Arc;
+
+    struct SchemaOnlyProvider;
+
+    #[async_trait::async_trait]
+    impl Provider for SchemaOnlyProvider {
+        async fn complete(
+            &self,
+            _messages: &[Message],
+            _tools: &[ToolDefinition],
+            _system: &str,
+            _resume_session_id: Option<&str>,
+        ) -> anyhow::Result<EventStream> {
+            unreachable!("schema-only provider should not be called")
+        }
+
+        fn name(&self) -> &str {
+            "schema-only"
+        }
+
+        fn fork(&self) -> Arc<dyn Provider> {
+            Arc::new(Self)
+        }
+    }
 
     #[test]
     fn subagent_display_title_includes_type_and_model() {
@@ -573,6 +764,91 @@ mod tests {
         assert!(!super::SubagentTool::should_apply_route_effort(
             "gemini-3.1-pro-preview"
         ));
+    }
+
+    #[test]
+    fn configured_subagent_types_include_profiles_routes_and_legacy_routing() {
+        let mut agents = AgentsConfig::default();
+        agents.profiles.insert(
+            "planner".to_string(),
+            AgentRouteConfig {
+                model: Some("claude-opus-4-7".to_string()),
+                variant: Some("max".to_string()),
+                description: Some("Plan ambiguous work".to_string()),
+                when: vec!["the request needs decomposition".to_string()],
+                ..Default::default()
+            },
+        );
+        agents.routes.insert(
+            "coder".to_string(),
+            AgentRouteConfig {
+                model: Some("gpt-5.5".to_string()),
+                variant: Some("medium".to_string()),
+                ..Default::default()
+            },
+        );
+        agents.routing.insert(
+            "legacy-reviewer".to_string(),
+            "claude-sonnet-4-6".to_string(),
+        );
+
+        assert_eq!(
+            super::SubagentTool::configured_subagent_types_for_agents(&agents),
+            vec!["coder", "general", "legacy-reviewer", "planner"]
+        );
+        let docs = super::SubagentTool::configured_subagent_type_docs_for_agents(&agents);
+        assert!(
+            docs.iter()
+                .any(|doc| doc.contains("planner: Plan ambiguous work"))
+        );
+        assert!(
+            docs.iter()
+                .any(|doc| doc.contains("use when: the request needs decomposition"))
+        );
+    }
+
+    #[test]
+    fn prompt_with_profile_prepends_agent_profile_guidance() {
+        let route = super::ResolvedSubagentRoute {
+            model: Some("claude-opus-4-7[1m]".to_string()),
+            effort: None,
+            description: Some("Plan ambiguous work".to_string()),
+            when: vec!["the request needs decomposition".to_string()],
+            prompt: Some("Return a concise execution plan.".to_string()),
+        };
+
+        let prompt = super::SubagentTool::prompt_with_profile("Original task", "planner", &route);
+
+        assert!(prompt.starts_with("<agent_profile>\n"));
+        assert!(prompt.contains("type: planner\n"));
+        assert!(prompt.contains("description: Plan ambiguous work\n"));
+        assert!(prompt.contains("- the request needs decomposition\n"));
+        assert!(prompt.contains("Return a concise execution plan."));
+        assert!(prompt.ends_with("Original task"));
+    }
+
+    #[test]
+    fn subagent_type_defaults_to_general_when_omitted() {
+        let input: SubagentInput = serde_json::from_value(serde_json::json!({
+            "description": "Do work",
+            "prompt": "Work carefully"
+        }))
+        .expect("input without subagent_type should deserialize");
+
+        assert_eq!(input.subagent_type, "general");
+    }
+
+    #[tokio::test]
+    async fn subagent_schema_advertises_examples_without_restrictive_enum() {
+        let provider = std::sync::Arc::new(SchemaOnlyProvider);
+        let schema = super::SubagentTool::new(
+            provider.clone(),
+            super::Registry::new(provider.clone()).await,
+        )
+        .parameters_schema();
+        let subagent_type_schema = &schema["properties"]["subagent_type"];
+        assert!(subagent_type_schema.get("enum").is_none());
+        assert!(subagent_type_schema["examples"].is_array());
     }
 
     #[test]

@@ -78,7 +78,7 @@ impl Config {
 
 **Agent models:**
 - Swarm / subagent: {}
-- Subagent routing entries: {}
+- Agent profiles: {}
 - Review: {}
 - Judge: {}
 - Memory: {}
@@ -202,15 +202,32 @@ impl Config {
                 .swarm_model
                 .as_deref()
                 .unwrap_or("(inherit current session)"),
-            if self.agents.routing.is_empty() {
+            if self.agents.profiles.is_empty()
+                && self.agents.routes.is_empty()
+                && self.agents.routing.is_empty()
+            {
                 "(none)".to_string()
             } else {
-                self.agents
-                    .routing
+                let mut entries = self
+                    .agents
+                    .profiles
                     .iter()
-                    .map(|(name, model)| format!("{name}={model}"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                    .chain(self.agents.routes.iter())
+                    .map(|(name, route)| {
+                        route
+                            .model
+                            .as_deref()
+                            .map(|model| format!("{name}={model}"))
+                            .unwrap_or_else(|| name.to_string())
+                    })
+                    .collect::<Vec<_>>();
+                entries.extend(
+                    self.agents
+                        .routing
+                        .iter()
+                        .map(|(name, model)| format!("{name}={model} (legacy)")),
+                );
+                entries.join(", ")
             },
             self.autoreview
                 .model

@@ -68,6 +68,82 @@ pub(crate) fn new_oauth_request_id() -> String {
     Uuid::new_v4().to_string()
 }
 
+fn configured_agent_profile_docs_for_oauth() -> (Vec<String>, Vec<String>) {
+    let agents = &crate::config::config().agents;
+    let mut examples = vec!["general".to_string()];
+    examples.extend(agents.profiles.keys().cloned());
+    examples.extend(agents.routes.keys().cloned());
+    examples.extend(agents.routing.keys().cloned());
+    examples.sort();
+    examples.dedup();
+
+    let mut docs = vec!["general: default general-purpose subagent".to_string()];
+    let mut seen = std::collections::BTreeSet::from(["general".to_string()]);
+    for (name, route) in agents.profiles.iter().chain(agents.routes.iter()) {
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        let mut parts = Vec::new();
+        if let Some(description) = route
+            .description
+            .as_deref()
+            .map(str::trim)
+            .filter(|description| !description.is_empty())
+        {
+            parts.push(description.to_string());
+        }
+        if !route.when.is_empty() {
+            parts.push(format!("use when: {}", route.when.join("; ")));
+        }
+        if let Some(model) = route
+            .model
+            .as_deref()
+            .map(str::trim)
+            .filter(|model| !model.is_empty())
+        {
+            parts.push(format!("model: {model}"));
+        }
+        docs.push(if parts.is_empty() {
+            name.clone()
+        } else {
+            format!("{}: {}", name, parts.join("; "))
+        });
+    }
+    for (name, model) in &agents.routing {
+        if seen.insert(name.clone()) {
+            docs.push(format!("{}: legacy route model: {}", name, model));
+        }
+    }
+    (examples, docs)
+}
+
+fn oauth_agent_input_schema() -> Value {
+    let (examples, docs) = configured_agent_profile_docs_for_oauth();
+    let description = if docs.is_empty() {
+        "Subagent type.".to_string()
+    } else {
+        format!(
+            "Subagent type. Configured agent profiles: {}.",
+            docs.join(" | ")
+        )
+    };
+    json!({
+        "type": "object",
+        "properties": {
+            "description": {"type": "string"},
+            "prompt": {"type": "string"},
+            "subagent_type": {
+                "type": "string",
+                "description": description,
+                "examples": examples
+            },
+            "run_in_background": {"type": "boolean"}
+        },
+        "required": ["description", "prompt"],
+        "additionalProperties": false
+    })
+}
+
 pub(crate) fn apply_oauth_attribution_headers(
     req: reqwest::RequestBuilder,
     session_id: &str,
@@ -779,7 +855,7 @@ impl AnthropicProvider {
                     name: "Agent".to_string(),
                     description: "Launch a new agent to handle complex, multi-step tasks."
                         .to_string(),
-                    input_schema: json!({"type":"object","properties":{"description":{"type":"string"},"prompt":{"type":"string"},"subagent_type":{"type":"string"},"run_in_background":{"type":"boolean"}},"required":["description","prompt"],"additionalProperties":false}),
+                    input_schema: oauth_agent_input_schema(),
                     cache_control: None,
                 },
                 ApiTool {

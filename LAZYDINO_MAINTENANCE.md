@@ -153,12 +153,17 @@ Track each custom patch as a small commit. Current known customizations:
    - Validation: `cargo test project_local --lib`.
    - Binary reinstall required: yes, because this changes runtime behavior.
 
-4. oh-my-opencode-style subagent routing
-   - Goal: route subagents to models by `subagent_type`, mirroring the useful part of oh-my-opencode's `agents` / `categories` mapping.
-   - Config surface:
-     - `[agents.routing]` for simple `name = "model"` routing.
-     - `[agents.routes.<name>]` for rich routes with `model` plus `effort` / oh-my-opencode `variant`.
-   - Opus planner/reviewer routes should use `claude-opus-4-7`; Sonnet support routes should use `claude-sonnet-4-6`.
+4. Jcode-style agent profiles
+   - Goal: route subagents to practical named profiles by `subagent_type`, using jcode's existing subagent/task execution model without copying all oh-my-opencode mythology into the default workflow.
+   - Official config surface:
+     - `[agents.profiles.<name>]` defines a callable agent profile. The `<name>` becomes a valid `subagent_type` exposed in the `subagent` tool schema.
+     - Each profile supports `model`, `effort` / oh-my-opencode `variant`, `description`, `when`, and short profile `prompt` instructions.
+     - Profile metadata is prepended to the subagent prompt as an `<agent_profile>` block so the child agent knows its role and when-to-use intent.
+   - Deprecated compatibility surface:
+     - `[agents.routes.<name>]` and `[agents.routing]` are still accepted for older local configs, but new configs should use `[agents.profiles.<name>]` only.
+   - Main orchestrator policy: global `[provider]` should default to `claude` + `claude-opus-4-7[1m]` when the user wants Opus as the planning/orchestration brain.
+   - Practical default profile set: `planner`, `coder`, `executor`, `searcher`, `reviewer`, `quick`, `visual`, `writer`, plus `sisyphus` / `sysiphus` for hard debugging.
+   - Opus planner/reviewer/sisyphus profiles should use `claude-opus-4-7`; Sonnet support profiles should use `claude-sonnet-4-6`.
    - oh-my-opencode `variant` mapping:
      - `medium` -> OpenAI `medium`
      - `high` -> OpenAI `high`
@@ -169,16 +174,17 @@ Track each custom patch as a small commit. Current known customizations:
    - Resolution order:
      1. explicit `model` argument in the `subagent` tool
      2. existing reused session model
-     3. `[agents.routes].<subagent_type>` / `[agents.routing].<subagent_type>`
+     3. `[agents.profiles].<subagent_type>` / deprecated `[agents.routes].<subagent_type>` / deprecated `[agents.routing].<subagent_type>`
      4. parent session preferred subagent model
      5. `agents.swarm_model`
      6. current provider model
    - Recommended high-level policy:
-     - Opus = planner/orchestrator/reviewer/architect brain
-     - GPT = executor/coder/researcher/tool-loop runner
+     - Opus = main orchestrator plus planner/reviewer/sisyphus brain
+     - GPT = coder/executor/searcher/tool-loop runner
      - Gemini = visual/multimodal specialist
      - Haiku quick/explore routes should use the live catalog ID `claude-haiku-4-5-20251001` when available, rather than the shorter alias, to match the model picker exactly.
-   - Validation: `cargo test routing --lib` and `cargo check`.
+   - Active local aliases: both `sisyphus` and `sysiphus` route to Opus Max so the agent can be called even if the name is typed the user's common way.
+   - Validation: `cargo test configured_subagent_types --lib`, `cargo test prompt_with_profile --lib`, `cargo test test_agents_routing_deserializes_from_config --lib`, and `cargo check`.
    - Binary reinstall required: yes, because this changes runtime behavior.
 
 5. Private `.jcode/` harness prompt loading

@@ -187,66 +187,51 @@ load_jcode_agents = true
 load_harness_dir = true
 
 [agents]
-# Default model override for spawned swarm/subagent sessions.
+# Default model override for spawned swarm/subagent sessions when no profile matches.
 # swarm_model = "gpt-5.5"
 # Optional memory sidecar model override.
 # memory_model = "claude-sonnet-4-6"
 # Enable memory sidecar extraction/relevance model.
 memory_sidecar_enabled = false
 
-# Optional oh-my-opencode-style subagent model routing by subagent_type.
-# Explicit `model` in the subagent tool still wins over routing.
-# Reused session model also wins over routing.
+# Practical callable agent profiles. Each [agents.profiles.<type>] name becomes a valid
+# subagent_type exposed to the subagent tool. Profiles can carry model, variant/effort,
+# description, when-to-use guidance, and optional prompt instructions.
 #
-# [agents.routing]
-# planner = "claude-opus-4-7"
-# orchestrator = "claude-opus-4-7"
-# reviewer = "claude-opus-4-7"
-# coder = "gpt-5.5"
-# executor = "gpt-5.5"
-# researcher = "gpt-5.5"
-# sisyphus = "claude-opus-4-7"
-# hephaestus = "gpt-5.5"
-# oracle = "gpt-5.5"
-# librarian = "claude-sonnet-4-6"
-# explore = "claude-haiku-4-5-20251001"
-# multimodal-looker = "gemini-3.1-pro-preview"
-# prometheus = "claude-opus-4-7"
-# metis = "claude-opus-4-7"
-# momus = "gpt-5.5"
-# atlas = "claude-sonnet-4-6"
-# visual-engineering = "gemini-3.1-pro-preview"
-# ultrabrain = "gpt-5.5"
-# deep = "gpt-5.5"
-# artistry = "gemini-3.1-pro-preview"
-# quick = "claude-haiku-4-5-20251001"
-# unspecified-low = "claude-sonnet-4-6"
-# unspecified-high = "claude-sonnet-4-6"
-# writing = "gemini-3-flash-preview"
-
-# Rich routes can also carry an OpenAI reasoning effort / oh-my-opencode variant.
+# Explicit `model` in the subagent tool still wins over profiles.
+# Reused session model also wins over profiles.
+# Deprecated [agents.routes.<type>] and [agents.routing] are still accepted for compatibility.
+#
 # GPT/OpenAI `variant = "max"` maps to jcode effort `xhigh`.
 # Supported Claude `variant = "max"` maps to the Claude Max / long-context `[1m]` route.
 # Gemini routes currently ignore variant.
-# [agents.routes.planner]
+#
+# [agents.profiles.planner]
 # model = "claude-opus-4-7"
 # variant = "max"
+# description = "Planning and architecture agent for ambiguous or multi-step work."
+# when = ["the request needs decomposition", "architecture or sequencing decisions matter"]
+# prompt = "Create a concise plan, identify risks, and hand off implementation-ready steps."
 #
-# [agents.routes.hephaestus]
+# [agents.profiles.coder]
 # model = "gpt-5.5"
 # variant = "medium"
+# description = "Implementation agent for concrete code changes."
+# when = ["the plan is clear", "files need editing"]
 #
-# [agents.routes.oracle]
+# [agents.profiles.searcher]
 # model = "gpt-5.5"
-# variant = "high"
+# variant = "medium"
+# description = "Codebase research agent for finding files, symbols, and implementation patterns."
 #
-# [agents.routes.ultrabrain]
-# model = "gpt-5.5"
-# variant = "xhigh"
-#
-# [agents.routes.sisyphus]
+# [agents.profiles.reviewer]
 # model = "claude-opus-4-7"
 # variant = "max"
+# description = "Review and risk analysis agent."
+#
+# [agents.profiles.quick]
+# model = "claude-haiku-4-5-20251001"
+# description = "Fast lightweight helper for tiny checks."
 
 [ambient]
 # Ambient mode: background agent that maintains your codebase
