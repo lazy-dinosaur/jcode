@@ -1,6 +1,6 @@
 use super::*;
 use crate::storage::jcode_dir;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 impl Config {
     /// Get the config file path
@@ -30,6 +30,74 @@ impl Config {
             }
             Err(e) => {
                 crate::logging::error(&format!("Failed to parse config file: {}", e));
+                None
+            }
+        }
+    }
+
+    /// Build the hook config effective for a working directory.
+    ///
+    /// Global hooks are loaded from `~/.jcode/config.toml`. Project hooks are appended from
+    /// `<project>/.jcode/config.toml` and `<project>/.jcode/config.local.toml`, where `<project>`
+    /// is the nearest ancestor containing a `.jcode` directory/config. This intentionally keeps
+    /// the initial project-local merge narrow: hooks append, and `enabled` is true if any layer
+    /// enables hooks.
+    pub fn hooks_for_working_dir(&self, working_dir: Option<&Path>) -> HooksConfig {
+        let mut hooks = self.hooks.clone();
+        if let Some(project_dir) = working_dir.and_then(Self::find_project_config_dir) {
+            for config_path in [
+                project_dir.join(".jcode").join("config.toml"),
+                project_dir.join(".jcode").join("config.local.toml"),
+            ] {
+                if let Some(project_hooks) = Self::load_hooks_from_file(&config_path) {
+                    hooks.enabled |= project_hooks.enabled || !project_hooks.commands.is_empty();
+                    hooks.commands.extend(project_hooks.commands);
+                }
+            }
+        }
+        hooks
+    }
+
+    fn find_project_config_dir(working_dir: &Path) -> Option<PathBuf> {
+        let start = if working_dir.is_file() {
+            working_dir.parent()?
+        } else {
+            working_dir
+        };
+
+        for ancestor in start.ancestors() {
+            let project_config = ancestor.join(".jcode").join("config.toml");
+            let local_config = ancestor.join(".jcode").join("config.local.toml");
+            if project_config.exists() || local_config.exists() {
+                return Some(ancestor.to_path_buf());
+            }
+        }
+        None
+    }
+
+    fn load_hooks_from_file(path: &Path) -> Option<HooksConfig> {
+        if !path.exists() {
+            return None;
+        }
+
+        let content = match std::fs::read_to_string(path) {
+            Ok(content) => content,
+            Err(err) => {
+                crate::logging::warn(&format!(
+                    "Failed to read project jcode config {}: {err}",
+                    path.display()
+                ));
+                return None;
+            }
+        };
+
+        match toml::from_str::<Config>(&content) {
+            Ok(config) => Some(config.hooks),
+            Err(err) => {
+                crate::logging::warn(&format!(
+                    "Failed to parse project jcode config {}: {err}",
+                    path.display()
+                ));
                 None
             }
         }

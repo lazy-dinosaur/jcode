@@ -6,10 +6,10 @@
 pub use jcode_config_types::{
     AgentsConfig, AmbientConfig, AuthConfig, AutoJudgeConfig, AutoReviewConfig, CompactionConfig,
     CompactionMode, CrossProviderFailoverMode, DiagramDisplayMode, DiagramPanePosition,
-    DiffDisplayMode, DisplayConfig, FeatureConfig, GatewayConfig, HooksConfig, KeybindingsConfig,
-    MarkdownSpacingMode, NamedProviderAuth, NamedProviderConfig, NamedProviderModelConfig,
-    NamedProviderType, NativeScrollbarConfig, ProviderConfig, SafetyConfig,
-    SessionPickerResumeAction, UpdateChannel,
+    DiffDisplayMode, DisplayConfig, FeatureConfig, GatewayConfig, HookCommandConfig, HooksConfig,
+    KeybindingsConfig, MarkdownSpacingMode, NamedProviderAuth, NamedProviderConfig,
+    NamedProviderModelConfig, NamedProviderType, NativeScrollbarConfig, ProviderConfig,
+    SafetyConfig, SessionPickerResumeAction, UpdateChannel,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

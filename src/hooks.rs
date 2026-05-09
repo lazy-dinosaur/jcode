@@ -82,7 +82,7 @@ async fn run_tool_hooks(
     result: Option<Value>,
     ctx: &ToolContext,
 ) -> Result<()> {
-    let hooks = &config().hooks;
+    let hooks = config().hooks_for_working_dir(ctx.working_dir.as_deref());
     if !hooks.enabled {
         return Ok(());
     }

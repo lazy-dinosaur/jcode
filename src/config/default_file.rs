@@ -208,6 +208,10 @@ bind_addr = "0.0.0.0"
 
 [hooks]
 # Command hooks for tool lifecycle events (default: disabled).
+# Global hooks live here. Project hooks may be added in:
+#   <project>/.jcode/config.toml
+#   <project>/.jcode/config.local.toml
+# Project/local hook commands are appended to global hook commands.
 # Hooks receive a JSON payload on stdin.
 # Blocking hooks may return {"action":"allow"} or {"action":"deny","reason":"..."}.
 enabled = false

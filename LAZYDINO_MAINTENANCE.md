@@ -49,6 +49,13 @@ custom/lazydino-harness
 
 When upstream updates, rebase the custom branch on top of the latest upstream code. This reapplies the personal patches onto the newest jcode source.
 
+Custom patch ledger rules:
+
+- Any feature that does not exist in upstream jcode must be explicitly recorded in this file before or immediately after commit.
+- Each custom patch should state its purpose, config surface, touched behavior, validation command, and whether the installed binary must be rebuilt/replaced.
+- After upstream updates, replay/rebase the custom patch stack and verify each patch with its documented validation command.
+- Do not silently add local-only behavior. If it changes harness behavior, document it here.
+
 ## Update workflow
 
 ### 1. Fetch upstream
@@ -129,8 +136,22 @@ Track each custom patch as a small commit. Current known customizations:
      - `tool.execute.after`
    - Commit: `feat: add command hooks for tool lifecycle`
    - Current implementation uses command hooks configured from jcode config.
-   - Current config source: global `~/.jcode/config.toml` only.
-   - Recommended next patch: add project-local hook config, preferably `.jcode/config.toml` or `.jcode/hooks.toml`, merged on top of the global config.
+   - Config surface: `[hooks]` and `[[hooks.commands]]`.
+   - Validation: `cargo test hook --lib` and `cargo check`.
+   - Binary reinstall required: yes, because this changes runtime behavior.
+
+3. Project-local hook config
+   - Goal: allow project-specific hook configuration in addition to global `~/.jcode/config.toml`.
+   - Config files:
+     - `<project>/.jcode/config.toml`
+     - `<project>/.jcode/config.local.toml`
+   - Merge behavior:
+     - global hooks first
+     - project shared hooks second
+     - project local/private hooks third
+   - Current scope: hook config only. Full config merging is intentionally deferred.
+   - Validation: `cargo test project_local --lib`.
+   - Binary reinstall required: yes, because this changes runtime behavior.
 
 ## Hook design note
 

@@ -1,5 +1,5 @@
 use super::{
-    AmbientConfig, Config, DiffDisplayMode, DisplayConfig, ProviderConfig,
+    AmbientConfig, Config, DiffDisplayMode, DisplayConfig, HookCommandConfig, ProviderConfig,
     SessionPickerResumeAction,
 };
 use std::path::Path;
@@ -91,6 +91,89 @@ fn test_session_picker_resume_action_deserializes_kebab_case() {
     assert_eq!(
         cfg.keybindings.session_picker_enter,
         SessionPickerResumeAction::CurrentTerminal
+    );
+}
+
+#[test]
+fn test_project_local_hooks_append_to_global_hooks() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let project = dir.path().join("project");
+    let nested = project.join("src");
+    std::fs::create_dir_all(project.join(".jcode")).expect("create .jcode");
+    std::fs::create_dir_all(&nested).expect("create nested");
+    std::fs::write(
+        project.join(".jcode").join("config.toml"),
+        r#"
+        [hooks]
+        enabled = true
+
+        [[hooks.commands]]
+        event = "tool.execute.before"
+        tool = "bash"
+        command = ".jcode/hooks/project-check.sh"
+        blocking = true
+        timeout_ms = 1234
+        "#,
+    )
+    .expect("write project config");
+
+    let mut cfg = Config::default();
+    cfg.hooks.enabled = true;
+    cfg.hooks.commands.push(HookCommandConfig {
+        event: "tool.execute.after".to_string(),
+        tool: Some("*".to_string()),
+        command: "~/.jcode/hooks/log-tool.sh".to_string(),
+        blocking: false,
+        timeout_ms: 3000,
+    });
+
+    let hooks = cfg.hooks_for_working_dir(Some(&nested));
+    assert!(hooks.enabled);
+    assert_eq!(hooks.commands.len(), 2);
+    assert_eq!(hooks.commands[0].command, "~/.jcode/hooks/log-tool.sh");
+    assert_eq!(hooks.commands[1].command, ".jcode/hooks/project-check.sh");
+    assert_eq!(hooks.commands[1].timeout_ms, 1234);
+}
+
+#[test]
+fn test_project_local_config_local_appends_after_shared_config() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let project = dir.path().join("project");
+    std::fs::create_dir_all(project.join(".jcode")).expect("create .jcode");
+    std::fs::write(
+        project.join(".jcode").join("config.toml"),
+        r#"
+        [hooks]
+        enabled = true
+
+        [[hooks.commands]]
+        event = "tool.execute.before"
+        command = "shared"
+        "#,
+    )
+    .expect("write shared config");
+    std::fs::write(
+        project.join(".jcode").join("config.local.toml"),
+        r#"
+        [hooks]
+
+        [[hooks.commands]]
+        event = "tool.execute.after"
+        command = "local"
+        "#,
+    )
+    .expect("write local config");
+
+    let cfg = Config::default();
+    let hooks = cfg.hooks_for_working_dir(Some(&project));
+    assert!(hooks.enabled);
+    assert_eq!(
+        hooks
+            .commands
+            .iter()
+            .map(|hook| hook.command.as_str())
+            .collect::<Vec<_>>(),
+        vec!["shared", "local"]
     );
 }
 
