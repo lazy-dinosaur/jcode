@@ -15,16 +15,28 @@ pub fn anthropic_api_pricing(model: &str) -> Option<RouteCheapnessEstimate> {
     let base = model.strip_suffix("[1m]").unwrap_or(model);
     let long_context = model.ends_with("[1m]");
     match base {
-        "claude-opus-4-6" => Some(RouteCheapnessEstimate::metered(
+        "claude-opus-4-7" | "claude-opus-4-6" => Some(RouteCheapnessEstimate::metered(
             RouteCostSource::PublicApiPricing,
-            RouteCostConfidence::Exact,
+            if base == "claude-opus-4-7" {
+                RouteCostConfidence::Medium
+            } else {
+                RouteCostConfidence::Exact
+            },
             usd_to_micros(if long_context { 10.0 } else { 5.0 }),
             usd_to_micros(if long_context { 37.5 } else { 25.0 }),
             Some(usd_to_micros(if long_context { 1.0 } else { 0.5 })),
             Some(if long_context {
-                "Anthropic API long-context pricing".to_string()
+                if base == "claude-opus-4-7" {
+                    "Estimated from Opus 4.6 long-context API pricing".to_string()
+                } else {
+                    "Anthropic API long-context pricing".to_string()
+                }
             } else {
-                "Anthropic API pricing".to_string()
+                if base == "claude-opus-4-7" {
+                    "Estimated from Opus 4.6 API pricing".to_string()
+                } else {
+                    "Anthropic API pricing".to_string()
+                }
             }),
         )),
         "claude-sonnet-4-6" => Some(RouteCheapnessEstimate::metered(

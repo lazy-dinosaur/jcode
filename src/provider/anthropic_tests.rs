@@ -12,6 +12,8 @@ fn test_parse_sse_event() {
 async fn test_available_models() {
     let provider = AnthropicProvider::new();
     let models = provider.available_models();
+    assert!(models.contains(&"claude-opus-4-7"));
+    assert!(models.contains(&"claude-opus-4-7[1m]"));
     assert!(models.contains(&"claude-opus-4-6"));
     assert!(models.contains(&"claude-opus-4-6[1m]"));
     assert!(models.contains(&"claude-sonnet-4-6"));

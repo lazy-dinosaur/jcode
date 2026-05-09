@@ -99,20 +99,27 @@ fn test_agents_routing_deserializes_from_config() {
     let cfg: Config = toml::from_str(
         r#"
         [agents.routing]
-        planner = "claude-opus-4-6"
+        planner = "claude-opus-4-7"
         coder = "gpt-5.5"
+
+        [agents.routes.hephaestus]
+        model = "gpt-5.5"
+        variant = "medium"
         "#,
     )
     .expect("config should deserialize");
 
     assert_eq!(
         cfg.agents.routing.get("planner").map(String::as_str),
-        Some("claude-opus-4-6")
+        Some("claude-opus-4-7")
     );
     assert_eq!(
         cfg.agents.routing.get("coder").map(String::as_str),
         Some("gpt-5.5")
     );
+    let route = cfg.agents.routes.get("hephaestus").expect("route config");
+    assert_eq!(route.model.as_deref(), Some("gpt-5.5"));
+    assert_eq!(route.variant.as_deref(), Some("medium"));
 }
 
 #[test]

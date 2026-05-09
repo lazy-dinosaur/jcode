@@ -151,7 +151,7 @@ update_channel = "stable"
 [provider]
 # Default model (optional, uses provider default if not set)
 # Set via /model picker with Ctrl+D to save as default
-# default_model = "claude-opus-4-6"
+# default_model = "claude-opus-4-7"
 # Default provider (optional: claude|openai|copilot|openrouter)
 # When set, this provider is preferred on startup if available
 # default_provider = "copilot"
@@ -199,20 +199,20 @@ memory_sidecar_enabled = false
 # Reused session model also wins over routing.
 #
 # [agents.routing]
-# planner = "claude-opus-4-6"
-# orchestrator = "claude-opus-4-6"
-# reviewer = "claude-opus-4-6"
+# planner = "claude-opus-4-7"
+# orchestrator = "claude-opus-4-7"
+# reviewer = "claude-opus-4-7"
 # coder = "gpt-5.5"
 # executor = "gpt-5.5"
 # researcher = "gpt-5.5"
-# sisyphus = "claude-opus-4-6"
+# sisyphus = "claude-opus-4-7"
 # hephaestus = "gpt-5.5"
 # oracle = "gpt-5.5"
 # librarian = "claude-sonnet-4-6"
 # explore = "claude-haiku-4-5"
 # multimodal-looker = "gemini-3.1-pro-preview"
-# prometheus = "claude-opus-4-6"
-# metis = "claude-opus-4-6"
+# prometheus = "claude-opus-4-7"
+# metis = "claude-opus-4-7"
 # momus = "gpt-5.5"
 # atlas = "claude-sonnet-4-6"
 # visual-engineering = "gemini-3.1-pro-preview"
@@ -223,6 +223,30 @@ memory_sidecar_enabled = false
 # unspecified-low = "claude-sonnet-4-6"
 # unspecified-high = "claude-sonnet-4-6"
 # writing = "gemini-3-flash-preview"
+
+# Rich routes can also carry an OpenAI reasoning effort / oh-my-opencode variant.
+# GPT/OpenAI `variant = "max"` maps to jcode effort `xhigh`.
+# Supported Claude `variant = "max"` maps to the Claude Max / long-context `[1m]` route.
+# Gemini routes currently ignore variant.
+# [agents.routes.planner]
+# model = "claude-opus-4-7"
+# variant = "max"
+#
+# [agents.routes.hephaestus]
+# model = "gpt-5.5"
+# variant = "medium"
+#
+# [agents.routes.oracle]
+# model = "gpt-5.5"
+# variant = "high"
+#
+# [agents.routes.ultrabrain]
+# model = "gpt-5.5"
+# variant = "xhigh"
+#
+# [agents.routes.sisyphus]
+# model = "claude-opus-4-7"
+# variant = "max"
 
 [ambient]
 # Ambient mode: background agent that maintains your codebase

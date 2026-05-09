@@ -358,12 +358,27 @@ pub struct AuthConfig {
 pub struct AgentsConfig {
     /// Optional default model override for spawned swarm/subagent sessions.
     pub swarm_model: Option<String>,
-    /// Optional model routing by subagent type/name, e.g. planner -> claude-opus-4-6.
+    /// Optional model routing by subagent type/name, e.g. planner -> claude-opus-4-7.
     pub routing: BTreeMap<String, String>,
+    /// Optional richer routing by subagent type/name, including model and reasoning effort.
+    pub routes: BTreeMap<String, AgentRouteConfig>,
     /// Optional default model override for the memory sidecar.
     pub memory_model: Option<String>,
     /// Whether memory should use the sidecar for relevance/extraction.
     pub memory_sidecar_enabled: bool,
+}
+
+/// Rich subagent routing configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct AgentRouteConfig {
+    /// Model to use for this subagent type.
+    pub model: Option<String>,
+    /// Reasoning effort for providers that support it, e.g. OpenAI `medium`, `high`, `xhigh`.
+    pub effort: Option<String>,
+    /// oh-my-opencode-compatible variant. For GPT/OpenAI this maps to reasoning effort; for
+    /// supported Claude models, `max` selects the `[1m]` Claude Max / long-context route.
+    pub variant: Option<String>,
 }
 
 /// Prompt and project instruction loading configuration.
@@ -666,7 +681,7 @@ impl Default for FeatureConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ProviderConfig {
-    /// Default model to use (e.g. "claude-opus-4-6", "copilot:claude-opus-4.6")
+    /// Default model to use (e.g. "claude-opus-4-7", "copilot:claude-opus-4.6")
     pub default_model: Option<String>,
     /// Default provider to use (claude|openai|copilot|openrouter)
     pub default_provider: Option<String>,

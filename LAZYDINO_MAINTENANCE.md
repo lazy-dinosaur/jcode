@@ -155,11 +155,21 @@ Track each custom patch as a small commit. Current known customizations:
 
 4. oh-my-opencode-style subagent routing
    - Goal: route subagents to models by `subagent_type`, mirroring the useful part of oh-my-opencode's `agents` / `categories` mapping.
-   - Config surface: `[agents.routing]` in `~/.jcode/config.toml`.
+   - Config surface:
+     - `[agents.routing]` for simple `name = "model"` routing.
+     - `[agents.routes.<name>]` for rich routes with `model` plus `effort` / oh-my-opencode `variant`.
+   - Opus planner/reviewer routes should use `claude-opus-4-7`; Sonnet support routes should use `claude-sonnet-4-6`.
+   - oh-my-opencode `variant` mapping:
+     - `medium` -> OpenAI `medium`
+     - `high` -> OpenAI `high`
+     - `xhigh` -> OpenAI `xhigh`
+     - `max` on GPT/OpenAI -> OpenAI `xhigh`
+     - `max` on supported Claude routes -> append `[1m]` for Claude Max / long-context route, e.g. `claude-opus-4-7[1m]`
+   - Sonnet 4.6 stays `claude-sonnet-4-6`; Opus planner/reviewer routes should use `claude-opus-4-7`, with `variant = "max"` when the Max route is intended.
    - Resolution order:
      1. explicit `model` argument in the `subagent` tool
      2. existing reused session model
-     3. `[agents.routing].<subagent_type>`
+     3. `[agents.routes].<subagent_type>` / `[agents.routing].<subagent_type>`
      4. parent session preferred subagent model
      5. `agents.swarm_model`
      6. current provider model

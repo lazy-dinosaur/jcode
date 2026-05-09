@@ -18,6 +18,12 @@ pub struct SubagentTool {
     registry: Registry,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ResolvedSubagentRoute {
+    model: Option<String>,
+    effort: Option<String>,
+}
+
 impl SubagentTool {
     pub fn new(provider: Arc<dyn Provider>, registry: Registry) -> Self {
         Self { provider, registry }
@@ -45,18 +51,77 @@ impl SubagentTool {
             .to_string()
     }
 
-    fn routed_model_for_subagent_type(subagent_type: &str) -> Option<String> {
-        let routing = &crate::config::config().agents.routing;
+    fn route_for_subagent_type(subagent_type: &str) -> ResolvedSubagentRoute {
+        let agents = &crate::config::config().agents;
         let direct = subagent_type.trim();
         if direct.is_empty() {
-            return None;
+            return ResolvedSubagentRoute::default();
         }
 
-        routing
+        let rich_route = agents
+            .routes
             .get(direct)
-            .or_else(|| routing.get(&direct.to_ascii_lowercase()))
-            .cloned()
-            .filter(|model| !model.trim().is_empty())
+            .or_else(|| agents.routes.get(&direct.to_ascii_lowercase()));
+        if let Some(route) = rich_route {
+            let raw_model = route
+                .model
+                .as_deref()
+                .map(str::trim)
+                .filter(|model| !model.is_empty());
+            let raw_variant = route.variant.as_deref().map(str::trim);
+            let model =
+                raw_model.map(|model| Self::apply_route_variant_to_model(model, raw_variant));
+            return ResolvedSubagentRoute {
+                model,
+                effort: route
+                    .effort
+                    .as_deref()
+                    .or(route.variant.as_deref())
+                    .and_then(Self::normalize_route_effort),
+            };
+        }
+
+        ResolvedSubagentRoute {
+            model: agents
+                .routing
+                .get(direct)
+                .or_else(|| agents.routing.get(&direct.to_ascii_lowercase()))
+                .cloned()
+                .filter(|model| !model.trim().is_empty()),
+            effort: None,
+        }
+    }
+
+    fn apply_route_variant_to_model(model: &str, variant: Option<&str>) -> String {
+        let variant = variant.unwrap_or_default().trim().to_ascii_lowercase();
+        if variant == "max" && Self::supports_claude_max_variant(model) && !model.ends_with("[1m]")
+        {
+            format!("{model}[1m]")
+        } else {
+            model.to_string()
+        }
+    }
+
+    fn supports_claude_max_variant(model: &str) -> bool {
+        model.starts_with("claude-opus-4-7")
+            || model.starts_with("claude-opus-4-6")
+            || model.starts_with("claude-sonnet-4-6")
+    }
+
+    fn normalize_route_effort(effort: &str) -> Option<String> {
+        match effort.trim().to_ascii_lowercase().as_str() {
+            "none" | "low" | "medium" | "high" | "xhigh" => {
+                Some(effort.trim().to_ascii_lowercase())
+            }
+            // oh-my-opencode's `max` variant maps to jcode/OpenAI's highest effort level.
+            "max" => Some("xhigh".to_string()),
+            "" => None,
+            _ => None,
+        }
+    }
+
+    fn should_apply_route_effort(model: &str) -> bool {
+        model.starts_with("gpt-") || model.starts_with("openai/")
     }
 }
 
@@ -155,15 +220,21 @@ impl Tool for SubagentTool {
         };
         let parent_subagent_model = Self::preferred_parent_subagent_model(&ctx.session_id);
         let provider_model = self.provider.model();
-        let routed_model = Self::routed_model_for_subagent_type(&params.subagent_type);
+        let route = Self::route_for_subagent_type(&params.subagent_type);
         let resolved_model = Self::resolve_model(
             params.model.as_deref(),
             session.model.as_deref(),
-            routed_model.as_deref(),
+            route.model.as_deref(),
             parent_subagent_model.as_deref(),
             &provider_model,
         );
         session.model = Some(resolved_model.clone());
+        if session.reasoning_effort.is_none()
+            && let Some(route_effort) = route.effort
+            && Self::should_apply_route_effort(&resolved_model)
+        {
+            session.reasoning_effort = Some(route_effort);
+        }
 
         if let Some(ref working_dir) = ctx.working_dir {
             session.working_dir = Some(working_dir.display().to_string());
@@ -451,6 +522,57 @@ mod tests {
             super::SubagentTool::resolve_model(None, None, None, None, "provider"),
             configured_or_provider
         );
+    }
+
+    #[test]
+    fn route_effort_normalizes_opencode_variants() {
+        assert_eq!(
+            super::SubagentTool::normalize_route_effort("medium"),
+            Some("medium".to_string())
+        );
+        assert_eq!(
+            super::SubagentTool::normalize_route_effort("HIGH"),
+            Some("high".to_string())
+        );
+        assert_eq!(
+            super::SubagentTool::normalize_route_effort("max"),
+            Some("xhigh".to_string())
+        );
+        assert_eq!(super::SubagentTool::normalize_route_effort("unknown"), None);
+    }
+
+    #[test]
+    fn route_variant_max_maps_supported_claude_models_to_1m_suffix() {
+        assert_eq!(
+            super::SubagentTool::apply_route_variant_to_model("claude-opus-4-7", Some("max")),
+            "claude-opus-4-7[1m]"
+        );
+        assert_eq!(
+            super::SubagentTool::apply_route_variant_to_model("claude-opus-4-7[1m]", Some("max")),
+            "claude-opus-4-7[1m]"
+        );
+        assert_eq!(
+            super::SubagentTool::apply_route_variant_to_model("claude-haiku-4-5", Some("max")),
+            "claude-haiku-4-5"
+        );
+        assert_eq!(
+            super::SubagentTool::apply_route_variant_to_model("gpt-5.5", Some("max")),
+            "gpt-5.5"
+        );
+    }
+
+    #[test]
+    fn route_effort_applies_only_to_openai_style_models() {
+        assert!(super::SubagentTool::should_apply_route_effort("gpt-5.5"));
+        assert!(super::SubagentTool::should_apply_route_effort(
+            "openai/gpt-5.5"
+        ));
+        assert!(!super::SubagentTool::should_apply_route_effort(
+            "claude-opus-4-7"
+        ));
+        assert!(!super::SubagentTool::should_apply_route_effort(
+            "gemini-3.1-pro-preview"
+        ));
     }
 
     #[test]

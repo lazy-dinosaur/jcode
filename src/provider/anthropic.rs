@@ -366,7 +366,7 @@ async fn ensure_oauth_preflight(
 }
 
 /// Default model
-const DEFAULT_MODEL: &str = "claude-opus-4-6";
+const DEFAULT_MODEL: &str = "claude-opus-4-7";
 
 /// API version header
 const API_VERSION: &str = "2023-06-01";
@@ -387,6 +387,8 @@ const DEFAULT_MAX_TOKENS: u32 = 32_768;
 
 /// Available models
 pub const AVAILABLE_MODELS: &[&str] = &[
+    "claude-opus-4-7",
+    "claude-opus-4-7[1m]",
     "claude-opus-4-6",
     "claude-opus-4-6[1m]",
     "claude-sonnet-4-6",
