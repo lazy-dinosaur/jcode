@@ -190,7 +190,7 @@ load_harness_dir = true
 # Default model override for spawned swarm/subagent sessions.
 # swarm_model = "gpt-5.5"
 # Optional memory sidecar model override.
-# memory_model = "claude-sonnet-4.6"
+# memory_model = "claude-sonnet-4-6"
 # Enable memory sidecar extraction/relevance model.
 memory_sidecar_enabled = false
 
@@ -199,29 +199,29 @@ memory_sidecar_enabled = false
 # Reused session model also wins over routing.
 #
 # [agents.routing]
-# planner = "claude-opus-4.7"
-# orchestrator = "claude-opus-4.7"
-# reviewer = "claude-opus-4.7"
+# planner = "claude-opus-4-6"
+# orchestrator = "claude-opus-4-6"
+# reviewer = "claude-opus-4-6"
 # coder = "gpt-5.5"
 # executor = "gpt-5.5"
 # researcher = "gpt-5.5"
-# sisyphus = "claude-opus-4.7"
+# sisyphus = "claude-opus-4-6"
 # hephaestus = "gpt-5.5"
 # oracle = "gpt-5.5"
-# librarian = "claude-sonnet-4.6"
-# explore = "claude-haiku-4.5"
+# librarian = "claude-sonnet-4-6"
+# explore = "claude-haiku-4-5"
 # multimodal-looker = "gemini-3.1-pro-preview"
-# prometheus = "claude-opus-4.7"
-# metis = "claude-opus-4.7"
+# prometheus = "claude-opus-4-6"
+# metis = "claude-opus-4-6"
 # momus = "gpt-5.5"
-# atlas = "claude-sonnet-4.6"
+# atlas = "claude-sonnet-4-6"
 # visual-engineering = "gemini-3.1-pro-preview"
 # ultrabrain = "gpt-5.5"
 # deep = "gpt-5.5"
 # artistry = "gemini-3.1-pro-preview"
-# quick = "claude-haiku-4.5"
-# unspecified-low = "claude-sonnet-4.6"
-# unspecified-high = "claude-sonnet-4.6"
+# quick = "claude-haiku-4-5"
+# unspecified-low = "claude-sonnet-4-6"
+# unspecified-high = "claude-sonnet-4-6"
 # writing = "gemini-3-flash-preview"
 
 [ambient]

@@ -99,7 +99,7 @@ fn test_agents_routing_deserializes_from_config() {
     let cfg: Config = toml::from_str(
         r#"
         [agents.routing]
-        planner = "claude-opus-4.7"
+        planner = "claude-opus-4-6"
         coder = "gpt-5.5"
         "#,
     )
@@ -107,7 +107,7 @@ fn test_agents_routing_deserializes_from_config() {
 
     assert_eq!(
         cfg.agents.routing.get("planner").map(String::as_str),
-        Some("claude-opus-4.7")
+        Some("claude-opus-4-6")
     );
     assert_eq!(
         cfg.agents.routing.get("coder").map(String::as_str),
