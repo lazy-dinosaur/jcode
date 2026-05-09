@@ -123,11 +123,14 @@ Track each custom patch as a small commit. Current known customizations:
    - Commit: `fix: restore mermaid label rendering on v0.12`
    - Purpose: restore visible Mermaid node/edge labels in the TUI renderer.
 
-2. Hook support, in progress
+2. Hook support
    - Goal: add Claude Code-style `PreToolUse` / `PostToolUse` MVP with opencode-style event names:
      - `tool.execute.before`
      - `tool.execute.after`
-   - Initial implementation should use command hooks configured from jcode config.
+   - Commit: `feat: add command hooks for tool lifecycle`
+   - Current implementation uses command hooks configured from jcode config.
+   - Current config source: global `~/.jcode/config.toml` only.
+   - Recommended next patch: add project-local hook config, preferably `.jcode/config.toml` or `.jcode/hooks.toml`, merged on top of the global config.
 
 ## Hook design note
 
@@ -145,6 +148,57 @@ MVP events:
 tool.execute.before  # PreToolUse
 tool.execute.after   # PostToolUse
 ```
+
+Current hook config example:
+
+```toml
+[hooks]
+enabled = true
+
+[[hooks.commands]]
+event = "tool.execute.before"
+tool = "bash"
+command = "~/.jcode/hooks/check-bash.sh"
+blocking = true
+timeout_ms = 3000
+
+[[hooks.commands]]
+event = "tool.execute.after"
+tool = "*"
+command = "~/.jcode/hooks/log-tool.sh"
+blocking = false
+timeout_ms = 3000
+```
+
+Blocking hook stdout protocol:
+
+```json
+{"action":"allow"}
+```
+
+or:
+
+```json
+{"action":"deny","reason":"Dangerous command blocked"}
+```
+
+Empty stdout defaults to allow. `modify` is intentionally not implemented yet.
+
+Recommended project-local config design:
+
+```text
+~/.jcode/config.toml           # global defaults
+<project>/.jcode/config.toml   # project overrides, checked into repo if safe
+<project>/.jcode/config.local.toml # private local overrides, gitignored
+```
+
+Merge policy should be:
+
+```text
+global hooks + project hooks + local hooks
+```
+
+Project config should be loaded from the active session working directory. This mirrors the useful parts of opencode's project-level `.opencode/opencode.json` and Claude Code's project/local settings split, while keeping jcode's TOML convention.
 
 Future events can include:
 
