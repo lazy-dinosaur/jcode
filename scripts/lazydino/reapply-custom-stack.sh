@@ -65,6 +65,7 @@ PATCH_REFS=(
   patch/safe-server-restart
   patch/reload-handoff-hard-timeout
   patch/mermaid-input-non-blocking
+  patch/ecosystem-paths-policy
 )
 
 while [[ $# -gt 0 ]]; do
