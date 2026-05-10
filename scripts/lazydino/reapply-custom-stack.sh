@@ -58,6 +58,7 @@ PATCH_REFS=(
   patch/ambient-serde-args
   patch/upstream-pr-triage-docs
   patch/project-skill-sync
+  patch/custom-install-server-paths
 )
 
 while [[ $# -gt 0 ]]; do

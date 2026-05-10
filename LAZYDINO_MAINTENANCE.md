@@ -172,6 +172,36 @@ conflict/test failure -> use LAZYDINO_MAINTENANCE.md + patch/* branch as source 
 
 Ordered patch refs are embedded in the script. When a new custom patch is added, also add its `patch/<name>` ref to the script's `PATCH_REFS` list and update this document.
 
+## Custom binary install helper
+
+Use this after changing any runtime behavior or client/server protocol:
+
+```bash
+cd /home/lazydino/dev/jcode
+scripts/lazydino/install-custom-jcode.sh
+```
+
+What it updates:
+
+- `~/.local/bin/jcode`
+- `~/.jcode/builds/stable/jcode`
+- `~/.jcode/builds/current/jcode`
+- a versioned custom slot such as `~/.jcode/builds/versions/lazydino-<sha>/jcode`
+
+Why this exists:
+
+- The foreground client can use `~/.local/bin/jcode` while the shared daemon/server can still be running from `~/.jcode/builds/stable/jcode`.
+- If only `~/.local/bin/jcode` is replaced, the old daemon can keep applying old defaults such as `gpt-5.5` and miss new project skill/hook behavior.
+- Updating the Jcode-managed stable/current symlinks makes new daemon starts use the custom build.
+
+To also terminate the old Jcode-managed daemon so the next client starts the new build:
+
+```bash
+scripts/lazydino/install-custom-jcode.sh --restart-server
+```
+
+The restart option only targets daemon-style `jcode ... serve` processes under `~/.jcode/builds/*`; it does not intentionally kill foreground TUI client processes.
+
 ## AI agent maintenance prompt
 
 Use this prompt when asking an AI agent to maintain the branch:
@@ -313,6 +343,20 @@ Track each custom patch as a small commit. Current known customizations:
    - Why: the UI could show project skills as active/available while the daemon-side agent did not reliably load or activate the same project-local skill registry.
    - Validation: `cargo test skill --lib` and `cargo check`.
    - Binary reinstall required: yes, because this changes client/server protocol and runtime behavior.
+
+9. Custom install helper for client and daemon binary paths
+   - Commit: `chore: add custom jcode install helper`.
+   - Patch branch: `patch/custom-install-server-paths`.
+   - Goal: prevent split-brain installs where `~/.local/bin/jcode` is custom/new but the shared daemon still runs `~/.jcode/builds/stable/jcode` from an old upstream build.
+   - Script: `scripts/lazydino/install-custom-jcode.sh`.
+   - Install targets:
+     - `~/.local/bin/jcode`
+     - `~/.jcode/builds/stable/jcode`
+     - `~/.jcode/builds/current/jcode`
+     - `~/.jcode/builds/versions/lazydino-<sha>/jcode`
+   - Optional runtime action: `--restart-server` terminates only daemon-style `jcode ... serve` processes launched from `~/.jcode/builds/*` so the next client starts the new build.
+   - Validation: `bash -n scripts/lazydino/install-custom-jcode.sh`, `scripts/lazydino/install-custom-jcode.sh --help`, and a release install smoke.
+   - Binary reinstall required: no for the script itself, but this script exists to do binary reinstalls correctly.
 
 ## Upstream PR triage notes
 
