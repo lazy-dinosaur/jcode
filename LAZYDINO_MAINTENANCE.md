@@ -473,6 +473,24 @@ Track each custom patch as a small commit. Current known customizations:
    - Validation: `cargo check`, `cargo test skill --lib --no-fail-fast`, `cargo test mcp --lib --no-fail-fast`, `cargo test --lib --no-run`, and the 12-test known-failure smoke.
    - Binary reinstall required: yes, because this changes startup/config resource loading behavior.
 
+16. Project-local agent profile config
+   - Commit: `feat: merge agent profiles from project-local config`.
+   - Patch branch: `patch/agent-profiles-project-merge`.
+   - Purpose: make `[agents.profiles]` and deprecated `[agents.routes]` / `[agents.routing]` usable from self-contained project harness installs, not only from global `~/.jcode/config.toml`.
+   - Config files:
+     - global `~/.jcode/config.toml`
+     - project shared `<project>/.jcode/config.toml`
+     - project local/private `<project>/.jcode/config.local.toml`
+   - Merge behavior:
+     - global agents first
+     - project shared agents second
+     - project local/private agents third
+     - map fields (`routing`, `routes`, `profiles`) merge by key, with later layers overriding earlier layers
+     - scalar fields (`swarm_model`, `memory_model`, `memory_sidecar_enabled`) use project values when the project agents section supplies them
+   - Runtime behavior: the `subagent`/`task` tool resolves its callable profile, deprecated route, and swarm model from the active session working directory when available; schema-only/global introspection keeps the global-only fallback.
+   - Validation: `cargo check`, `cargo test agents_for_working_dir --lib --no-fail-fast`, `cargo test config_tests --lib --no-fail-fast`, `cargo test task --lib --no-fail-fast`, `cargo test --lib --no-run`, and the 13-test known-failure smoke.
+   - Binary reinstall required: yes, because this changes runtime subagent routing/config behavior.
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
