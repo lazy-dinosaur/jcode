@@ -208,6 +208,7 @@ async fn await_swarm_progress(
         session_id: ctx.session_id.clone(),
         target_status: default_run_await_statuses(),
         session_ids,
+        owned_only: None,
         mode: Some("any".to_string()),
         timeout_secs: Some(timeout_minutes.max(1) * 60),
     };
@@ -521,6 +522,8 @@ struct CommunicateInput {
     #[serde(default)]
     session_ids: Option<Vec<String>>,
     #[serde(default)]
+    owned_only: Option<bool>,
+    #[serde(default)]
     mode: Option<String>,
     #[serde(default)]
     timeout_minutes: Option<u64>,
@@ -638,7 +641,12 @@ impl Tool for CommunicateTool {
                 },
                 "session_ids": {
                     "type": "array",
-                    "items": {"type": "string"}
+                    "items": {"type": "string"},
+                    "description": "Optional session IDs for await_members. When omitted, await_members defaults to owned_only scope and waits only for non-terminal workers spawned by this coordinator."
+                },
+                "owned_only": {
+                    "type": "boolean",
+                    "description": "For await_members: when true, wait only for non-terminal workers spawned by this coordinator. If omitted, this is enabled when session_ids/target_session are omitted, and disabled when explicit session_ids are provided."
                 },
                 "mode": {
                     "type": "string",
@@ -1492,6 +1500,7 @@ impl Tool for CommunicateTool {
                     session_id: ctx.session_id.clone(),
                     target_status,
                     session_ids,
+                    owned_only: params.owned_only,
                     mode: params.mode.clone(),
                     timeout_secs: Some(timeout_secs),
                 };

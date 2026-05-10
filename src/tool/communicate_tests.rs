@@ -159,6 +159,14 @@ fn schema_advertises_supported_swarm_fields() {
     assert!(props.contains_key("spawn_if_needed"));
     assert!(props.contains_key("prefer_spawn"));
     assert!(props.contains_key("session_ids"));
+    assert!(props.contains_key("owned_only"));
+    assert_eq!(props["owned_only"]["type"], json!("boolean"));
+    assert!(
+        props["owned_only"]["description"]
+            .as_str()
+            .is_some_and(|description| description
+                .contains("non-terminal workers spawned by this coordinator"))
+    );
     assert!(props.contains_key("mode"));
     assert!(props.contains_key("target_status"));
     assert!(props.contains_key("timeout_minutes"));
