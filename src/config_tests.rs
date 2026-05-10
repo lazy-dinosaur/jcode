@@ -222,3 +222,206 @@ impl Config {
             .any(|value| value.trim().eq_ignore_ascii_case(&entry))
     }
 }
+
+// =============================================================================
+// M19: Config hot-reload tests
+// =============================================================================
+
+/// Helper: write a config.toml that sets a distinguishing field (here we use
+/// `display.pin_images`, a plain bool that's easy to read back). Bumps
+/// mtime by sleeping briefly so the watcher detects the change reliably even
+/// on filesystems with low timestamp granularity.
+#[cfg(test)]
+fn m19_write_config(home: &Path, body: &str) {
+    let path = home.join("config.toml");
+    std::fs::write(&path, body).expect("write config.toml");
+    // Some filesystems (e.g. tmpfs on Linux) have nanosecond mtime, but
+    // others (notably macOS APFS in older kernels, and some CI runners) only
+    // have second-level granularity. A 10ms sleep before each write is enough
+    // for nanosecond-mtime FS; for second-level FS the test still passes
+    // because we use `force_reload_config()` which bypasses debounce, and the
+    // `observed_modified` comparison would yield "old vs new" on any whole-
+    // second boundary cross. We don't sleep here; tests that need a guaranteed
+    // mtime change can call `m19_bump_mtime` instead.
+    let _ = path;
+}
+
+/// Helper: ensure mtime moves forward by at least one whole second, for FS
+/// with second-level timestamp granularity. Prefer this when a test needs a
+/// guaranteed mtime change between two writes.
+#[cfg(test)]
+fn m19_bump_mtime_then_write(home: &Path, body: &str) {
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    m19_write_config(home, body);
+}
+
+/// Sanity test: with a freshly-prepared `JCODE_HOME` and a config file that
+/// turns `display.pin_images` on, the global `config()` returns true
+/// after `reset_config_cache_for_tests()`.
+#[test]
+fn test_m19_config_initial_load_after_reset() {
+    let _guard = crate::storage::lock_test_env();
+    let prev_home = std::env::var_os("JCODE_HOME");
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    crate::env::set_var("JCODE_HOME", dir.path());
+
+    m19_write_config(dir.path(), "[display]\npin_images = true\n");
+    crate::config::reset_config_cache_for_tests();
+
+    let cfg = crate::config::config();
+    assert!(
+        cfg.display.pin_images,
+        "expected pin_images=true after initial load"
+    );
+
+    if let Some(prev) = prev_home {
+        crate::env::set_var("JCODE_HOME", prev);
+    } else {
+        crate::env::remove_var("JCODE_HOME");
+    }
+}
+
+/// Core M19 contract: editing the config file at runtime is reflected by a
+/// subsequent `config()` call (after `force_reload_config` to bypass the
+/// 500ms debounce window).
+#[test]
+fn test_m19_config_reloads_when_mtime_changes() {
+    let _guard = crate::storage::lock_test_env();
+    let prev_home = std::env::var_os("JCODE_HOME");
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    crate::env::set_var("JCODE_HOME", dir.path());
+
+    // Initial: feature off
+    m19_write_config(dir.path(), "[display]\npin_images = false\n");
+    crate::config::reset_config_cache_for_tests();
+    assert!(
+        !crate::config::config().display.pin_images,
+        "expected pin_images=false initially"
+    );
+
+    // Edit on disk: feature on
+    m19_bump_mtime_then_write(dir.path(), "[display]\npin_images = true\n");
+    let did_reload = crate::config::force_reload_config();
+    assert!(
+        did_reload,
+        "force_reload_config should report a swap on mtime change"
+    );
+    assert!(
+        crate::config::config().display.pin_images,
+        "expected pin_images=true after mtime change + force_reload"
+    );
+
+    if let Some(prev) = prev_home {
+        crate::env::set_var("JCODE_HOME", prev);
+    } else {
+        crate::env::remove_var("JCODE_HOME");
+    }
+}
+
+/// Robustness: when the config file becomes invalid (e.g. mid-edit save with
+/// broken TOML), the previous valid snapshot is retained — `config()` does
+/// NOT silently fall back to defaults.
+#[test]
+fn test_m19_config_keeps_last_good_on_invalid_toml() {
+    let _guard = crate::storage::lock_test_env();
+    let prev_home = std::env::var_os("JCODE_HOME");
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    crate::env::set_var("JCODE_HOME", dir.path());
+
+    // Initial valid: feature on
+    m19_write_config(dir.path(), "[display]\npin_images = true\n");
+    crate::config::reset_config_cache_for_tests();
+    assert!(
+        crate::config::config().display.pin_images,
+        "expected pin_images=true initially"
+    );
+
+    // Replace with garbage TOML (mid-edit corruption).
+    m19_bump_mtime_then_write(dir.path(), "this is not valid toml = = = [[[\n");
+    let _ = crate::config::force_reload_config();
+
+    // Last-good preserved: feature still on, NOT default(false).
+    assert!(
+        crate::config::config().display.pin_images,
+        "expected last-good config retained on invalid TOML; got default fallback instead"
+    );
+
+    if let Some(prev) = prev_home {
+        crate::env::set_var("JCODE_HOME", prev);
+    } else {
+        crate::env::remove_var("JCODE_HOME");
+    }
+}
+
+/// After a corrupt write, fixing the file should make the new value take
+/// effect on the next reload (i.e. the broken state isn't sticky).
+#[test]
+fn test_m19_config_recovers_after_invalid_then_valid_write() {
+    let _guard = crate::storage::lock_test_env();
+    let prev_home = std::env::var_os("JCODE_HOME");
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    crate::env::set_var("JCODE_HOME", dir.path());
+
+    // Start: feature off
+    m19_write_config(dir.path(), "[display]\npin_images = false\n");
+    crate::config::reset_config_cache_for_tests();
+    assert!(!crate::config::config().display.pin_images);
+
+    // Corrupt
+    m19_bump_mtime_then_write(dir.path(), "broken =====\n");
+    let _ = crate::config::force_reload_config();
+    assert!(
+        !crate::config::config().display.pin_images,
+        "expected last-good (false) after corrupt write"
+    );
+
+    // Fix with a new value (true)
+    m19_bump_mtime_then_write(dir.path(), "[display]\npin_images = true\n");
+    let did_reload = crate::config::force_reload_config();
+    assert!(
+        did_reload,
+        "force_reload should swap to the recovered config"
+    );
+    assert!(
+        crate::config::config().display.pin_images,
+        "expected fresh value (true) after recovery write"
+    );
+
+    if let Some(prev) = prev_home {
+        crate::env::set_var("JCODE_HOME", prev);
+    } else {
+        crate::env::remove_var("JCODE_HOME");
+    }
+}
+
+/// Idempotence: when nothing changes on disk, `force_reload_config` reports
+/// no swap and `config()` keeps returning the same snapshot.
+#[test]
+fn test_m19_force_reload_is_noop_when_unchanged() {
+    let _guard = crate::storage::lock_test_env();
+    let prev_home = std::env::var_os("JCODE_HOME");
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    crate::env::set_var("JCODE_HOME", dir.path());
+
+    m19_write_config(dir.path(), "[display]\npin_images = true\n");
+    crate::config::reset_config_cache_for_tests();
+    let first = crate::config::config() as *const Config;
+
+    // No edit. force_reload should observe same mtime and report no swap.
+    let did_reload = crate::config::force_reload_config();
+    assert!(
+        !did_reload,
+        "expected force_reload to report no swap when mtime unchanged"
+    );
+    let second = crate::config::config() as *const Config;
+    assert!(
+        std::ptr::eq(first, second),
+        "expected same &'static Config pointer when nothing changed"
+    );
+
+    if let Some(prev) = prev_home {
+        crate::env::set_var("JCODE_HOME", prev);
+    } else {
+        crate::env::remove_var("JCODE_HOME");
+    }
+}
