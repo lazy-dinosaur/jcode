@@ -37,7 +37,23 @@ pub async fn run() -> Result<()> {
     let args = parse_and_prepare_args()?;
     spawn_background_update_check(&args);
 
-    if let Err(e) = dispatch::run_main(args).await {
+    let dispatch_result = dispatch::run_main(args).await;
+
+    // M10: flush any pending non-blocking lifecycle/tool hooks before the
+    // tokio runtime is dropped. Long-running `jcode serve` paths hit this
+    // during graceful shutdown; single-shot CLI commands like `jcode run`
+    // depend on this to avoid losing fire-and-forget hook state to
+    // `kill_on_drop(true)` on the spawned children. 5s is the same upper
+    // bound the existing tool-hook timeout uses for "well-behaved" hooks.
+    let flushed =
+        crate::hooks::flush_nonblocking_hooks(std::time::Duration::from_secs(5)).await;
+    if flushed > 0 {
+        logging::info(&format!(
+            "Flushed {flushed} pending non-blocking hook(s) before exit"
+        ));
+    }
+
+    if let Err(e) = dispatch_result {
         report_main_error(&e);
         return Err(e);
     }

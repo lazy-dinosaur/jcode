@@ -4,14 +4,90 @@ use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::process::Stdio;
+use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
+use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 
 pub const TOOL_EXECUTE_BEFORE: &str = "tool.execute.before";
 pub const TOOL_EXECUTE_AFTER: &str = "tool.execute.after";
 pub const SESSION_STOP: &str = "session.stop";
 pub const RESPONSE_COMPLETED: &str = "response.completed";
+
+/// M10: tracker for non-blocking hook tasks so single-shot CLI commands
+/// (`jcode run`, etc) can await pending lifecycle/tool hooks before the
+/// tokio runtime is dropped. Without this, fire-and-forget `tokio::spawn`
+/// calls in `run_tool_hooks` and `run_lifecycle_hook_commands` race against
+/// process exit and the hook child is killed via `kill_on_drop(true)` before
+/// it finishes.
+fn pending_nonblocking_hooks() -> &'static Mutex<Vec<JoinHandle<()>>> {
+    static SLOT: OnceLock<Mutex<Vec<JoinHandle<()>>>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// M10: spawn a non-blocking hook task and register its JoinHandle so
+/// `flush_nonblocking_hooks` can await it on shutdown. Long-running servers
+/// (`jcode serve`) do not need to call flush; single-shot CLI paths must.
+fn spawn_tracked_nonblocking_hook<F>(future: F)
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    let handle = tokio::spawn(future);
+    // try_lock keeps this hot path lock-free in steady state; if the mutex is
+    // contended we fall back to a brief async lock via tokio::spawn so we
+    // never block the caller. The handle is registered in either case.
+    let pending = pending_nonblocking_hooks();
+    if let Ok(mut guard) = pending.try_lock() {
+        guard.push(handle);
+    } else {
+        tokio::spawn(async move {
+            pending_nonblocking_hooks().lock().await.push(handle);
+        });
+    }
+}
+
+/// M10: await all currently-tracked non-blocking hooks, then drop them.
+///
+/// Bounded by `timeout` so a slow / hung hook cannot wedge process exit
+/// indefinitely. Any handle that does not complete within the timeout is
+/// dropped (which triggers `kill_on_drop(true)` on the child process — same
+/// behaviour as the pre-fix race, but at least the well-behaved hooks have a
+/// chance to finish).
+///
+/// Safe to call multiple times. Safe to call when no hooks were ever
+/// registered. Returns the number of hooks that completed within the timeout
+/// (callers may surface this for diagnostics).
+pub async fn flush_nonblocking_hooks(timeout: Duration) -> usize {
+    let handles: Vec<JoinHandle<()>> = {
+        let mut guard = pending_nonblocking_hooks().lock().await;
+        std::mem::take(&mut *guard)
+    };
+    if handles.is_empty() {
+        return 0;
+    }
+    let total = handles.len();
+    let join_all = async {
+        for handle in handles {
+            let _ = handle.await;
+        }
+    };
+    match tokio::time::timeout(timeout, join_all).await {
+        Ok(()) => total,
+        Err(_) => {
+            crate::logging::warn(&format!(
+                "flush_nonblocking_hooks: {total} hook(s) did not finish within {timeout:?}; remaining child processes will be killed on drop"
+            ));
+            // Outstanding handles are already moved out of the global slot;
+            // dropping them here cancels the futures and kills the child via
+            // kill_on_drop(true). That matches the pre-fix exit behaviour for
+            // those specific slow hooks, but well-behaved hooks now finish
+            // because we awaited them up to `timeout`.
+            0
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ToolHookPayload<'a> {
@@ -166,7 +242,9 @@ async fn run_tool_hooks(
             let timeout_ms = hook.timeout_ms;
             let cwd = cwd.clone();
             let payload_json = payload_json.clone();
-            tokio::spawn(async move {
+            // M10: register the JoinHandle so single-shot CLI exits can flush
+            // pending tool hooks before runtime drop.
+            spawn_tracked_nonblocking_hook(async move {
                 if let Err(err) =
                     run_nonblocking_hook(&command, timeout_ms, cwd.as_deref(), &payload_json).await
                 {
@@ -232,7 +310,9 @@ where
             let timeout_ms = hook.timeout_ms;
             let cwd = cwd.map(str::to_string);
             let payload_json = payload_json.clone();
-            tokio::spawn(async move {
+            // M10: register the JoinHandle so single-shot CLI exits can flush
+            // pending lifecycle hooks before runtime drop.
+            spawn_tracked_nonblocking_hook(async move {
                 if let Err(err) =
                     run_nonblocking_hook(&command, timeout_ms, cwd.as_deref(), &payload_json).await
                 {
@@ -526,5 +606,82 @@ mod tests {
         )
         .await
         .unwrap();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // M10 regression: pending non-blocking hook flush.
+    //
+    // Tests use a serial mutex because `pending_nonblocking_hooks` is a
+    // process-global singleton; concurrent tokio tests would otherwise see
+    // each other's handles and `flush_nonblocking_hooks` returns counts that
+    // depend on global state.
+    // ─────────────────────────────────────────────────────────────────────
+
+    static M10_GLOBAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    /// M10: a tracked non-blocking hook that finishes within the flush
+    /// timeout must be awaited (return value reflects it as completed).
+    /// Without the flush call, `tokio::spawn` would race against runtime drop
+    /// in single-shot CLI commands and the hook child would be killed.
+    #[tokio::test]
+    async fn flush_nonblocking_hooks_awaits_tracked_handle() {
+        let _serial = M10_GLOBAL.lock().await;
+        // Drain any leftover handles from previous tests in the same process.
+        let _ = flush_nonblocking_hooks(Duration::from_millis(50)).await;
+
+        let marker = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let marker_for_task = marker.clone();
+        spawn_tracked_nonblocking_hook(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            marker_for_task.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+
+        let completed = flush_nonblocking_hooks(Duration::from_secs(2)).await;
+        assert_eq!(completed, 1, "flush should report 1 completed hook");
+        assert!(
+            marker.load(std::sync::atomic::Ordering::SeqCst),
+            "M10: tracked hook side-effect must run before flush returns"
+        );
+    }
+
+    /// M10: calling flush with no registered hooks returns 0 and does not
+    /// block on the timeout. Required for the hot path inside the CLI exit
+    /// hook, which runs on every invocation including ones with no hooks.
+    #[tokio::test]
+    async fn flush_nonblocking_hooks_returns_zero_when_empty() {
+        let _serial = M10_GLOBAL.lock().await;
+        let _ = flush_nonblocking_hooks(Duration::from_millis(50)).await;
+
+        let started = std::time::Instant::now();
+        let completed = flush_nonblocking_hooks(Duration::from_secs(60)).await;
+        assert_eq!(completed, 0);
+        assert!(
+            started.elapsed() < Duration::from_millis(200),
+            "flush must short-circuit when no hooks are tracked (took {:?})",
+            started.elapsed()
+        );
+    }
+
+    /// M10: the timeout is a hard bound. A hook that never returns must not
+    /// wedge process exit; flush returns 0 and logs a warning. The handle is
+    /// dropped (which kills the child via `kill_on_drop(true)`).
+    #[tokio::test]
+    async fn flush_nonblocking_hooks_bounded_by_timeout() {
+        let _serial = M10_GLOBAL.lock().await;
+        let _ = flush_nonblocking_hooks(Duration::from_millis(50)).await;
+
+        spawn_tracked_nonblocking_hook(async move {
+            // Effectively forever for the purposes of this test.
+            tokio::time::sleep(Duration::from_secs(60)).await;
+        });
+
+        let started = std::time::Instant::now();
+        let completed = flush_nonblocking_hooks(Duration::from_millis(100)).await;
+        assert_eq!(completed, 0, "slow hook must report 0 completed");
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "flush must respect the timeout (took {:?})",
+            started.elapsed()
+        );
     }
 }
