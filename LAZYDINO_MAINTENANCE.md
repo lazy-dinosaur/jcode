@@ -870,6 +870,48 @@ model.request.before
 model.response.after
 ```
 
+## Known upstream test failures
+
+These tests fail on `origin/master` (verified at upstream commit `4b97d322`) and on every Lazydino patch since `d2c9b046`. They are NOT regressions introduced by Lazydino patches. Last verified: 2026-05-10.
+
+Verification recipe:
+```bash
+git checkout origin/master
+/tmp/check-12-tests.sh   # or run the individual cargo test invocations below
+```
+
+Failure inventory (12 tests):
+
+Environment-dependent (likely fine on a fresh CI machine, fail on this developer host):
+- `auth::tests::cursor_status_is_available_for_authenticated_cli_session` — expects Cursor CLI to be authenticated locally.
+- `server::comm_session::comm_session_tests::resolve_spawn_working_dir_prefers_explicit_then_spawner_agent_dir` — assertion compares `/tmp/spawner-agent` against current working dir resolution.
+- `ambient::runner::runner_tests::spawn_target_creates_one_child_session_and_runs_task` — assertion against tempdir path resolution.
+
+Stale expectation drift (single-line fixes if/when we adopt them):
+- `tui::ui::pinned_ui::tests::side_panel_mermaid_probe_reports_viewport_fill_for_underutilized_fit` — expects `127%`, current code produces `130%`.
+- `tui::app::helpers::helpers_tests::build_resume_command_uses_imported_jcode_session_for_codex` — expects no `--fresh-spawn` flag, current code adds it.
+
+Suspected real upstream bugs (do not adopt blindly; investigate before fixing):
+- `tui::app::tests::test_context_command_reports_session_context_snapshot` — `/context` summary text changed.
+- `tui::app::tests::test_local_compacted_history_marker_scroll_expands_from_session` — compaction marker scroll-expand returns 0 elements where 2 are expected.
+- `tui::app::tests::test_git_command_works_in_remote_mode_with_accessible_working_directory` — remote git command returns no response.
+- `tui::app::tests::remote_add_provider_message_retains_remote_provider_copy` — remote provider message ends up duplicated.
+- `server::client_session::tests::resume_tests::handle_resume_session_allows_live_attach_when_existing_agent_is_busy` — live attach to busy agent returns 0 instead of 1.
+- `tui::app::helpers::helpers_tests::gather_ambient_info_filters_to_session_reminders_when_ambient_disabled` — panics with "ambient info" message.
+- `agent::tests::env_snapshot_detail_is_minimal_for_empty_sessions_and_full_after_history` — expects `Minimal`, returns `Full`.
+
+Policy:
+- Do NOT block Lazydino patches on these.
+- When adding a new patch, run a focused subset (`cargo test <relevant-area> --lib`) and ignore matches against this list.
+- If a patch you are working on actually starts passing one of these (genuine fix), promote it: remove from this list, add a `patch/upstream-test-fix-<area>` branch, and consider an upstream PR.
+- Re-verify this list after every upstream rebase: any test that newly fails AND is not in this list IS a regression caused by the rebase or one of our patches and must be investigated.
+
+Bisection summary (verified 2026-05-10):
+- `origin/master` (`4b97d322`): 0/12 pass.
+- `d2c9b046` (Lazydino baseline before recent patches): 0/12 pass.
+- After `patch/journal-on-message`, `patch/safe-server-restart`, `patch/reload-handoff-hard-timeout`, `patch/mermaid-input-non-blocking`: 0/12 pass.
+- Net regression introduced by Lazydino patches against this list: 0.
+
 ## Security note
 
 A GitHub token was previously visible in a local URL rewrite. The local rewrite was removed, but the token should be revoked/rotated in GitHub because it may have been exposed in logs/chat.
