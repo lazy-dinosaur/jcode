@@ -79,6 +79,7 @@ PATCH_REFS=(
   patch/bg-delivery-target
   patch/altb-wake-parent
   patch/journal-stub-recovery
+  patch/altb-end-turn
 )
 
 while [[ $# -gt 0 ]]; do
