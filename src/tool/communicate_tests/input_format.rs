@@ -88,6 +88,17 @@ fn communicate_input_accepts_run_id() {
 }
 
 #[test]
+fn communicate_input_accepts_list_run_id() {
+    let parsed: CommunicateInput = serde_json::from_value(serde_json::json!({
+        "action": "list",
+        "run_id": "run-list-1"
+    }))
+    .expect("list run_id should deserialize");
+    assert_eq!(parsed.action, "list");
+    assert_eq!(parsed.run_id.as_deref(), Some("run-list-1"));
+}
+
+#[test]
 fn cleanup_candidates_default_to_owned_terminal_workers() {
     let members = vec![
         AgentInfo {
@@ -361,6 +372,59 @@ fn format_members_includes_status_and_detail() {
         output
             .output
             .contains("Meta: headless · owned_by_you · attachments=0 · status_age=12s")
+    );
+}
+
+#[test]
+fn format_members_can_be_scoped_to_one_run_id() {
+    let ctx = test_ctx("coord", std::path::Path::new("."));
+    let members = vec![
+        AgentInfo {
+            session_id: "current-worker".to_string(),
+            friendly_name: Some("current".to_string()),
+            files_touched: vec![],
+            status: Some("running".to_string()),
+            detail: None,
+            role: Some("agent".to_string()),
+            is_headless: Some(true),
+            report_back_to_session_id: Some("coord".to_string()),
+            run_id: Some("run-current".to_string()),
+            latest_completion_report: None,
+            live_attachments: Some(0),
+            status_age_secs: Some(3),
+        },
+        AgentInfo {
+            session_id: "old-worker".to_string(),
+            friendly_name: Some("old".to_string()),
+            files_touched: vec![],
+            status: Some("ready".to_string()),
+            detail: None,
+            role: Some("agent".to_string()),
+            is_headless: Some(true),
+            report_back_to_session_id: Some("coord".to_string()),
+            run_id: Some("run-old".to_string()),
+            latest_completion_report: None,
+            live_attachments: Some(0),
+            status_age_secs: Some(10),
+        },
+    ];
+
+    let output = format_members_for_run(&ctx, &members, Some("run-current")).output;
+
+    assert!(output.contains("Run scope: run_id=run-current (showing 1/2)"));
+    assert!(output.contains("current"));
+    assert!(output.contains("run_id=run-current"));
+    assert!(!output.contains("old-worker"));
+    assert!(!output.contains("run-old"));
+
+    let unscoped = format_members_for_run(&ctx, &members, None).output;
+    assert!(unscoped.contains("current"));
+    assert!(unscoped.contains("old"));
+
+    let empty = format_members_for_run(&ctx, &members, Some("run-missing")).output;
+    assert_eq!(
+        empty,
+        "No agents found for run_id=run-missing (0/2 in current swarm)."
     );
 }
 

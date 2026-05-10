@@ -485,8 +485,45 @@ fn format_context_entries(entries: &[ContextEntry]) -> ToolOutput {
     ToolOutput::new(format_comm_context_entries(entries))
 }
 
+fn run_scoped_members(members: &[AgentInfo], run_id: Option<&str>) -> Vec<AgentInfo> {
+    match run_id {
+        Some(run_id) => members
+            .iter()
+            .filter(|member| member.run_id.as_deref() == Some(run_id))
+            .cloned()
+            .collect(),
+        None => members.to_vec(),
+    }
+}
+
 fn format_members(ctx: &ToolContext, members: &[AgentInfo]) -> ToolOutput {
-    ToolOutput::new(format_comm_members(&ctx.session_id, members))
+    format_members_for_run(ctx, members, None)
+}
+
+fn format_members_for_run(
+    ctx: &ToolContext,
+    members: &[AgentInfo],
+    run_id: Option<&str>,
+) -> ToolOutput {
+    let scoped = run_scoped_members(members, run_id);
+    let mut output = String::new();
+    if let Some(run_id) = run_id {
+        if scoped.is_empty() {
+            return ToolOutput::new(format!(
+                "No agents found for run_id={run_id} (0/{} in current swarm).",
+                members.len()
+            ));
+        }
+        output.push_str(&format!(
+            "Run scope: run_id={run_id} (showing {}/{})
+
+",
+            scoped.len(),
+            members.len()
+        ));
+    }
+    output.push_str(&format_comm_members(&ctx.session_id, &scoped));
+    ToolOutput::new(output)
 }
 
 fn format_tool_summary(target: &str, calls: &[ToolCallSummary]) -> ToolOutput {
@@ -777,7 +814,7 @@ impl Tool for CommunicateTool {
                 },
                 "run_id": {
                     "type": "string",
-                    "description": "Optional run/generation id for spawned workers and await/cleanup scoping. run_plan and fill_slots generate one when omitted so workers from the same orchestration run can be diagnosed together."
+                    "description": "Optional run/generation id for spawned workers and list/await/cleanup scoping. run_plan and fill_slots generate one when omitted so workers from the same orchestration run can be diagnosed together."
                 },
                 "wake": {
                     "type": "boolean",
@@ -946,9 +983,10 @@ impl Tool for CommunicateTool {
                 };
 
                 match send_request(request).await {
-                    Ok(ServerEvent::CommMembers { members, .. }) => {
-                        Ok(format_members(&ctx, &members))
-                    }
+                    Ok(ServerEvent::CommMembers { members, .. }) => match params.run_id.as_deref() {
+                        Some(run_id) => Ok(format_members_for_run(&ctx, &members, Some(run_id))),
+                        None => Ok(format_members(&ctx, &members)),
+                    },
                     Ok(response) => {
                         ensure_success(&response)?;
                         Ok(ToolOutput::new("No agents found."))
