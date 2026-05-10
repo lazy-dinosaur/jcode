@@ -1042,9 +1042,36 @@ impl Agent {
                         }],
                         Some(tool_elapsed.as_millis() as u64),
                     );
-                    self.session.save()?;
 
                     self.background_tool_signal.reset();
+
+                    // M8: end the current turn after Alt+B detach. Without this
+                    // return, the parent agent kept driving the turn loop into
+                    // the next provider call, which left TUI `is_processing=true`
+                    // and blocked client-side queued messages from dispatching.
+                    // The detached tool keeps running in the background and its
+                    // result is delivered back via the bg/wait flow when the
+                    // user (or agent) chooses to collect it.
+                    //
+                    // Fill in skipped ToolResults for any remaining tool_calls
+                    // in this round so the persisted history stays valid for
+                    // the API invariant (every tool_use must have a matching
+                    // tool_result before the next assistant turn).
+                    for remaining_tc in &tool_calls[(tool_index + 1)..] {
+                        self.add_message(
+                            Role::User,
+                            vec![ContentBlock::ToolResult {
+                                tool_use_id: remaining_tc.id.clone(),
+                                content: format!(
+                                    "[Skipped: '{}' was moved to background; remaining tools in this round are deferred]",
+                                    tc.name
+                                ),
+                                is_error: Some(true),
+                            }],
+                        );
+                    }
+                    self.session.save()?;
+                    return Ok(());
                 }
 
                 // NOTE: We do NOT inject between tools (non-urgent) because that would

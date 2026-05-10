@@ -795,6 +795,89 @@ async fn turn_streaming_mpsc_altb_early_race_preserves_fire_after_tool_start() {
         .expect("turn should succeed");
 }
 
+/// Regression test for M8 (Alt+B leaves TUI processing-stuck because the
+/// parent agent kept driving the turn loop after detach).
+///
+/// Without the M8 fix, after the user presses Alt+B and the running tool is
+/// adopted into the background pool, the parent `run_turn_streaming_mpsc`
+/// would fall through to "Point D" + the next provider iteration. That kept
+/// `is_processing=true` on the TUI side and blocked client-side queued
+/// messages from dispatching, so users perceived Alt+B as "having no effect".
+///
+/// With the fix, the Alt+B branch returns immediately after recording the
+/// background ToolResult. We assert this by observing that the second
+/// provider iteration (which `GatedToolProvider` would happily answer with
+/// "done") never fires — `provider_calls` must stay at 1.
+#[tokio::test]
+async fn turn_streaming_mpsc_altb_ends_turn_immediately_after_detach() {
+    let _guard = crate::storage::lock_test_env();
+    let (provider, tool_started, release_tool_end) = GatedToolProvider::new();
+    let provider_calls = provider.calls.clone();
+    let provider: Arc<dyn Provider> = Arc::new(provider);
+    let registry = Registry::empty();
+    registry
+        .register("delay_test".to_string(), Arc::new(DelayTestTool))
+        .await;
+    let mut agent = Agent::new(provider, registry);
+    let background_signal = agent.background_tool_signal();
+    agent.add_message(
+        Role::User,
+        vec![ContentBlock::Text {
+            text: "run the delay tool".to_string(),
+            cache_control: None,
+        }],
+    );
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let task = tokio::spawn(async move { agent.run_turn_streaming_mpsc(tx).await });
+
+    // Wait until provider has actually emitted ToolUseStart.
+    tokio::time::timeout(Duration::from_millis(500), tool_started.notified())
+        .await
+        .expect("provider should emit ToolStart");
+    // User presses Alt+B while the tool is running.
+    background_signal.fire();
+    // Simulate the underlying tool task finishing later in the background.
+    release_tool_end.notify_waiters();
+
+    // With the M8 fix the run_turn task returns Ok(()) right after the
+    // detach branch records the synthetic ToolResult, instead of looping
+    // back into another provider call.
+    let task_result = tokio::time::timeout(Duration::from_secs(2), task)
+        .await
+        .expect("turn must complete promptly after Alt+B detach")
+        .expect("turn task must not panic");
+    task_result.expect("turn must succeed");
+
+    // Exactly one provider call (the original turn). Without the fix the
+    // parent would have started a second LLM call to react to the synthetic
+    // ToolResult — that's the behavior that left TUI stuck in
+    // is_processing=true.
+    assert_eq!(
+        provider_calls.load(Ordering::SeqCst),
+        1,
+        "Alt+B detach must end the current turn instead of starting another provider call"
+    );
+
+    // Sanity: the moved-to-background ToolDone must actually have been
+    // emitted, otherwise the test could pass for the wrong reason
+    // (e.g. provider failed before detach branch ran).
+    let mut events: Vec<ServerEvent> = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        events.push(event);
+    }
+    let saw_background_done = events.iter().any(|e| {
+        matches!(
+            e,
+            ServerEvent::ToolDone { output, .. } if output.contains("moved to background")
+        )
+    });
+    assert!(
+        saw_background_done,
+        "expected a ToolDone with 'moved to background' marker"
+    );
+}
+
 #[tokio::test]
 async fn turn_streaming_mpsc_clears_stale_background_signal_before_next_tool_start() {
     let _guard = crate::storage::lock_test_env();
