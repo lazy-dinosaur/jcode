@@ -164,6 +164,7 @@ async fn register_visible_spawned_member(
     working_dir: Option<&str>,
     has_startup_message: bool,
     report_back_to_session_id: Option<&str>,
+    run_id: Option<&str>,
     swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,
     swarms_by_id: &Arc<RwLock<HashMap<String, HashSet<String>>>>,
     event_history: &Arc<RwLock<std::collections::VecDeque<SwarmEvent>>>,
@@ -196,6 +197,7 @@ async fn register_visible_spawned_member(
                 detail,
                 friendly_name: Some(friendly_name),
                 report_back_to_session_id: report_back_to_session_id.map(str::to_string),
+                run_id: run_id.map(str::to_string),
                 latest_completion_report: None,
                 role: "agent".to_string(),
                 joined_at: now,
@@ -236,6 +238,7 @@ pub(super) async fn spawn_swarm_agent(
     swarm_id: &str,
     working_dir: Option<String>,
     initial_message: Option<String>,
+    run_id: Option<String>,
     sessions: &SessionAgents,
     global_session_id: &Arc<RwLock<String>>,
     provider_template: &Arc<dyn Provider>,
@@ -312,6 +315,7 @@ pub(super) async fn spawn_swarm_agent(
                 spawn_model.clone(),
                 Some(Arc::clone(mcp_pool)),
                 Some(req_session_id.to_string()),
+                run_id.clone(),
             )
             .await
             .and_then(|result_json| {
@@ -355,6 +359,7 @@ pub(super) async fn spawn_swarm_agent(
             resolved_working_dir.as_deref(),
             startup_message.is_some(),
             Some(req_session_id),
+            run_id.as_deref(),
             swarm_members,
             swarms_by_id,
             event_history,
@@ -461,6 +466,7 @@ pub(super) async fn handle_comm_spawn(
     working_dir: Option<String>,
     initial_message: Option<String>,
     request_nonce: Option<String>,
+    run_id: Option<String>,
     client_event_tx: &mpsc::UnboundedSender<ServerEvent>,
     sessions: &SessionAgents,
     global_session_id: &Arc<RwLock<String>>,
@@ -502,6 +508,7 @@ pub(super) async fn handle_comm_spawn(
             working_dir.clone().unwrap_or_default(),
             initial_message.clone().unwrap_or_default(),
             request_nonce.clone().unwrap_or_default(),
+            run_id.clone().unwrap_or_default(),
         ],
     );
     let Some(mutation_state) = begin_or_replay(
@@ -522,6 +529,7 @@ pub(super) async fn handle_comm_spawn(
         &swarm_id,
         working_dir,
         initial_message,
+        run_id,
         sessions,
         global_session_id,
         provider_template,
