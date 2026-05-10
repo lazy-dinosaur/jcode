@@ -1,7 +1,7 @@
 use super::{
     CommunicateInput, CommunicateTool, cleanup_candidate_session_ids,
     default_await_target_statuses, default_cleanup_target_statuses, format_awaited_members,
-    format_awaited_members_with_reports, format_members, format_plan_status,
+    format_awaited_members_with_reports, format_members, format_members_for_run, format_plan_status,
     latest_assistant_report, resolve_optional_target_session,
     send_spawn_request_with_coordinator_retry, spawn_requires_coordinator,
     spawn_self_promote_failure_message,
