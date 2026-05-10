@@ -454,8 +454,8 @@ pub struct AutoJudgeConfig {
 
 /// Command hook configuration.
 ///
-/// MVP hook support follows the tool lifecycle boundary:
-/// `tool.execute.before` (PreToolUse) and `tool.execute.after` (PostToolUse).
+/// Hook support covers tool and lifecycle boundaries:
+/// `tool.execute.before`, `tool.execute.after`, `session.stop`, and `response.completed`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HooksConfig {
@@ -478,13 +478,13 @@ impl Default for HooksConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HookCommandConfig {
-    /// Event name, e.g. `tool.execute.before` or `tool.execute.after`.
+    /// Event name, e.g. `tool.execute.before`, `tool.execute.after`, `session.stop`, or `response.completed`.
     pub event: String,
     /// Optional tool name matcher. Empty means all tools.
     pub tool: Option<String>,
     /// Shell command to execute. Receives JSON payload on stdin.
     pub command: String,
-    /// Whether jcode should wait for the hook and honor deny decisions.
+    /// Whether jcode should wait for the hook. Deny decisions are only honored by tool.execute.before.
     pub blocking: bool,
     /// Maximum runtime in milliseconds.
     pub timeout_ms: u64,

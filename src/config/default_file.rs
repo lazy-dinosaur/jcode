@@ -271,13 +271,14 @@ port = 7643
 bind_addr = "0.0.0.0"
 
 [hooks]
-# Command hooks for tool lifecycle events (default: disabled).
+# Command hooks for tool/session/response lifecycle events (default: disabled).
 # Global hooks live here. Project hooks may be added in:
 #   <project>/.jcode/config.toml
 #   <project>/.jcode/config.local.toml
 # Project/local hook commands are appended to global hook commands.
 # Hooks receive a JSON payload on stdin.
-# Blocking hooks may return {"action":"allow"} or {"action":"deny","reason":"..."}.
+# Blocking tool.execute.before hooks may return {"action":"allow"} or {"action":"deny","reason":"..."}.
+# Lifecycle hooks (session.stop, response.completed) ignore deny decisions and never block progress.
 enabled = false
 
 # Example: block or allow tool calls before execution.
@@ -292,6 +293,20 @@ enabled = false
 # [[hooks.commands]]
 # event = "tool.execute.after"
 # command = ".jcode/hooks/log-tool.sh"
+# blocking = false
+# timeout_ms = 3000
+
+# Example: notify when a session truly stops (not during reload detach).
+# [[hooks.commands]]
+# event = "session.stop"
+# command = ".jcode/hooks/session-stop.sh"
+# blocking = false
+# timeout_ms = 3000
+
+# Example: log final assistant response completion once per turn.
+# [[hooks.commands]]
+# event = "response.completed"
+# command = ".jcode/hooks/response-completed.sh"
 # blocking = false
 # timeout_ms = 3000
 

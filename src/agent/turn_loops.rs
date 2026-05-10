@@ -6,6 +6,30 @@ impl Agent {
     pub(super) const MAX_CONTEXT_LIMIT_RETRIES: u32 = 5;
     pub(super) const MAX_INCOMPLETE_CONTINUATION_ATTEMPTS: u32 = 3;
 
+    pub(super) async fn fire_response_completed_hook(
+        &self,
+        message_id: Option<&str>,
+        stop_reason: Option<&str>,
+        tool_calls_count: usize,
+        output_chars: usize,
+    ) {
+        let Some(message_id) = message_id else {
+            return;
+        };
+        let payload = crate::hooks::ResponseCompletedHookPayload {
+            event: crate::hooks::RESPONSE_COMPLETED,
+            session_id: &self.session.id,
+            message_id,
+            working_dir: self.session.working_dir.clone(),
+            stop_reason,
+            tool_calls_count,
+            output_chars,
+        };
+        if let Err(err) = crate::hooks::run_response_hooks(payload).await {
+            logging::warn(&format!("response.completed hook failed: {err:#}"));
+        }
+    }
+
     pub(super) async fn run_turn(&mut self, print_output: bool) -> Result<String> {
         self.set_log_context();
         let mut final_text = String::new();
@@ -591,6 +615,7 @@ impl Agent {
                 &mut tool_calls,
                 assistant_message_id.as_ref(),
             );
+            let assistant_tool_calls_count = tool_calls.len();
 
             if tool_calls.is_empty() && !generated_image_contexts.is_empty() {
                 for blocks in generated_image_contexts.drain(..) {
@@ -624,6 +649,13 @@ impl Agent {
                 if print_output {
                     println!();
                 }
+                self.fire_response_completed_hook(
+                    assistant_message_id.as_deref(),
+                    stop_reason.as_deref(),
+                    assistant_tool_calls_count,
+                    text_content.chars().count(),
+                )
+                .await;
                 final_text = text_content;
                 break;
             }
@@ -648,6 +680,13 @@ impl Agent {
                         continue;
                     }
                     logging::info("Provider handles tools internally - task complete");
+                    self.fire_response_completed_hook(
+                        assistant_message_id.as_deref(),
+                        stop_reason.as_deref(),
+                        assistant_tool_calls_count,
+                        text_content.chars().count(),
+                    )
+                    .await;
                     break;
                 }
                 logging::info("Provider handles tools internally - executing native tools locally");

@@ -10,6 +10,8 @@ use tokio::process::Command;
 
 pub const TOOL_EXECUTE_BEFORE: &str = "tool.execute.before";
 pub const TOOL_EXECUTE_AFTER: &str = "tool.execute.after";
+pub const SESSION_STOP: &str = "session.stop";
+pub const RESPONSE_COMPLETED: &str = "response.completed";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ToolHookPayload<'a> {
@@ -27,6 +29,26 @@ pub struct ToolHookTool<'a> {
     pub args: &'a Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionStopHookPayload<'a> {
+    pub event: &'a str,
+    pub session_id: &'a str,
+    pub working_dir: Option<String>,
+    pub reason: &'a str,
+    pub message_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ResponseCompletedHookPayload<'a> {
+    pub event: &'a str,
+    pub session_id: &'a str,
+    pub message_id: &'a str,
+    pub working_dir: Option<String>,
+    pub stop_reason: Option<&'a str>,
+    pub tool_calls_count: usize,
+    pub output_chars: usize,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -73,6 +95,14 @@ pub async fn post_tool_use(
     {
         crate::logging::warn(&format!("post tool hook failed for {tool_name}: {err:#}"));
     }
+}
+
+pub async fn run_session_hooks(payload: SessionStopHookPayload<'_>) -> Result<()> {
+    run_lifecycle_hooks(SESSION_STOP, payload.working_dir.as_deref(), &payload).await
+}
+
+pub async fn run_response_hooks(payload: ResponseCompletedHookPayload<'_>) -> Result<()> {
+    run_lifecycle_hooks(RESPONSE_COMPLETED, payload.working_dir.as_deref(), &payload).await
 }
 
 async fn run_tool_hooks(
@@ -149,6 +179,72 @@ async fn run_tool_hooks(
     Ok(())
 }
 
+async fn run_lifecycle_hooks<T>(event: &'static str, cwd: Option<&str>, payload: &T) -> Result<()>
+where
+    T: Serialize + ?Sized,
+{
+    let hooks = config().hooks_for_working_dir(cwd.map(std::path::Path::new));
+    if !hooks.enabled {
+        return Ok(());
+    }
+
+    let matching = matching_lifecycle_hooks(&hooks.commands, event);
+
+    run_lifecycle_hook_commands(matching, cwd, payload).await
+}
+
+fn matching_lifecycle_hooks(
+    commands: &[crate::config::HookCommandConfig],
+    event: &'static str,
+) -> Vec<crate::config::HookCommandConfig> {
+    commands
+        .iter()
+        .filter(|hook| hook.event == event)
+        .filter(|hook| !hook.command.trim().is_empty())
+        .cloned()
+        .collect()
+}
+
+async fn run_lifecycle_hook_commands<T>(
+    matching: Vec<crate::config::HookCommandConfig>,
+    cwd: Option<&str>,
+    payload: &T,
+) -> Result<()>
+where
+    T: Serialize + ?Sized,
+{
+    if matching.is_empty() {
+        return Ok(());
+    }
+
+    let payload_json = serde_json::to_vec(payload)?;
+
+    for hook in matching {
+        if hook.blocking {
+            if let Err(err) =
+                run_blocking_lifecycle_hook(&hook.command, hook.timeout_ms, cwd, &payload_json)
+                    .await
+            {
+                crate::logging::warn(&format!("blocking lifecycle hook failed: {err:#}"));
+            }
+        } else {
+            let command = hook.command.clone();
+            let timeout_ms = hook.timeout_ms;
+            let cwd = cwd.map(str::to_string);
+            let payload_json = payload_json.clone();
+            tokio::spawn(async move {
+                if let Err(err) =
+                    run_nonblocking_hook(&command, timeout_ms, cwd.as_deref(), &payload_json).await
+                {
+                    crate::logging::warn(&format!("non-blocking lifecycle hook failed: {err:#}"));
+                }
+            });
+        }
+    }
+
+    Ok(())
+}
+
 async fn run_blocking_hook(
     command: &str,
     timeout_ms: u64,
@@ -193,6 +289,26 @@ async fn run_nonblocking_hook(
     payload_json: &[u8],
 ) -> Result<()> {
     let output = run_hook_command(command, timeout_ms, cwd, payload_json).await?;
+    if !output.status.success() {
+        return Err(anyhow!(
+            "hook command exited with status {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
+async fn run_blocking_lifecycle_hook(
+    command: &str,
+    timeout_ms: u64,
+    cwd: Option<&str>,
+    payload_json: &[u8],
+) -> Result<()> {
+    let output = run_hook_command(command, timeout_ms, cwd, payload_json)
+        .await
+        .with_context(|| format!("lifecycle hook command failed: {command}"))?;
+
     if !output.status.success() {
         return Err(anyhow!(
             "hook command exited with status {}: {}",
@@ -267,6 +383,87 @@ mod tests {
         assert_eq!(decision.reason.as_deref(), Some("blocked"));
     }
 
+    #[test]
+    fn session_stop_payload_serializes_golden() {
+        let payload = SessionStopHookPayload {
+            event: SESSION_STOP,
+            session_id: "sess-1",
+            working_dir: Some("/tmp/work".to_string()),
+            reason: "disconnect",
+            message_count: 3,
+        };
+
+        let value = serde_json::to_value(payload).unwrap();
+        assert_eq!(
+            value,
+            json!({
+                "event": "session.stop",
+                "session_id": "sess-1",
+                "working_dir": "/tmp/work",
+                "reason": "disconnect",
+                "message_count": 3,
+            })
+        );
+    }
+
+    #[test]
+    fn response_completed_payload_serializes_golden() {
+        let payload = ResponseCompletedHookPayload {
+            event: RESPONSE_COMPLETED,
+            session_id: "sess-1",
+            message_id: "msg-1",
+            working_dir: None,
+            stop_reason: Some("end_turn"),
+            tool_calls_count: 0,
+            output_chars: 42,
+        };
+
+        let value = serde_json::to_value(payload).unwrap();
+        assert_eq!(
+            value,
+            json!({
+                "event": "response.completed",
+                "session_id": "sess-1",
+                "message_id": "msg-1",
+                "working_dir": null,
+                "stop_reason": "end_turn",
+                "tool_calls_count": 0,
+                "output_chars": 42,
+            })
+        );
+    }
+
+    #[test]
+    fn lifecycle_hook_matching_ignores_tool_filter() {
+        let commands = vec![
+            crate::config::HookCommandConfig {
+                event: RESPONSE_COMPLETED.to_string(),
+                tool: Some("bash".to_string()),
+                command: "true".to_string(),
+                blocking: true,
+                timeout_ms: 1000,
+            },
+            crate::config::HookCommandConfig {
+                event: TOOL_EXECUTE_BEFORE.to_string(),
+                tool: None,
+                command: "true".to_string(),
+                blocking: true,
+                timeout_ms: 1000,
+            },
+            crate::config::HookCommandConfig {
+                event: RESPONSE_COMPLETED.to_string(),
+                tool: None,
+                command: "   ".to_string(),
+                blocking: true,
+                timeout_ms: 1000,
+            },
+        ];
+
+        let matching = matching_lifecycle_hooks(&commands, RESPONSE_COMPLETED);
+        assert_eq!(matching.len(), 1);
+        assert_eq!(matching[0].tool.as_deref(), Some("bash"));
+    }
+
     #[tokio::test]
     async fn blocking_hook_allows_empty_stdout() {
         run_blocking_hook("cat >/dev/null", 1000, None, br#"{"ok":true}"#)
@@ -285,5 +482,49 @@ mod tests {
         .await
         .unwrap_err();
         assert!(err.to_string().contains("blocked"));
+    }
+
+    #[tokio::test]
+    async fn lifecycle_hook_fires_matching_command() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let out = temp.path().join("payload.json");
+        let command = format!("cat > {}", out.display());
+        let commands = vec![crate::config::HookCommandConfig {
+            event: RESPONSE_COMPLETED.to_string(),
+            tool: Some("ignored".to_string()),
+            command,
+            blocking: true,
+            timeout_ms: 1000,
+        }];
+        let payload = ResponseCompletedHookPayload {
+            event: RESPONSE_COMPLETED,
+            session_id: "sess-1",
+            message_id: "msg-1",
+            working_dir: None,
+            stop_reason: Some("end_turn"),
+            tool_calls_count: 0,
+            output_chars: 5,
+        };
+
+        run_lifecycle_hook_commands(commands, None, &payload)
+            .await
+            .unwrap();
+
+        let written = std::fs::read_to_string(out).unwrap();
+        let value: Value = serde_json::from_str(&written).unwrap();
+        assert_eq!(value["event"], RESPONSE_COMPLETED);
+        assert_eq!(value["message_id"], "msg-1");
+    }
+
+    #[tokio::test]
+    async fn lifecycle_blocking_hook_ignores_deny_decision() {
+        run_blocking_lifecycle_hook(
+            "cat >/dev/null; printf '%s' '{\"action\":\"deny\",\"reason\":\"ignored\"}'",
+            1000,
+            None,
+            br#"{"ok":true}"#,
+        )
+        .await
+        .unwrap();
     }
 }

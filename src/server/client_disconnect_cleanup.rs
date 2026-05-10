@@ -37,6 +37,32 @@ fn disconnect_disposition(disconnected_while_processing: bool) -> DisconnectDisp
     }
 }
 
+fn session_stop_hook_reason(disposition: DisconnectDisposition) -> Option<&'static str> {
+    match disposition {
+        DisconnectDisposition::Closed => Some("disconnect"),
+        DisconnectDisposition::Crashed => Some("disconnect"),
+        DisconnectDisposition::Reloading => None,
+    }
+}
+
+async fn fire_session_stop_hook(
+    session_id: &str,
+    working_dir: Option<String>,
+    reason: &'static str,
+    message_count: usize,
+) {
+    let payload = crate::hooks::SessionStopHookPayload {
+        event: crate::hooks::SESSION_STOP,
+        session_id,
+        working_dir,
+        reason,
+        message_count,
+    };
+    if let Err(err) = crate::hooks::run_session_hooks(payload).await {
+        crate::logging::warn(&format!("session.stop hook failed: {err:#}"));
+    }
+}
+
 async fn session_has_live_successor(
     client_connections: &Arc<RwLock<HashMap<String, ClientConnectionInfo>>>,
     session_id: &str,
@@ -117,6 +143,7 @@ pub(super) async fn cleanup_client_connection(
 
             match lock_result {
                 Ok(mut agent) => {
+                    let stop_hook_reason = session_stop_hook_reason(disposition);
                     match disposition {
                         DisconnectDisposition::Closed => {
                             agent.mark_closed();
@@ -141,7 +168,12 @@ pub(super) async fn cleanup_client_connection(
                     };
                     let sid = client_session_id.to_string();
                     let working_dir = agent.working_dir().map(|dir| dir.to_string());
+                    let message_count = agent.messages().len();
                     drop(agent);
+                    if let Some(reason) = stop_hook_reason {
+                        fire_session_stop_hook(&sid, working_dir.clone(), reason, message_count)
+                            .await;
+                    }
                     let event = match disposition {
                         DisconnectDisposition::Closed => {
                             crate::runtime_memory_log::RuntimeMemoryLogEvent::new(
@@ -263,11 +295,27 @@ pub(super) async fn cleanup_client_connection(
 
 #[cfg(test)]
 mod tests {
-    use super::{DisconnectDisposition, disconnect_disposition};
+    use super::{DisconnectDisposition, disconnect_disposition, session_stop_hook_reason};
 
     #[test]
     fn idle_disconnect_is_closed() {
         assert_eq!(disconnect_disposition(false), DisconnectDisposition::Closed);
+    }
+
+    #[test]
+    fn session_stop_hook_skips_reload_disposition() {
+        assert_eq!(
+            session_stop_hook_reason(DisconnectDisposition::Closed),
+            Some("disconnect")
+        );
+        assert_eq!(
+            session_stop_hook_reason(DisconnectDisposition::Crashed),
+            Some("disconnect")
+        );
+        assert_eq!(
+            session_stop_hook_reason(DisconnectDisposition::Reloading),
+            None
+        );
     }
 
     #[test]

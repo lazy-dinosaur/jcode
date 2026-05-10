@@ -630,6 +630,7 @@ impl Agent {
                 &mut tool_calls,
                 assistant_message_id.as_ref(),
             );
+            let assistant_tool_calls_count = tool_calls.len();
 
             if tool_calls.is_empty() && !generated_image_contexts.is_empty() {
                 for blocks in generated_image_contexts.drain(..) {
@@ -660,7 +661,16 @@ impl Agent {
                     stop_reason.as_deref(),
                     &mut incomplete_continuations,
                 )? {
-                    NoToolCallOutcome::Break => break,
+                    NoToolCallOutcome::Break => {
+                        self.fire_response_completed_hook(
+                            assistant_message_id.as_deref(),
+                            stop_reason.as_deref(),
+                            assistant_tool_calls_count,
+                            text_content.chars().count(),
+                        )
+                        .await;
+                        break;
+                    }
                     NoToolCallOutcome::ContinueWithoutEvent => continue,
                     NoToolCallOutcome::ContinueWithSoftInterrupt { injected, point } => {
                         for event in Self::build_soft_interrupt_events(injected, point, None) {
@@ -710,6 +720,13 @@ impl Agent {
                         // Don't break - continue loop to process injected message
                         continue;
                     }
+                    self.fire_response_completed_hook(
+                        assistant_message_id.as_deref(),
+                        stop_reason.as_deref(),
+                        assistant_tool_calls_count,
+                        text_content.chars().count(),
+                    )
+                    .await;
                     break;
                 }
             }
