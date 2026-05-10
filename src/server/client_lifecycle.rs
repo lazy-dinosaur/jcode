@@ -666,14 +666,17 @@ async fn handle_lightweight_control_request(
             session_id: req_session_id,
             target_status,
             session_ids: requested_ids,
+            owned_only,
             mode,
             timeout_secs,
         } => {
+            let owned_only = owned_only.unwrap_or(requested_ids.is_empty());
             handle_comm_await_members(
                 id,
                 req_session_id,
                 target_status,
                 requested_ids,
+                owned_only,
                 mode,
                 timeout_secs,
                 CommAwaitMembersContext {
@@ -2523,14 +2526,17 @@ pub(super) async fn handle_client(
                 session_id: req_session_id,
                 target_status,
                 session_ids: requested_ids,
+                owned_only,
                 mode,
                 timeout_secs,
             } => {
+                let owned_only = owned_only.unwrap_or(requested_ids.is_empty());
                 handle_comm_await_members(
                     id,
                     req_session_id,
                     target_status,
                     requested_ids,
+                    owned_only,
                     mode,
                     timeout_secs,
                     CommAwaitMembersContext {
