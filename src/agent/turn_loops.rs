@@ -12,6 +12,7 @@ impl Agent {
         let trace = trace_enabled();
         let mut context_limit_retries = 0u32;
         let mut incomplete_continuations = 0u32;
+        let mut empty_after_tool_continuations = 0u32;
 
         loop {
             let repaired = self.repair_missing_tool_outputs();
@@ -599,6 +600,15 @@ impl Agent {
                 logging::info(
                     "Continuing turn so model can inspect generated image visual context",
                 );
+                continue;
+            }
+
+            if tool_calls.is_empty()
+                && assistant_message_id.is_none()
+                && text_content.trim().is_empty()
+                && self
+                    .maybe_continue_empty_after_tool_result(&mut empty_after_tool_continuations)?
+            {
                 continue;
             }
 

@@ -166,6 +166,47 @@ impl Agent {
         Ok(true)
     }
 
+    pub(crate) fn maybe_continue_empty_after_tool_result(
+        &mut self,
+        attempts: &mut u32,
+    ) -> Result<bool> {
+        const MAX_EMPTY_AFTER_TOOL_CONTINUATIONS: u32 = 1;
+
+        let last_is_tool_result = self.session.messages.last().is_some_and(|message| {
+            message.role == Role::User
+                && message
+                    .content
+                    .iter()
+                    .any(|block| matches!(block, ContentBlock::ToolResult { .. }))
+        });
+
+        if !last_is_tool_result {
+            return Ok(false);
+        }
+
+        if *attempts >= MAX_EMPTY_AFTER_TOOL_CONTINUATIONS {
+            logging::warn(
+                "Provider returned an empty assistant response after a tool result; retry limit reached",
+            );
+            return Ok(false);
+        }
+
+        *attempts += 1;
+        logging::warn(
+            "Provider returned an empty assistant response after a tool result; requesting continuation",
+        );
+
+        self.add_message(
+            Role::User,
+            vec![ContentBlock::Text {
+                text: "[System reminder: your previous response after the tool result was empty. Read the tool result and continue with a concise useful response now.]".to_string(),
+                cache_control: None,
+            }],
+        );
+        self.session.save()?;
+        Ok(true)
+    }
+
     pub(super) fn filter_truncated_tool_calls(
         &mut self,
         stop_reason: Option<&str>,
