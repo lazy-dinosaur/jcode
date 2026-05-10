@@ -672,6 +672,7 @@ async fn handle_lightweight_control_request(
             session_ids: requested_ids,
             owned_only,
             mode,
+            run_id,
             timeout_secs,
         } => {
             let owned_only = owned_only.unwrap_or(requested_ids.is_empty());
@@ -681,6 +682,7 @@ async fn handle_lightweight_control_request(
                 target_status,
                 requested_ids,
                 owned_only,
+                run_id,
                 mode,
                 timeout_secs,
                 CommAwaitMembersContext {
@@ -2536,6 +2538,7 @@ pub(super) async fn handle_client(
                 session_ids: requested_ids,
                 owned_only,
                 mode,
+                run_id,
                 timeout_secs,
             } => {
                 let owned_only = owned_only.unwrap_or(requested_ids.is_empty());
@@ -2545,6 +2548,7 @@ pub(super) async fn handle_client(
                     target_status,
                     requested_ids,
                     owned_only,
+                    run_id,
                     mode,
                     timeout_secs,
                     CommAwaitMembersContext {
