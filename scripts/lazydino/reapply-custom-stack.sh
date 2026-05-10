@@ -70,6 +70,7 @@ PATCH_REFS=(
   patch/agent-profiles-md-files
   patch/project-slash-commands
   patch/global-jcode-md-resources
+  patch/jcode-doctor
 )
 
 while [[ $# -gt 0 ]]; do
