@@ -62,6 +62,7 @@ PATCH_REFS=(
   patch/pr151-slice-analysis
   patch/openai-usage-percent-normalization
   patch/journal-on-message
+  patch/safe-server-restart
 )
 
 while [[ $# -gt 0 ]]; do

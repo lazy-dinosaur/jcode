@@ -389,6 +389,28 @@ Track each custom patch as a small commit. Current known customizations:
    - Validation: `cargo check`, `cargo test session::tests::cases --lib`, `cargo test immediate_journal --lib`, and `cargo test --lib --no-run`.
    - Binary reinstall required: yes, because this changes session persistence runtime behavior.
 
+12. Safe server restart session drain
+   - Commit: `feat: drain and flush sessions on daemon shutdown`.
+   - Patch branch: `patch/safe-server-restart`.
+   - Purpose: make daemon shutdown preserve in-memory session state and avoid active-session ghosts when the shared server is restarted by SIGTERM or the custom install helper.
+   - Runtime behavior:
+     - SIGTERM/SIGINT now runs a bounded best-effort drain before unregistering the server and exiting.
+     - Each live agent saves its session and marks it `Closed`, or `Crashed` with `server shutdown drain` when the last visible conversation message is a pending user turn.
+     - The drain skips when a reload marker is already active so it does not conflict with `reload::graceful_shutdown_sessions`.
+     - Debug socket command `shutdown:drain` initiates the same clean drain/unregister/exit path and returns a JSON acknowledgement before exiting.
+     - `scripts/lazydino/install-custom-jcode.sh --restart-server` tries `jcode debug shutdown drain` before falling back to SIGTERM/SIGKILL.
+   - Touched paths:
+     - `src/agent.rs`
+     - `src/server.rs`
+     - `src/server/reload.rs`
+     - `src/server/debug.rs`
+     - `src/server/debug_command_exec.rs`
+     - `src/server/debug_help.rs`
+     - `src/server/drain_tests.rs`
+     - `scripts/lazydino/install-custom-jcode.sh`
+   - Validation: `cargo check`, `cargo test drain --lib --no-fail-fast`, `cargo test reload --lib --no-fail-fast`, `cargo test session --lib --no-fail-fast`, `bash -n scripts/lazydino/install-custom-jcode.sh`, and `scripts/lazydino/install-custom-jcode.sh --help`.
+   - Binary reinstall required: yes, because this changes daemon shutdown behavior.
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
