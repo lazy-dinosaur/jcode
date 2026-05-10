@@ -5,3 +5,8 @@ ios_simulator_screenshot.png
 /.wrangler/
 /tmp/
 /.jcode/generated-images/
+
+# Lazydino: local secrets (never commit). Loaded by scripts that need
+# GitHub PAT for fork push (M21 등).
+/.env
+/.env.local

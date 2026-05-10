@@ -1253,28 +1253,55 @@ origin https://github.com/1jehuang/jcode.git (fetch)
 origin https://github.com/1jehuang/jcode.git (push)
 ```
 
-## Upstream sync state (2026-05-11 update)
+## Upstream sync state (2026-05-11, after M21 DONE)
 
 - Correct remote mapping is **`origin=https://github.com/1jehuang/jcode.git`**
   and **`fork=https://github.com/lazy-dinosaur/jcode.git`**. Do **not** add/use
   `upstream=https://github.com/sst/jcode.git`; that remote is invalid for this
   repo and makes `git fetch --all` fail.
-- `fork/master` 가 `origin/master` 보다 **226 commit 뒤짐**
-  (`git rev-list --left-right --count fork/master...origin/master` → `0 226`).
-- `deploy/m9-m10` 와 일반 patch branch 들은 이미 `origin/master` 베이스
-  (`git rebase origin/master` dry-run on deploy → `HEAD가 최신 상태입니다.`).
-  즉 현재 M21 의 첫 blocker 는 rebase conflict 가 아니라 **fork/master FF push**.
-- 실제 시도 기록 (2026-05-11):
-  `git push fork origin/master:master` → `[remote rejected] ... workflow
-  .github/workflows/release.yml without workflow scope`. PAT `workflow` scope
-  갱신 전까지 M21 remote 단계는 blocked.
-- 자세한 절차는 **M21 (upstream rebase + dedupe)** 등록됨 —
-  `LAZYDINO_MILESTONES.md` 와
-  `docs/lazydino/sessions/2026-05-11-m19-m20-deployed.md` §9 참조.
-- 작업 시작 전 백업 tag 48개 생성됨:
-  `git tag -l 'backup/pre-upstream-rebase-20260511-0136/*'`.
-- M21 끝나기 전엔 fork 에 push 하지 말 것 (deploy/m9-m10 와 모든
-  patch 는 local only).
+- ✅ **`fork/master` 동기화 완료**: 2026-05-11 `git push fork origin/master:master`
+  로 226 commit fast-forward. 현재 `fork/master == origin/master`
+  (`git rev-list --count fork/master..origin/master` → `0`).
+- ✅ **deploy/m9-m10 + 48 patch branch 모두 fork 에 push 완료** (2026-05-11).
+  dedupe rebase 는 불필요했음 — 우리 patch 들이 이미 origin/master 기준
+  hash 로 깔끔히 얹혀있어서 path mismatch 충돌 없음.
+
+## `.env` file (local, gitignored)
+
+`/home/lazydino/dev/jcode/.env` 에 GitHub PAT 보관 (mode 0600,
+`.gitignore` 의 `/.env` 패턴으로 보호). 누락 시 `~/dev/medivance/.env.local`
+의 `GH_TOKEN` 에서 복사:
+
+```bash
+TOKEN=$(grep "^GH_TOKEN=" ~/dev/medivance/.env.local | head -1 | cut -d= -f2-)
+cat > .env <<EOF
+GH_TOKEN=$TOKEN
+GH_USERNAME=lazy-dinosaur
+EOF
+chmod 600 .env
+```
+
+스크립트 `scripts/fork-push.sh` 가 이걸 읽어서 `GIT_ASKPASS` 로 push 함.
+토큰 scope 검증:
+```bash
+curl -sI -H "Authorization: token $GH_TOKEN" https://api.github.com/user \
+  | grep -i "x-oauth-scopes"
+# 기대: repo, workflow
+```
+
+## fork push 절차 (일상)
+
+```bash
+# 코드 patch + deploy
+./scripts/fork-push.sh deploy/m9-m10 patch/<name>
+
+# fork/master 를 upstream 으로 동기화 (가끔)
+./scripts/fork-push.sh master
+
+# 모든 default ref (deploy + 3 main code patches: sdk-history-images,
+# config-hot-reload, bash-tool-timeout)
+./scripts/fork-push.sh
+```
 
 ## Backup tag convention
 
