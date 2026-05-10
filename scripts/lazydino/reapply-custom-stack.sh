@@ -73,6 +73,7 @@ PATCH_REFS=(
   patch/jcode-doctor
   patch/swarm-stability-core
   patch/swarm-run-id
+  patch/empty-response-retry
 )
 
 while [[ $# -gt 0 ]]; do

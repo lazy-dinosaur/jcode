@@ -603,6 +603,24 @@ Track each custom patch as a small commit. Current known customizations:
    - Validation: `cargo check`, `cargo test communicate --lib --no-fail-fast`, `cargo test comm_await --lib --no-fail-fast`, `cargo test comm_control --lib --no-fail-fast`, `cargo test swarm --lib --no-fail-fast`, `cargo test --lib --no-run`, and the 13-test known-failure smoke.
    - Binary reinstall required: yes, because this changes protocol and runtime swarm coordination behavior.
 
+23. Empty assistant response retry after tool result
+   - Commit: `fix: retry empty assistant response after tool result`.
+   - Patch branch: `patch/empty-response-retry`.
+   - Purpose: prevent sessions from appearing silently idle when a provider returns an empty assistant response with no text and no tool calls immediately after a `tool_result` message.
+   - Root cause: the turn loop persisted no assistant message when generated content blocks were empty, then treated the no-tool-call response as a successful turn end. This was observed with large/cold Claude prompts after `repair_missing_tool_outputs()` reset cache state and relocked a large tool list.
+   - Runtime behavior:
+     - If the latest stored message is a user `ToolResult` and the provider response has no text, no persisted assistant message, and no tool calls, the agent appends a brief system reminder asking the model to read the tool result and continue.
+     - The retry quota is per-turn and bounded to one continuation to avoid loops.
+     - Plain empty responses that do not follow a tool result keep the prior behavior and are not retried.
+   - Touched paths:
+     - `src/agent/response_recovery.rs`
+     - `src/agent/turn_streaming_mpsc.rs`
+     - `src/agent/turn_streaming_broadcast.rs`
+     - `src/agent/turn_loops.rs`
+     - `src/agent_tests.rs`
+   - Validation: `cargo check`, `cargo test response_recovery --lib --no-fail-fast`, `cargo test empty_response --lib --no-fail-fast`, `cargo test turn_streaming --lib --no-fail-fast`, `cargo test agent --lib --no-fail-fast`, `cargo test --lib --no-run`, and the 13-test known-failure smoke.
+   - Binary reinstall required: yes, because this changes agent turn-loop runtime behavior.
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
