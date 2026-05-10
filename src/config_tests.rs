@@ -2,7 +2,42 @@ use super::{
     AgentRouteConfig, AmbientConfig, Config, DiffDisplayMode, DisplayConfig, HookCommandConfig,
     ProviderConfig, SessionPickerResumeAction,
 };
+use std::ffi::{OsStr, OsString};
 use std::path::Path;
+
+struct EnvVarGuard {
+    key: &'static str,
+    prev: Option<OsString>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: impl AsRef<OsStr>) -> Self {
+        let prev = std::env::var_os(key);
+        crate::env::set_var(key, value.as_ref());
+        Self { key, prev }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        if let Some(prev) = self.prev.as_ref() {
+            crate::env::set_var(self.key, prev);
+        } else {
+            crate::env::remove_var(self.key);
+        }
+    }
+}
+
+fn isolated_jcode_home() -> (
+    std::sync::MutexGuard<'static, ()>,
+    EnvVarGuard,
+    tempfile::TempDir,
+) {
+    let lock = crate::storage::lock_test_env();
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let guard = EnvVarGuard::set("JCODE_HOME", dir.path());
+    (lock, guard, dir)
+}
 
 #[test]
 fn test_openai_reasoning_effort_defaults_to_low() {
@@ -284,6 +319,7 @@ fn agent_route(model: &str) -> AgentRouteConfig {
 
 #[test]
 fn test_agents_for_working_dir_uses_global_when_no_project_config() {
+    let _home = isolated_jcode_home();
     let mut cfg = Config::default();
     cfg.agents
         .profiles
@@ -297,6 +333,7 @@ fn test_agents_for_working_dir_uses_global_when_no_project_config() {
 
 #[test]
 fn test_agents_for_working_dir_merges_project_profiles() {
+    let _home = isolated_jcode_home();
     let dir = tempfile::TempDir::new().expect("tempdir");
     let project = dir.path().join("project");
     std::fs::create_dir_all(project.join(".jcode")).expect("create .jcode");
@@ -322,6 +359,7 @@ fn test_agents_for_working_dir_merges_project_profiles() {
 
 #[test]
 fn test_agents_for_working_dir_project_overrides_global_same_key() {
+    let _home = isolated_jcode_home();
     let dir = tempfile::TempDir::new().expect("tempdir");
     let project = dir.path().join("project");
     std::fs::create_dir_all(project.join(".jcode")).expect("create .jcode");
@@ -346,6 +384,7 @@ fn test_agents_for_working_dir_project_overrides_global_same_key() {
 
 #[test]
 fn test_agents_for_working_dir_local_overrides_project_overrides_global() {
+    let _home = isolated_jcode_home();
     let dir = tempfile::TempDir::new().expect("tempdir");
     let project = dir.path().join("project");
     std::fs::create_dir_all(project.join(".jcode")).expect("create .jcode");
@@ -378,6 +417,7 @@ fn test_agents_for_working_dir_local_overrides_project_overrides_global() {
 
 #[test]
 fn test_agents_for_working_dir_swarm_model_project_override() {
+    let _home = isolated_jcode_home();
     let dir = tempfile::TempDir::new().expect("tempdir");
     let project = dir.path().join("project");
     std::fs::create_dir_all(project.join(".jcode")).expect("create .jcode");
@@ -400,6 +440,7 @@ fn test_agents_for_working_dir_swarm_model_project_override() {
 
 #[test]
 fn test_agents_for_working_dir_routes_and_routing_also_merge() {
+    let _home = isolated_jcode_home();
     let dir = tempfile::TempDir::new().expect("tempdir");
     let project = dir.path().join("project");
     std::fs::create_dir_all(project.join(".jcode")).expect("create .jcode");
@@ -439,6 +480,7 @@ fn test_agents_for_working_dir_routes_and_routing_also_merge() {
 
 #[test]
 fn test_agents_for_working_dir_missing_project_files_fallback_to_global() {
+    let _home = isolated_jcode_home();
     let dir = tempfile::TempDir::new().expect("tempdir");
     let project = dir.path().join("project");
     std::fs::create_dir_all(&project).expect("create project");
@@ -457,6 +499,7 @@ fn test_agents_for_working_dir_missing_project_files_fallback_to_global() {
 
 #[test]
 fn test_agents_for_working_dir_invalid_project_toml_logs_and_falls_back() {
+    let _home = isolated_jcode_home();
     let dir = tempfile::TempDir::new().expect("tempdir");
     let project = dir.path().join("project");
     std::fs::create_dir_all(project.join(".jcode")).expect("create .jcode");
@@ -484,6 +527,7 @@ fn write_agent_md(project: &std::path::Path, relative_dir: &str, file: &str, con
 
 #[test]
 fn test_agents_for_working_dir_loads_jcode_md_agents() {
+    let _home = isolated_jcode_home();
     let dir = tempfile::TempDir::new().expect("tempdir");
     let project = dir.path().join("project");
     write_agent_md(
@@ -501,6 +545,7 @@ fn test_agents_for_working_dir_loads_jcode_md_agents() {
 
 #[test]
 fn test_agents_for_working_dir_loads_md_agents_from_all_four_ecosystems() {
+    let _home = isolated_jcode_home();
     let dir = tempfile::TempDir::new().expect("tempdir");
     let project = dir.path().join("project");
     write_agent_md(
@@ -539,6 +584,7 @@ fn test_agents_for_working_dir_loads_md_agents_from_all_four_ecosystems() {
 
 #[test]
 fn test_agents_for_working_dir_md_overridden_by_project_toml() {
+    let _home = isolated_jcode_home();
     let dir = tempfile::TempDir::new().expect("tempdir");
     let project = dir.path().join("project");
     write_agent_md(
@@ -564,6 +610,7 @@ fn test_agents_for_working_dir_md_overridden_by_project_toml() {
 
 #[test]
 fn test_agents_for_working_dir_md_filename_stem_becomes_name_when_no_frontmatter_name() {
+    let _home = isolated_jcode_home();
     let dir = tempfile::TempDir::new().expect("tempdir");
     let project = dir.path().join("project");
     write_agent_md(
@@ -585,6 +632,7 @@ fn test_agents_for_working_dir_md_filename_stem_becomes_name_when_no_frontmatter
 
 #[test]
 fn test_agents_for_working_dir_md_no_frontmatter_uses_body_as_prompt() {
+    let _home = isolated_jcode_home();
     let dir = tempfile::TempDir::new().expect("tempdir");
     let project = dir.path().join("project");
     write_agent_md(&project, ".jcode/agents", "bare.md", "You are a bare agent");
@@ -600,6 +648,7 @@ fn test_agents_for_working_dir_md_no_frontmatter_uses_body_as_prompt() {
 
 #[test]
 fn test_agents_for_working_dir_md_aliases_resolve() {
+    let _home = isolated_jcode_home();
     let dir = tempfile::TempDir::new().expect("tempdir");
     let project = dir.path().join("project");
     write_agent_md(
@@ -622,6 +671,7 @@ fn test_agents_for_working_dir_md_aliases_resolve() {
 
 #[test]
 fn test_agents_for_working_dir_md_unknown_fields_ignored() {
+    let _home = isolated_jcode_home();
     let dir = tempfile::TempDir::new().expect("tempdir");
     let project = dir.path().join("project");
     write_agent_md(
@@ -639,6 +689,7 @@ fn test_agents_for_working_dir_md_unknown_fields_ignored() {
 
 #[test]
 fn test_agents_for_working_dir_md_invalid_file_skipped_other_files_loaded() {
+    let _home = isolated_jcode_home();
     let dir = tempfile::TempDir::new().expect("tempdir");
     let project = dir.path().join("project");
     write_agent_md(
@@ -663,6 +714,7 @@ fn test_agents_for_working_dir_md_invalid_file_skipped_other_files_loaded() {
 
 #[test]
 fn test_agents_for_working_dir_md_within_ecosystem_priority() {
+    let _home = isolated_jcode_home();
     let dir = tempfile::TempDir::new().expect("tempdir");
     let project = dir.path().join("project");
     write_agent_md(

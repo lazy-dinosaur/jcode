@@ -146,6 +146,10 @@ impl Config {
     pub fn agents_for_working_dir(&self, working_dir: Option<&Path>) -> AgentsConfig {
         let mut agents = self.agents.clone();
 
+        for (name, profile) in crate::agent_profiles_md::load_global_jcode_agent_md() {
+            agents.profiles.insert(name, profile);
+        }
+
         for (name, profile) in crate::agent_profiles_md::load_project_local_agent_md(working_dir) {
             agents.profiles.insert(name, profile);
         }
