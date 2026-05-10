@@ -114,6 +114,64 @@ Because rebasing rewrites commit history, use `--force-with-lease`:
 git push fork custom/lazydino-harness --force-with-lease
 ```
 
+
+## Safe custom patch replay script
+
+A conservative replay helper exists for upstream updates:
+
+```text
+/home/lazydino/dev/jcode/scripts/lazydino/reapply-custom-stack.sh
+```
+
+Purpose:
+
+- Replay Lazydino's documented `patch/*` stack onto a fresh upstream base.
+- Stop safely on dirty working trees, missing patch refs, cherry-pick conflicts, or validation failures.
+- Never force-push automatically.
+- Never update `custom/lazydino-harness` unless `--update-target` is explicitly passed.
+
+Default dry-run:
+
+```bash
+cd /home/lazydino/dev/jcode
+scripts/lazydino/reapply-custom-stack.sh
+```
+
+Actual replay onto latest upstream:
+
+```bash
+cd /home/lazydino/dev/jcode
+scripts/lazydino/reapply-custom-stack.sh --apply --validate
+```
+
+Replay onto a specific base:
+
+```bash
+scripts/lazydino/reapply-custom-stack.sh --apply --base origin/master --validate
+```
+
+If and only if the resulting work branch is correct, update the local custom branch:
+
+```bash
+scripts/lazydino/reapply-custom-stack.sh --apply --validate --update-target
+```
+
+Push remains manual:
+
+```bash
+git push fork custom/lazydino-harness --force-with-lease
+```
+
+Design principle:
+
+```text
+small upstream drift  -> script can cherry-pick the stack
+large upstream drift  -> script stops at first conflict
+conflict/test failure -> use LAZYDINO_MAINTENANCE.md + patch/* branch as source of truth and ask an AI agent to re-implement against the new code structure
+```
+
+Ordered patch refs are embedded in the script. When a new custom patch is added, also add its `patch/<name>` ref to the script's `PATCH_REFS` list and update this document.
+
 ## AI agent maintenance prompt
 
 Use this prompt when asking an AI agent to maintain the branch:
