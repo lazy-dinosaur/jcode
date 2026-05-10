@@ -965,6 +965,7 @@ fn seed_transient_session_state(agent: &mut Agent) {
     agent.last_upstream_provider = Some("upstream_old".to_string());
     agent.last_connection_type = Some("websocket".to_string());
     agent.current_turn_system_reminder = Some("reminder".to_string());
+    agent.pending_lifecycle_system_reminder = Some("pending lifecycle".to_string());
     agent.last_usage = TokenUsage {
         input_tokens: 11,
         output_tokens: 17,
@@ -1002,6 +1003,7 @@ async fn clear_resets_runtime_interrupt_and_queue_state() {
     assert!(agent.last_upstream_provider.is_none());
     assert!(agent.last_connection_type.is_none());
     assert!(agent.current_turn_system_reminder.is_none());
+    assert!(agent.pending_lifecycle_system_reminder.is_none());
     assert_eq!(agent.last_usage.input_tokens, 0);
     assert_eq!(agent.last_usage.output_tokens, 0);
     assert!(agent.locked_tools.is_none());
@@ -1042,9 +1044,36 @@ async fn restore_session_resets_runtime_interrupt_and_queue_state() {
     assert!(agent.last_upstream_provider.is_none());
     assert!(agent.last_connection_type.is_none());
     assert!(agent.current_turn_system_reminder.is_none());
+    assert!(agent.pending_lifecycle_system_reminder.is_none());
     assert_eq!(agent.last_usage.input_tokens, 0);
     assert_eq!(agent.last_usage.output_tokens, 0);
     assert!(agent.locked_tools.is_none());
+}
+
+#[tokio::test]
+async fn lifecycle_hook_reason_becomes_next_turn_system_reminder() {
+    let _guard = crate::storage::lock_test_env();
+    let provider: Arc<dyn Provider> = Arc::new(NativeAutoCompactionProvider);
+    let registry = Registry::new(provider.clone()).await;
+    let mut agent = Agent::new(provider, registry);
+
+    agent.set_pending_lifecycle_system_reminder("finish the checklist".to_string());
+    let reminder = agent.take_pending_lifecycle_system_reminder().unwrap();
+
+    assert!(reminder.contains("lifecycle hook denied completion"));
+    assert!(reminder.contains("finish the checklist"));
+    assert!(agent.pending_lifecycle_system_reminder.is_none());
+}
+
+#[test]
+fn lifecycle_hook_reminder_merges_with_existing_turn_reminder() {
+    let merged = Agent::merge_current_and_pending_system_reminders(
+        Some("existing reminder".to_string()),
+        Some("lifecycle reminder".to_string()),
+    )
+    .unwrap();
+
+    assert_eq!(merged, "existing reminder\n\nlifecycle reminder");
 }
 
 #[tokio::test]
