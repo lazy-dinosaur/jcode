@@ -63,6 +63,7 @@ PATCH_REFS=(
   patch/openai-usage-percent-normalization
   patch/journal-on-message
   patch/safe-server-restart
+  patch/reload-handoff-hard-timeout
 )
 
 while [[ $# -gt 0 ]]; do

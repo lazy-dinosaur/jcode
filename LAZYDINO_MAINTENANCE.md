@@ -411,6 +411,31 @@ Track each custom patch as a small commit. Current known customizations:
    - Validation: `cargo check`, `cargo test drain --lib --no-fail-fast`, `cargo test reload --lib --no-fail-fast`, `cargo test session --lib --no-fail-fast`, `bash -n scripts/lazydino/install-custom-jcode.sh`, and `scripts/lazydino/install-custom-jcode.sh --help`.
    - Binary reinstall required: yes, because this changes daemon shutdown behavior.
 
+13. Reload handoff hard timeout
+   - Commit: `feat: cap AwaitingHistory wait with hard timeout`.
+   - Patch branch: `patch/reload-handoff-hard-timeout`.
+   - Upstream inspiration: PR `#151` slice `097 Add hard timeout for reload handoff`, reimplemented for this stack.
+   - Purpose: prevent the TUI from staying forever in reload recovery / `AwaitingHistory` after a daemon restart when the new server never sends the expected `History` event.
+   - Runtime behavior:
+     - `AwaitingHistory` now records a start time, deadline, and configured timeout.
+     - Default timeout is 10 seconds, configurable through `[reload].awaiting_history_timeout_secs`.
+     - On timeout, the client preserves local display messages, marks history as usable, clears the loading-session startup phase, shows a terse warning, and resumes normal input/queued follow-up dispatch.
+     - `Esc` or `Ctrl+C`/`Ctrl+D` while waiting aborts the history check early and falls back to the same locally cached messages instead of quitting or freezing.
+     - If the server `History` event arrives first, the normal history handler still wins and clears the pending reload status.
+   - Touched paths:
+     - `crates/jcode-config-types/src/lib.rs`
+     - `src/config.rs`
+     - `src/config/default_file.rs`
+     - `src/tui/app.rs`
+     - `src/tui/app/remote.rs`
+     - `src/tui/app/remote/key_handling.rs`
+     - `src/tui/app/remote/reconnect.rs`
+     - `src/tui/app/remote/server_events.rs`
+     - `src/tui/app/tests/remote_events_reload_03/part_01.rs`
+     - `src/tui/app/tui_lifecycle.rs`
+   - Validation: `cargo fmt --check`, `cargo check`, `cargo test awaiting_history --lib --no-fail-fast`, `cargo test reload --lib --no-fail-fast -- --test-threads=1`, and `cargo test remote --lib --no-fail-fast` (known unrelated remote-filter failures remain).
+   - Binary reinstall required: yes, because this changes TUI reload recovery behavior and config surface.
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
@@ -549,7 +574,8 @@ Decision policy:
       - `014 Add CLI quality preflight gate`, `027 Add release gates and clean-code fixtures`, `060 Add opt-in live provider smoke`, and `061 Add CI-friendly harness smoke e2e` -> good direction for a local `jcode doctor --release` validation bundle.
       - `025 Add JSON output for skills commands`, `072-077 offline session JSON/NDJSON envelopes` -> useful if we need stable automation contracts for external harness tooling.
       - `089-095 swarm await/scope/health/run-id/cleanup/retry` -> potentially valuable for reliable multi-agent orchestration; inspect separately before changing current swarm behavior.
-      - `097 Add hard timeout for reload handoff` and `059 Fix selfdev reload repo discovery` -> relevant to our install/reload workflow; inspect before implementing if reload hangs again.
+      - `097 Add hard timeout for reload handoff` -> adapted locally as `patch/reload-handoff-hard-timeout`.
+      - `059 Fix selfdev reload repo discovery` -> relevant to our install/reload workflow; inspect before implementing if reload discovery misbehaves.
       - `082/085 user attention bell/background completion alerts` -> useful UX for long background builds/tests.
     - Medium-value or conditional slices:
       - `032 Add llmwiki memory skill`, `041 Add LLM wiki bridge preview`, `058 Document llmwiki bridge schema commands` -> adopt only as opt-in local memory/provenance skill. Do not make wiki memory a source-of-truth or sync secrets.
