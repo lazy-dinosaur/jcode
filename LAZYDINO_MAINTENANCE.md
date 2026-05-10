@@ -553,6 +553,26 @@ Track each custom patch as a small commit. Current known customizations:
    - Validation: `cargo check`, `cargo test agents_for_working_dir --lib --no-fail-fast`, `cargo test load_global_jcode --lib --no-fail-fast`, `cargo test project_commands --lib --no-fail-fast`, `cargo test agent_profiles_md --lib --no-fail-fast`, `cargo test --lib --no-run`, and the 13-test known-failure smoke.
    - Binary reinstall required: yes, because this changes runtime subagent profile and TUI slash command discovery behavior.
 
+20. Full harness doctor CLI
+   - Commit: `feat: add jcode doctor command for full harness diagnosis`.
+   - Patch branch: `patch/jcode-doctor`.
+   - Purpose: add a top-level `jcode doctor` command, distinct from `jcode auth doctor`, so users can verify a project harness install in one pass.
+   - Coverage:
+     - global, project, and local `.jcode` TOML configuration parse status
+     - configured lifecycle hooks and executable-path linting
+     - loaded skills from global/project ecosystem directories
+     - merged agent profiles with source attribution and collision warnings
+     - loaded slash commands with built-in/skill collision warnings
+     - declared MCP servers with config-only command linting, never starting servers
+     - auth handoff note pointing to `jcode auth doctor`
+   - CLI surface:
+     - `jcode doctor` for human output
+     - `jcode doctor --json` for pretty serde JSON
+     - `jcode doctor --quiet` to hide healthy/info items in human output
+   - Exit codes: `0` healthy, `1` warnings, `2` errors.
+   - Validation: `cargo check`, `cargo test doctor --lib --no-fail-fast`, `cargo test --lib --no-run`, direct CLI smoke for human/json/quiet output, and the 13-test known-failure smoke.
+   - Binary reinstall required: yes, because this adds a new top-level CLI command.
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
