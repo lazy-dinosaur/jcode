@@ -2,6 +2,7 @@ use super::{connect_socket, debug_socket_path, socket_path};
 use crate::protocol::{HistoryMessage, Request, ServerEvent, TranscriptMode};
 use crate::transport::{ReadHalf, WriteHalf};
 use anyhow::Result;
+use jcode_session_types::RenderedImage;
 use std::path::PathBuf;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -153,10 +154,21 @@ impl Client {
 
     pub async fn get_history(&mut self) -> Result<Vec<HistoryMessage>> {
         let event = self.get_history_event().await?;
-        match event {
-            ServerEvent::History { messages, .. } => Ok(messages),
-            _ => Ok(Vec::new()),
-        }
+        let (messages, _) = split_history_event(event).unwrap_or_default();
+        Ok(messages)
+    }
+
+    /// Fetch full conversation history plus rendered images.
+    ///
+    /// `get_history()` is kept for backwards compatibility with existing SDK
+    /// callers that only consume text/tool history. New clients that need image
+    /// bytes should use this method so the `images` field from the history event
+    /// is preserved instead of being discarded.
+    pub async fn get_history_with_images(
+        &mut self,
+    ) -> Result<(Vec<HistoryMessage>, Vec<RenderedImage>)> {
+        let event = self.get_history_event().await?;
+        Ok(split_history_event(event).unwrap_or_default())
     }
 
     pub async fn get_history_event(&mut self) -> Result<ServerEvent> {
@@ -298,5 +310,14 @@ impl Client {
         let json = serde_json::to_string(&request)? + "\n";
         self.writer.write_all(json.as_bytes()).await?;
         Ok(id)
+    }
+}
+
+fn split_history_event(event: ServerEvent) -> Option<(Vec<HistoryMessage>, Vec<RenderedImage>)> {
+    match event {
+        ServerEvent::History {
+            messages, images, ..
+        } => Some((messages, images)),
+        _ => None,
     }
 }
