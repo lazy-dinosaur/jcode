@@ -20,12 +20,12 @@
 | M2  | Swarm 버그 (phase C diagnostics + upstream #76)    | 🔴 OPEN — 증상 미확정             | Medium-High |
 | M3  | Hook 시스템 확장 (`session.stop`, `response.completed`) | 🟡 PARTIAL — 명세만 존재          | Medium      |
 | M4  | TUI interleave 가 tool 완료 후에야 흡수됨 (jcode 원설계) | 🟡 BY-DESIGN with caveats — UX 개선 가치 | Medium |
-| M5  | Alt+B early race — `background_tool_signal.reset()` 이 너무 늦음 | 🔴 OPEN — root cause 확정 | **Highest** (가장 단순, 효과 큼) |
+| M5  | Alt+B early race — `background_tool_signal.reset()` 이 너무 늦음 | ✅ **DONE** (commit `52375aac` + `f76dfdda`, binary `f76dfdda`) | — |
 
 핵심 인과 관계:
-- M5 는 Alt+B 자체가 종종 무시되는 별도 race. 가장 먼저 고침.
-- M1 은 Alt+B 가 성공한 뒤 parent 로 알림/회수가 안 가는 라우팅 버그. M5 와 별개.
-- M4 는 jcode 원설계지만 M5/M1 이 깨져 있어서 사용자 입장에선 "전부 막힘" 으로 보임. M5+M1 고치면 자연 완화됨. UX 문구/옵션은 별도 작은 patch 로.
+- ✅ M5 (완료): Alt+B race fix. reset 위치 이동 + ack 분리 + 8 개 신규 테스트 모두 PASS, 새 회귀 0.
+- M1 은 Alt+B 가 성공한 뒤 parent 로 알림/회수가 안 가는 라우팅 버그. M5 와 별개. 다음 작업.
+- M4 는 jcode 원설계지만 M5/M1 이 깨져 있어서 사용자 입장에선 "전부 막힘" 으로 보임. M5 는 끝났으니 M1 만 끝내면 자연 완화. UX 문구/옵션은 별도 작은 patch 로.
 
 ---
 
@@ -299,91 +299,71 @@ pub const TOOL_EXECUTE_AFTER:  &str = "tool.execute.after";
 
 ---
 
-## 📍 Milestone M5 — Alt+B early race: `background_tool_signal.reset()` 이 너무 늦음
+## 📍 Milestone M5 — Alt+B early race: `background_tool_signal.reset()` 이 너무 늦음 ✅ DONE
 
-상태: **🔴 OPEN — root cause 확정 (oracle, 2026-05-10)**
-우선순위: **Highest** (가장 단순한 수정, 가장 큰 즉각적 UX 개선)
+상태: **✅ DONE (2026-05-10)** — commit `52375aac` + `f76dfdda`, binary `v0.12.97-dev (f76dfdda)` 설치 완료
+원본 우선순위: Highest
 
-### 증상 (사용자 보고, 2026-05-10)
-- 첫 subagent → Alt+B → bg 진입 성공 (`Tool 'subagent' was moved to background by the user`).
-- 같은 부모 세션에서 두 번째 subagent (또는 빠른 연속 Alt+B) 시 **bg 진입 자체가 무시됨**.
-- TUI 는 "Moving tool to background..." 만 표시하고 풀리지 않음.
+### 결과 요약
+- **Fix commit**: `52375aac` — `fix: preserve early Alt+B fire by moving background signal reset before ToolStart`
+- **Docs commit**: `f76dfdda` — `docs: record alt+b early race patch`
+- **변경 파일**:
+  - `src/agent/turn_streaming_mpsc.rs` — `background_tool_signal.reset()` 호출을 turn loop iteration 시작점 (ToolStart emit 보다 앞) 으로 이동, 기존 line 831 (tool spawn 직후) reset 제거.
+  - `src/server/client_lifecycle.rs::move_tool_to_background` — `request_background_current_tool()` 반환값이 `false` 면 `ServerEvent::Error` 로 응답 (사용자가 race 실패를 인지할 수 있게).
+  - `crates/jcode-agent-runtime/src/lib.rs` — InterruptSignal 의 fire-before-notified 보존성 단위 테스트 1 개 추가.
+  - `src/agent_tests.rs` — 통합 테스트 7 개 추가.
+  - `LAZYDINO_MAINTENANCE.md`, `scripts/lazydino/reapply-custom-stack.sh` — 패치 등록.
+- **새 단위 테스트 (8 개, 모두 PASS)**:
+  - `interrupt_signal_is_set_false_initially`
+  - `interrupt_signal_is_set_true_after_fire`
+  - `interrupt_signal_reset_clears_flag`
+  - `interrupt_signal_fire_before_notified_does_not_hang`
+  - `interrupt_signal_fire_concurrent_with_notified`
+  - `interrupt_signal_notified_completes_after_fire`
+  - `interrupt_signal_altb_early_race_fire_survives_until_reset` ← 핵심 race 검증
+  - `turn_streaming_mpsc_altb_early_race_preserves_fire_after_tool_start` ← turn-loop 시나리오 검증
+  - `turn_streaming_mpsc_clears_stale_background_signal_before_next_tool_start` ← stale signal 회귀 방지
+- **회귀 테스트**: `cargo test --lib agent::tests` → **24 passed, 1 failed** (1 failed 는 `env_snapshot_detail_is_minimal_for_empty_sessions_and_full_after_history` — `LAZYDINO_MAINTENANCE.md` 의 알려진 upstream known-failure list 에 이미 등록된 항목, 새 회귀 아님).
 
-### Root cause (oracle 검증, 2026-05-10) — **확정**
+### Root cause (확정)
+`BackgroundToolSignal` (= `InterruptSignal` = AtomicBool + tokio::Notify latch) 의 reset 타이밍이 `ToolStart` 이벤트 노출보다 너무 늦었음:
+1. agent 가 tool spawn → ToolStart emit → TUI 가 RunningTool 표시.
+2. 사용자가 즉시 Alt+B → server 가 `signal.fire()` 로 SET.
+3. 그 직후 agent 코드가 `self.background_tool_signal.reset()` → AtomicBool=false 로 wipe.
+4. 이후 `bg_signal.notified().await` 는 새 fire 가 와야 깨어남 → tool 끝까지 그대로 진행.
 
-`BackgroundToolSignal` 의 reset 타이밍이 ToolStart 노출보다 너무 늦어서 사용자가 빨리 누른 Alt+B 가 reset 으로 지워지는 race.
+### Fix
+`src/agent/turn_streaming_mpsc.rs:12~17`:
+```rust
+loop {
+    // Clear any stale background-tool request before the provider can emit
+    // ToolStart for this turn. Once ToolStart is visible to the UI, an
+    // Alt+B fire must be preserved until the tool execution select observes it.
+    self.background_tool_signal.reset();
 
-순서:
-1. 모델 stream 처리: `turn_streaming_mpsc.rs:280~312` 에서 `ServerEvent::ToolStart { id, name }` 을 TUI 로 전송.
-2. TUI: `src/tui/app/remote/server_events.rs:76~85` 에서 `app.status = ProcessingStatus::RunningTool(name)` 으로 전환.
-3. 사용자가 즉시 Alt+B → `src/tui/app/remote/key_handling.rs:333~339` 의 가드 통과 → `remote.background_tool()`.
-4. server: `src/server/client_lifecycle.rs:2789~2796` `move_tool_to_background` → `session_control.request_background_current_tool()` → `signal.fire()` 로 SET.
-5. 그제서야 agent 코드가 tool spawn 후:
-   ```rust
-   // src/agent/turn_streaming_mpsc.rs:820~831
-   let tool_handle = tokio::spawn(async move { /* tool 실행 */ });
-   self.background_tool_signal.reset();   // ← 방금 fire 된 signal 을 지움
-   ```
-6. 이후 `tokio::select!` 에서 `bg_signal.notified()` 를 기다리지만 signal 은 이미 reset 됨 → tool 끝까지 그대로 진행.
+    let repaired = self.repair_missing_tool_outputs();
+    ...
+}
+```
+ToolStart 노출 이전에 reset 을 옮기고, 기존 spawn 직후의 reset 은 제거. select 까지의 race window 가 사라짐.
 
-이 race 는 첫 tool 이든 두 번째 tool 이든 발생 가능. 사용자가 "두 번째에서 더 잘 일어남" 으로 느낀 이유는 첫 번째 시도 후 M1 영향으로 부모 turn 이 idle 안 된 상태에서 다음 tool 이 시작될 때 Alt+B 를 더 빨리 누르게 되기 때문일 가능성.
+추가로 `move_tool_to_background` 가 무조건 `Ack` 만 보내던 것을 `request_background_current_tool()` 반환값으로 분기하여 실패 시 `ServerEvent::Error` 발행.
 
-### 정정 사항 (이전 가설 반박)
-- "BackgroundToolSignal reset 누락" — **반박**, 두 reset 호출 모두 존재 (line 831 spawn 직후, line 1017 finally).
-- "BackgroundTaskManager.adopt 의 동시 task 제한" — **반박**, unique task id 로 insert 만 하며 제한 없음.
-- "Alt+B 키 가드가 두 번째 시점에 false" — 가능성 있으나 주된 원인은 아님. tool 사이/streaming 중 `RunningTool` 이 아닐 때 Alt+B 가 word-backward 로 처리되는 부수 케이스는 있음.
+### 검증 시나리오 (수동, 사용자가 직접 확인 가능)
+1. `~/.local/bin/jcode --version` → `v0.12.97-dev (f76dfdda)` 가 보여야 함. ✅
+2. 새 jcode 세션에서 subagent 또는 긴 bash tool 호출.
+3. ToolStart 카드가 나타나는 즉시 Alt+B → "Moving tool to background..." status notice 가 뜨고 곧이어 background task 카드로 전환되어야 함.
+4. 두 번째 / 세 번째 연속 Alt+B 도 동일하게 동작.
 
-### 결정적 코드 근거
-- `src/agent/turn_streaming_mpsc.rs:820~831` reset 위치 (너무 늦음).
-- `src/agent/turn_streaming_mpsc.rs:280~312` ToolStart 발행 (TUI 가 RunningTool 전환).
-- `src/tui/app/remote/server_events.rs:76~85` TUI status 전환.
-- `src/tui/app/remote/key_handling.rs:333~339` Alt+B 가드 + `remote.background_tool()`.
-- `src/server/client_lifecycle.rs:2789~2796` `move_tool_to_background` 가 무조건 Ack 반환 (실패 시그널 없음).
-- `src/server/state.rs:473~480` `request_background_current_tool` 의 fire 동작.
+### 후속 추적 (별도 마일스톤)
+- M5 가 닫혔지만, bg 로 옮긴 후 부모 turn loop 가 알아서 재개되지 않는 것은 **M1** 영역 (delivery target 라우팅).
+- M4 의 "interleave 가 tool 완료 후에야 흡수" 도 별개. M5 만으론 안 풀림.
 
-### upstream PR/issue 조사 (2026-05-10)
-- **동일 race fix PR/issue 없음.** Alt+B 자체를 추가한 #99ef05cae 이후 timing 패치 없음.
-
-### 해결 방향 (oracle 권고)
-
-1. **reset 위치를 ToolStart 이전으로 이동** (가장 직접적)
-   - 새 assistant stream 또는 새 tool collection 시작 전, ToolStart 이벤트가 TUI 로 노출되기 전에만 reset.
-   - 이미 fire 된 signal 을 보존하는 latch semantics.
-2. **`move_tool_to_background` 의 ack 분리**
-   - `request_background_current_tool()` 반환값이 false 면 다른 ack/status 또는 명시적 실패 이벤트.
-   - 현재는 무조건 `Ack` 라 사용자가 실패를 알 길이 없음.
-3. **TUI status notice 의 acknowledged transition**
-   - `Moving tool to background...` 가 실제 `ToolDone` with background message 를 받았을 때 `"Moved tool to background"` 로 명시적 전환.
-   - 실패 ack/event 가 오면 실패 표시.
-   - 현재는 3 초 TTL 자연 소멸만 됨.
-
-선호: 1 + 2 + 3 모두 작은 패치로 묶어서.
-
-### 회귀 위험
-- reset 위치를 잘못 옮기면 이전 tool 의 stale Alt+B 가 다음 tool 을 즉시 background 로 보내는 회귀.
-- latch semantics 변경은 double Alt+B, cancel, reload handoff 와 상호작용 가능.
-- ToolStart 전엔 사용자가 Alt+B 를 누를 수 없어야 한다는 UI invariant 깨면 예상치 못한 detach 발생.
-
-### 검증 시나리오
-1. early Alt+B race 재현:
-   - mock provider 가 `ToolStart`/`ToolExec` emit
-   - tool wait loop 가 reset 하기 전에 `request_background_current_tool()` 호출
-   - 기존 코드: signal 잃음 / 패치 후: background adopt 발생
-2. second tool Alt+B:
-   - 한 turn 에 tool 2 개. 첫 tool Alt+B → 두 번째 tool Alt+B → 양쪽 모두 background task 등록.
-3. status guard false UX:
-   - status 가 `Streaming`/`Thinking` 일 때 Alt+B 가 background request 보내지 않음을 명시.
-   - status notice 가 misleading 하지 않도록 (이 경우 word-backward 동작이 자연스러움).
-4. no stale signal regression:
-   - tool 사이 stale Alt+B signal 이 다음 tool 을 자동 background 로 보내지 않아야 함.
-
-### 관련 파일
-- `src/agent/turn_streaming_mpsc.rs:280~312, 820~831, 1010~1020` reset 위치, ToolStart 발행
-- `src/agent/turn_streaming_broadcast.rs` 동일 구조
-- `src/tui/app/remote/key_handling.rs:333~339` Alt+B 가드
-- `src/server/client_lifecycle.rs:2789~2796` `move_tool_to_background`
-- `src/server/state.rs:473~480` `request_background_current_tool`
-- `BackgroundToolSignal` 정의 (위 파일들에서 import 추적)
+### 관련 파일 (참고용)
+- `src/agent/turn_streaming_mpsc.rs:11~17, ~830~870` — reset 위치, select 진입.
+- `crates/jcode-agent-runtime/src/lib.rs:32~67, 78~95` — InterruptSignal 정의 + 신규 테스트.
+- `src/server/client_lifecycle.rs:2789~2806` — `move_tool_to_background`.
+- `src/agent_tests.rs:178~340` — `GatedToolProvider`, `SingleToolProvider`, `DelayTestTool`, 신규 테스트들.
 
 ---
 
@@ -391,8 +371,8 @@ pub const TOOL_EXECUTE_AFTER:  &str = "tool.execute.after";
 
 oracle 이중 검증 결과를 반영한 우선순위:
 
-1. **M5 먼저** — Alt+B race. 가장 단순한 수정 (reset 위치 이동 + ack 개선 + status transition). 즉각적 UX 효과 큼.
-2. **M1** — background task delivery target. M5 가 고쳐져도 parent 회수가 안 되면 여전히 답답함. 다소 큰 변경 (BackgroundTaskCompleted/Progress 에 delivery_session_id 추가, dispatch 라우팅 변경, headless live check 보정).
+1. ✅ **M5 완료** — Alt+B race fix. commit `52375aac`/`f76dfdda`, binary `f76dfdda` 설치 완료.
+2. **M1 다음** (현재 작업 대상) — background task delivery target. M5 가 끝나서 Alt+B 로 옮기는 건 되지만, parent 회수가 안 되면 여전히 답답함. 큰 변경 (BackgroundTaskCompleted/Progress 에 delivery_session_id 추가, dispatch 라우팅 변경, headless live check 보정).
 3. **M4 옵션 1 만 빠르게** — 상태 메시지 문구 개선 (`"⏭ Will be processed after current tool"`). 옵션 2~4 는 후순위. 한 줄짜리 patch.
 4. **M3** — hook event 두 개 추가. M1 끝낸 뒤 작업.
 5. **M2** — phase C swarm-diagnostics stash 회수 → upstream #76 시나리오 재현 → 추가 패치.
