@@ -145,6 +145,11 @@ impl Config {
     /// override only when explicitly set by the project config.
     pub fn agents_for_working_dir(&self, working_dir: Option<&Path>) -> AgentsConfig {
         let mut agents = self.agents.clone();
+
+        for (name, profile) in crate::agent_profiles_md::load_project_local_agent_md(working_dir) {
+            agents.profiles.insert(name, profile);
+        }
+
         if let Some(project_dir) = working_dir.and_then(Self::find_project_config_dir) {
             for config_path in [
                 project_dir.join(".jcode").join("config.toml"),
