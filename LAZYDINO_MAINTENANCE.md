@@ -1252,3 +1252,43 @@ fork   https://github.com/lazy-dinosaur/jcode.git (push)
 origin https://github.com/1jehuang/jcode.git (fetch)
 origin https://github.com/1jehuang/jcode.git (push)
 ```
+
+## Upstream sync state (2026-05-11)
+
+- `fork/master` 가 `origin/master` 보다 **226 commit 뒤짐**.
+- 모든 ref push 가 `[remote rejected]` (PAT `workflow` scope 부족 +
+  fork master 가 옛 workflow 파일 가지고 있어서).
+- 자세한 절차는 **M21 (upstream rebase + dedupe)** 등록됨 —
+  `LAZYDINO_MILESTONES.md` 와
+  `docs/lazydino/sessions/2026-05-11-m19-m20-deployed.md` §9 참조.
+- 작업 시작 전 백업 tag 48개 생성됨:
+  `git tag -l 'backup/pre-upstream-rebase-20260511-0136/*'`.
+- M21 끝나기 전엔 fork 에 push 하지 말 것 (deploy/m9-m10 와 모든
+  patch 는 local only).
+
+## Backup tag convention
+
+위험한 작업 (rebase, force-push, mass branch reset) 전에 **항상**
+보호 tag 만들기:
+
+```bash
+TS=$(date +%Y%m%d-%H%M)
+PREFIX="backup/<reason>-${TS}"
+git tag -a "${PREFIX}/deploy-m9-m10" deploy/m9-m10 -m "backup before <op>"
+for b in $(git for-each-ref --format='%(refname:short)' refs/heads/ \
+            | grep -E "^patch/"); do
+  git tag -a "${PREFIX}/${b#patch/}" "$b" -m "backup before <op>"
+done
+```
+
+복원:
+
+```bash
+git checkout -B <branch> "${PREFIX}/<branch-suffix>"
+```
+
+**주의**: 이전 시도에서 `backup/pre-upstream-rebase-20260511-0136`
+파일-tag 와 `backup/pre-upstream-rebase-20260511-0136/<patch>`
+디렉터리-tag 가 충돌해서 디렉터리 tag 들이 만들어지지 않은 적 있음
+(silent fail). 한 prefix 안에서는 prefix 자체에 대한 file-tag 를
+만들지 말 것.
