@@ -42,6 +42,7 @@ DO_LIST=0
 PATCH_REFS=(
   patch/mermaid-label-rendering
   patch/tool-lifecycle-hooks
+  patch/lifecycle-hooks
   patch/custom-maintenance-docs
   patch/project-local-hook-config
   patch/subagent-model-routing

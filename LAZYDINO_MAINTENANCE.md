@@ -671,6 +671,25 @@ Track each custom patch as a small commit. Current known customizations:
    - Validation: `cargo check --all-targets`, `cargo test --lib server::tests::background_ --no-fail-fast`, `cargo test --lib background --no-fail-fast`, plus requested broader sweeps. Known failures remained limited to the documented inventory; focused new regressions passed.
    - Binary reinstall required: yes, because this changes runtime delivery routing and bus event payloads.
 
+26. Lifecycle hook events for session/response boundaries
+   - Commit: `feat: add session.stop and response.completed lifecycle hooks`.
+   - Patch branch: `patch/lifecycle-hooks`.
+   - Purpose: extend command hooks beyond tool execution with `session.stop` and `response.completed` so external harness automation can observe true session termination and final assistant turn completion.
+   - Runtime behavior:
+     - `session.stop` fires after a session is removed from live server state for real close/crash disconnect cleanup, with `reason = "disconnect"`, working directory, and message count.
+     - Reload-triggered temporary detach maps to the existing `Reloading` disposition and is explicitly skipped, preventing duplicate external stop notifications during daemon reload handoff.
+     - `response.completed` fires from the actual turn-loop exit path after empty-response retry and incomplete-response continuation checks, once per final assistant response, with assistant message id, stop reason, tool-call count, and output char count.
+     - Lifecycle hooks match by `event` only; any configured `tool` field is ignored. Blocking lifecycle hooks ignore deny decisions and failures are logged as warnings without stopping the turn/session.
+   - Touched paths:
+     - `src/hooks.rs`
+     - `src/agent/turn_loops.rs`
+     - `src/agent/turn_streaming_mpsc.rs`
+     - `src/server/client_disconnect_cleanup.rs`
+     - `src/config/default_file.rs`
+     - `crates/jcode-config-types/src/lib.rs`
+   - Validation: `cargo check --all-targets`, `cargo test --lib hooks --no-fail-fast`, and `cargo test --lib client_disconnect_cleanup --no-fail-fast`. Broader requested sweeps `cargo test --lib agent::tests --no-fail-fast` and `cargo test --lib server --no-fail-fast` still show pre-existing environment/order-sensitive failures unrelated to this patch (`env_snapshot_detail_is_minimal_for_empty_sessions_and_full_after_history`, spawn working-dir/history busy-agent assertions).
+   - Binary reinstall required: yes, because this changes runtime hook behavior.
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
