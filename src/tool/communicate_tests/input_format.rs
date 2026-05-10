@@ -78,6 +78,16 @@ fn communicate_input_accepts_cleanup_lifecycle_flags() {
 }
 
 #[test]
+fn communicate_input_accepts_run_id() {
+    let parsed: CommunicateInput = serde_json::from_value(serde_json::json!({
+        "action": "run_plan",
+        "run_id": "run-explicit-1"
+    }))
+    .expect("run_id should deserialize");
+    assert_eq!(parsed.run_id.as_deref(), Some("run-explicit-1"));
+}
+
+#[test]
 fn cleanup_candidates_default_to_owned_terminal_workers() {
     let members = vec![
         AgentInfo {
@@ -89,6 +99,7 @@ fn cleanup_candidates_default_to_owned_terminal_workers() {
             role: Some("coordinator".to_string()),
             is_headless: None,
             report_back_to_session_id: None,
+            run_id: None,
             latest_completion_report: None,
             live_attachments: None,
             status_age_secs: None,
@@ -102,6 +113,7 @@ fn cleanup_candidates_default_to_owned_terminal_workers() {
             role: Some("agent".to_string()),
             is_headless: Some(true),
             report_back_to_session_id: Some("coord".to_string()),
+            run_id: None,
             latest_completion_report: None,
             live_attachments: None,
             status_age_secs: None,
@@ -115,6 +127,7 @@ fn cleanup_candidates_default_to_owned_terminal_workers() {
             role: Some("agent".to_string()),
             is_headless: None,
             report_back_to_session_id: None,
+            run_id: None,
             latest_completion_report: None,
             live_attachments: None,
             status_age_secs: None,
@@ -128,6 +141,7 @@ fn cleanup_candidates_default_to_owned_terminal_workers() {
             role: Some("agent".to_string()),
             is_headless: Some(true),
             report_back_to_session_id: Some("coord".to_string()),
+            run_id: None,
             latest_completion_report: None,
             live_attachments: None,
             status_age_secs: None,
@@ -156,6 +170,7 @@ fn cleanup_candidates_include_owned_stale_workers_by_default() {
             role: Some("coordinator".to_string()),
             is_headless: None,
             report_back_to_session_id: None,
+            run_id: None,
             latest_completion_report: None,
             live_attachments: None,
             status_age_secs: None,
@@ -169,6 +184,7 @@ fn cleanup_candidates_include_owned_stale_workers_by_default() {
             role: Some("agent".to_string()),
             is_headless: Some(true),
             report_back_to_session_id: Some("coord".to_string()),
+            run_id: Some("run-current".to_string()),
             latest_completion_report: None,
             live_attachments: None,
             status_age_secs: Some(900),
@@ -182,6 +198,7 @@ fn cleanup_candidates_include_owned_stale_workers_by_default() {
             role: Some("agent".to_string()),
             is_headless: Some(true),
             report_back_to_session_id: Some("coord".to_string()),
+            run_id: Some("run-current".to_string()),
             latest_completion_report: None,
             live_attachments: None,
             status_age_secs: Some(600),
@@ -195,6 +212,7 @@ fn cleanup_candidates_include_owned_stale_workers_by_default() {
             role: Some("agent".to_string()),
             is_headless: Some(true),
             report_back_to_session_id: Some("other-coord".to_string()),
+            run_id: None,
             latest_completion_report: None,
             live_attachments: None,
             status_age_secs: Some(1200),
@@ -269,6 +287,7 @@ fn format_members_includes_status_and_detail() {
             role: Some("agent".to_string()),
             is_headless: Some(true),
             report_back_to_session_id: Some("sess-self".to_string()),
+            run_id: None,
             latest_completion_report: None,
             live_attachments: Some(0),
             status_age_secs: Some(12),
@@ -302,6 +321,7 @@ fn format_members_disambiguates_duplicate_friendly_names() {
                 role: Some("agent".to_string()),
                 is_headless: None,
                 report_back_to_session_id: None,
+                run_id: None,
                 latest_completion_report: None,
                 live_attachments: None,
                 status_age_secs: None,
@@ -315,6 +335,7 @@ fn format_members_disambiguates_duplicate_friendly_names() {
                 role: Some("agent".to_string()),
                 is_headless: None,
                 report_back_to_session_id: None,
+                run_id: None,
                 latest_completion_report: None,
                 live_attachments: None,
                 status_age_secs: None,
