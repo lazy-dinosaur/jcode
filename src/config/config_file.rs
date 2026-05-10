@@ -18,6 +18,32 @@ struct PartialPromptConfig {
     load_harness_dir: Option<bool>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct PartialAgentsConfig {
+    swarm_model: Option<String>,
+    routing: std::collections::BTreeMap<String, String>,
+    routes: std::collections::BTreeMap<String, AgentRouteConfig>,
+    profiles: std::collections::BTreeMap<String, AgentRouteConfig>,
+    memory_model: Option<String>,
+    memory_sidecar_enabled: bool,
+}
+
+impl PartialAgentsConfig {
+    fn apply_to(self, agents: &mut AgentsConfig) {
+        if let Some(value) = self.swarm_model {
+            agents.swarm_model = Some(value);
+        }
+        agents.routing.extend(self.routing);
+        agents.routes.extend(self.routes);
+        agents.profiles.extend(self.profiles);
+        if let Some(value) = self.memory_model {
+            agents.memory_model = Some(value);
+        }
+        agents.memory_sidecar_enabled = self.memory_sidecar_enabled;
+    }
+}
+
 impl PartialPromptConfig {
     fn apply_to(self, prompt: &mut PromptConfig) {
         if let Some(value) = self.ignore_project_agents {
@@ -111,6 +137,27 @@ impl Config {
         prompt
     }
 
+    /// Build the agent config effective for a working directory.
+    ///
+    /// Global agent settings come from `~/.jcode/config.toml`. Project-local settings in
+    /// `<project>/.jcode/config.toml` and `<project>/.jcode/config.local.toml` overlay the global
+    /// config. Map fields merge by key, with later layers overriding earlier ones. Scalar fields
+    /// override only when explicitly set by the project config.
+    pub fn agents_for_working_dir(&self, working_dir: Option<&Path>) -> AgentsConfig {
+        let mut agents = self.agents.clone();
+        if let Some(project_dir) = working_dir.and_then(Self::find_project_config_dir) {
+            for config_path in [
+                project_dir.join(".jcode").join("config.toml"),
+                project_dir.join(".jcode").join("config.local.toml"),
+            ] {
+                if let Some(project_agents) = Self::load_agents_from_file(&config_path) {
+                    project_agents.apply_to(&mut agents);
+                }
+            }
+        }
+        agents
+    }
+
     fn find_project_config_dir(working_dir: &Path) -> Option<PathBuf> {
         let start = if working_dir.is_file() {
             working_dir.parent()?
@@ -177,6 +224,47 @@ impl Config {
             Err(err) => {
                 crate::logging::warn(&format!(
                     "Failed to parse project jcode prompt config {}: {err}",
+                    path.display()
+                ));
+                None
+            }
+        }
+    }
+
+    fn load_agents_from_file(path: &Path) -> Option<PartialAgentsConfig> {
+        if !path.exists() {
+            return None;
+        }
+
+        let content = match std::fs::read_to_string(path) {
+            Ok(content) => content,
+            Err(err) => {
+                crate::logging::warn(&format!(
+                    "Failed to read project jcode config {}: {err}",
+                    path.display()
+                ));
+                return None;
+            }
+        };
+
+        let value = match toml::from_str::<toml::Value>(&content) {
+            Ok(value) => value,
+            Err(err) => {
+                crate::logging::warn(&format!(
+                    "Failed to parse project jcode agents config {}: {err}",
+                    path.display()
+                ));
+                return None;
+            }
+        };
+        let Some(agents) = value.get("agents").cloned() else {
+            return None;
+        };
+        match agents.try_into::<PartialAgentsConfig>() {
+            Ok(agents) => Some(agents),
+            Err(err) => {
+                crate::logging::warn(&format!(
+                    "Failed to parse project jcode agents config {}: {err}",
                     path.display()
                 ));
                 None

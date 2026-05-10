@@ -1,6 +1,6 @@
 use super::{
-    AmbientConfig, Config, DiffDisplayMode, DisplayConfig, HookCommandConfig, ProviderConfig,
-    SessionPickerResumeAction,
+    AgentRouteConfig, AmbientConfig, Config, DiffDisplayMode, DisplayConfig, HookCommandConfig,
+    ProviderConfig, SessionPickerResumeAction,
 };
 use std::path::Path;
 
@@ -273,6 +273,207 @@ fn test_project_local_config_local_appends_after_shared_config() {
             .collect::<Vec<_>>(),
         vec!["shared", "local"]
     );
+}
+
+fn agent_route(model: &str) -> AgentRouteConfig {
+    AgentRouteConfig {
+        model: Some(model.to_string()),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn test_agents_for_working_dir_uses_global_when_no_project_config() {
+    let mut cfg = Config::default();
+    cfg.agents
+        .profiles
+        .insert("reviewer".to_string(), agent_route("opus"));
+
+    let agents = cfg.agents_for_working_dir(None);
+
+    assert_eq!(agents.profiles.len(), 1);
+    assert_eq!(agents.profiles["reviewer"].model.as_deref(), Some("opus"));
+}
+
+#[test]
+fn test_agents_for_working_dir_merges_project_profiles() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let project = dir.path().join("project");
+    std::fs::create_dir_all(project.join(".jcode")).expect("create .jcode");
+    std::fs::write(
+        project.join(".jcode").join("config.toml"),
+        r#"
+        [agents.profiles.coder]
+        model = "gpt-5.5"
+        "#,
+    )
+    .expect("write project config");
+
+    let mut cfg = Config::default();
+    cfg.agents
+        .profiles
+        .insert("reviewer".to_string(), agent_route("opus"));
+
+    let agents = cfg.agents_for_working_dir(Some(&project));
+
+    assert_eq!(agents.profiles["reviewer"].model.as_deref(), Some("opus"));
+    assert_eq!(agents.profiles["coder"].model.as_deref(), Some("gpt-5.5"));
+}
+
+#[test]
+fn test_agents_for_working_dir_project_overrides_global_same_key() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let project = dir.path().join("project");
+    std::fs::create_dir_all(project.join(".jcode")).expect("create .jcode");
+    std::fs::write(
+        project.join(".jcode").join("config.toml"),
+        r#"
+        [agents.profiles.reviewer]
+        model = "haiku"
+        "#,
+    )
+    .expect("write project config");
+
+    let mut cfg = Config::default();
+    cfg.agents
+        .profiles
+        .insert("reviewer".to_string(), agent_route("opus"));
+
+    let agents = cfg.agents_for_working_dir(Some(&project));
+
+    assert_eq!(agents.profiles["reviewer"].model.as_deref(), Some("haiku"));
+}
+
+#[test]
+fn test_agents_for_working_dir_local_overrides_project_overrides_global() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let project = dir.path().join("project");
+    std::fs::create_dir_all(project.join(".jcode")).expect("create .jcode");
+    std::fs::write(
+        project.join(".jcode").join("config.toml"),
+        r#"
+        [agents.profiles.reviewer]
+        model = "haiku"
+        "#,
+    )
+    .expect("write project config");
+    std::fs::write(
+        project.join(".jcode").join("config.local.toml"),
+        r#"
+        [agents.profiles.reviewer]
+        model = "sonnet"
+        "#,
+    )
+    .expect("write local config");
+
+    let mut cfg = Config::default();
+    cfg.agents
+        .profiles
+        .insert("reviewer".to_string(), agent_route("opus"));
+
+    let agents = cfg.agents_for_working_dir(Some(&project));
+
+    assert_eq!(agents.profiles["reviewer"].model.as_deref(), Some("sonnet"));
+}
+
+#[test]
+fn test_agents_for_working_dir_swarm_model_project_override() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let project = dir.path().join("project");
+    std::fs::create_dir_all(project.join(".jcode")).expect("create .jcode");
+    std::fs::write(
+        project.join(".jcode").join("config.toml"),
+        r#"
+        [agents]
+        swarm_model = "haiku"
+        "#,
+    )
+    .expect("write project config");
+
+    let mut cfg = Config::default();
+    cfg.agents.swarm_model = Some("opus".to_string());
+
+    let agents = cfg.agents_for_working_dir(Some(&project));
+
+    assert_eq!(agents.swarm_model.as_deref(), Some("haiku"));
+}
+
+#[test]
+fn test_agents_for_working_dir_routes_and_routing_also_merge() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let project = dir.path().join("project");
+    std::fs::create_dir_all(project.join(".jcode")).expect("create .jcode");
+    std::fs::write(
+        project.join(".jcode").join("config.toml"),
+        r#"
+        [agents.routing]
+        local_legacy = "haiku"
+
+        [agents.routes.local_rich]
+        model = "sonnet"
+        "#,
+    )
+    .expect("write project config");
+
+    let mut cfg = Config::default();
+    cfg.agents
+        .routing
+        .insert("global_legacy".to_string(), "opus".to_string());
+    cfg.agents
+        .routes
+        .insert("global_rich".to_string(), agent_route("opus"));
+
+    let agents = cfg.agents_for_working_dir(Some(&project));
+
+    assert_eq!(
+        agents.routing.get("global_legacy").map(String::as_str),
+        Some("opus")
+    );
+    assert_eq!(
+        agents.routing.get("local_legacy").map(String::as_str),
+        Some("haiku")
+    );
+    assert_eq!(agents.routes["global_rich"].model.as_deref(), Some("opus"));
+    assert_eq!(agents.routes["local_rich"].model.as_deref(), Some("sonnet"));
+}
+
+#[test]
+fn test_agents_for_working_dir_missing_project_files_fallback_to_global() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let project = dir.path().join("project");
+    std::fs::create_dir_all(&project).expect("create project");
+
+    let mut cfg = Config::default();
+    cfg.agents.swarm_model = Some("opus".to_string());
+    cfg.agents
+        .profiles
+        .insert("reviewer".to_string(), agent_route("opus"));
+
+    let agents = cfg.agents_for_working_dir(Some(&project));
+
+    assert_eq!(agents.swarm_model.as_deref(), Some("opus"));
+    assert_eq!(agents.profiles["reviewer"].model.as_deref(), Some("opus"));
+}
+
+#[test]
+fn test_agents_for_working_dir_invalid_project_toml_logs_and_falls_back() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let project = dir.path().join("project");
+    std::fs::create_dir_all(project.join(".jcode")).expect("create .jcode");
+    std::fs::write(
+        project.join(".jcode").join("config.toml"),
+        "[agents.profiles.reviewer\nmodel = \"haiku\"\n",
+    )
+    .expect("write malformed project config");
+
+    let mut cfg = Config::default();
+    cfg.agents
+        .profiles
+        .insert("reviewer".to_string(), agent_route("opus"));
+
+    let agents = cfg.agents_for_working_dir(Some(&project));
+
+    assert_eq!(agents.profiles["reviewer"].model.as_deref(), Some("opus"));
 }
 
 #[test]
