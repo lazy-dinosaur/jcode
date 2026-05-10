@@ -261,11 +261,36 @@ Track each custom patch as a small commit. Current known customizations:
    - Validation: `cargo test private_jcode --lib`, `cargo test prompt_config --lib`, and `cargo check`.
    - Binary reinstall required: yes, because this changes runtime behavior.
 
+6. Native `jcode init` project onboarding
+   - Goal: make project-local `.jcode/` onboarding an actual Jcode command, not a passive skill instruction bundle.
+   - Command surface:
+     - `jcode init [target]`
+     - `jcode init --ignore-team-agents [target]`
+     - `jcode init --gitignore [target]`
+     - `jcode init --force [target]`
+   - Generated files:
+     - `.jcode/config.toml`
+     - `.jcode/AGENTS.md`
+     - `.jcode/harness/10-routing-policy.md`
+     - `.jcode/harness/20-project-rules.md`
+     - `.jcode/hooks/check-bash.sh`
+     - `.jcode/hooks/log-tool.sh`
+   - Default privacy behavior: add `.jcode/` to `.git/info/exclude` so private harness files are not committed. Use `--gitignore` only when the user explicitly wants to modify the shared project `.gitignore`.
+   - Default prompt behavior: keep team `AGENTS.md` active. Use `--ignore-team-agents` when the private harness should become primary.
+   - Validation: `cargo test project_init --lib`, `cargo check`, and temp-project CLI smoke via `cargo run --bin jcode -- init <tmp-project>`.
+   - Binary reinstall required: yes, because this adds a user-facing CLI command.
 
 
-## Project-local harness initialization skill
 
-A reusable Claude/Jcode skill exists to initialize project-local `.jcode/` harness directories on demand.
+## Project-local harness initialization
+
+Preferred native command:
+
+```bash
+jcode init [target]
+```
+
+A Claude/Jcode skill also exists as an instruction wrapper, but it is not the execution surface. Unlike opencode-style command skills, Jcode/Claude skills activate instructions; they do not automatically mutate the filesystem. Use the native command for actual onboarding.
 
 Skill location:
 
@@ -295,6 +320,12 @@ Generated files:
 Default command:
 
 ```bash
+jcode init <target-project>
+```
+
+Legacy helper script, retained for compatibility:
+
+```bash
 ~/.claude/skills/jcode-init/scripts/init-jcode-project.sh <target-project>
 ```
 
@@ -316,7 +347,7 @@ Validation performed:
 
 ```bash
 # temp git project
-~/.claude/skills/jcode-init/scripts/init-jcode-project.sh <tmp-project>
+jcode init <tmp-project>
 python3 -c 'import tomllib, pathlib; tomllib.loads(pathlib.Path("<tmp-project>/.jcode/config.toml").read_text())'
 printf '{"input":{"command":"rm -rf /"}}' | <tmp-project>/.jcode/hooks/check-bash.sh
 

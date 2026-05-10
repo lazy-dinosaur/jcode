@@ -9,8 +9,8 @@ use super::args::{
     RestartCommand, SessionCommand, TranscriptModeArg,
 };
 use crate::{
-    agent, auth, build, provider, provider_catalog, server, session, setup_hints, startup_profile,
-    tui,
+    agent, auth, build, project_init, provider, provider_catalog, server, session, setup_hints,
+    startup_profile, tui,
 };
 
 use super::{
@@ -115,6 +115,20 @@ pub(crate) async fn run_main(mut args: Args) -> Result<()> {
                 },
             )
             .await?;
+        }
+        Some(Command::Init {
+            target,
+            force,
+            gitignore,
+            ignore_team_agents,
+        }) => {
+            let report = project_init::init_project(project_init::ProjectInitOptions {
+                target_dir: target.into(),
+                force,
+                gitignore,
+                ignore_team_agents,
+            })?;
+            report.print_human();
         }
         Some(Command::Repl) => {
             let (provider, registry) =

@@ -54,6 +54,7 @@ PATCH_REFS=(
   patch/tmux-jcode-passthrough-docs
   patch/jcode-init-skill-docs
   patch/reapply-custom-stack
+  patch/native-project-init
 )
 
 while [[ $# -gt 0 ]]; do
