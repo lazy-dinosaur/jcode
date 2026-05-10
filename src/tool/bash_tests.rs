@@ -564,3 +564,103 @@ fn test_bash_tool_schema_advertises_background_progress_guidance() {
         "background description should mention parseable fallback progress output"
     );
 }
+
+// =============================================================================
+// M20: Bash tool timeout — config-driven default and cap
+// =============================================================================
+
+/// `resolve_timeout_ms(None)` returns the config's default (5min by default,
+/// not the legacy 2min).
+#[test]
+fn test_m20_resolve_timeout_uses_config_default_when_unspecified() {
+    // We don't reset the global config here; instead we just assert the value
+    // matches whatever the live config resolves to. The default `BashToolConfig`
+    // is 5 minutes which is the post-M20 baseline.
+    let resolved = super::resolve_timeout_ms(None);
+    assert!(
+        resolved >= 60_000,
+        "post-M20 default timeout should be at least 1 minute, got {resolved}ms"
+    );
+    assert!(
+        resolved <= jcode_config_types::BashToolConfig::HARD_CAP_MS,
+        "default must never exceed HARD_CAP_MS, got {resolved}ms"
+    );
+}
+
+/// Explicit `timeout` in the tool args wins, but only up to the configured cap
+/// (which is itself bounded by `HARD_CAP_MS`).
+#[test]
+fn test_m20_resolve_timeout_caps_explicit_request() {
+    // 1 hour (3_600_000ms) far exceeds the 20min hard cap; we expect clamping.
+    let resolved = super::resolve_timeout_ms(Some(3_600_000));
+    assert!(
+        resolved <= jcode_config_types::BashToolConfig::HARD_CAP_MS,
+        "explicit oversized request must be clamped to HARD_CAP_MS, got {resolved}ms"
+    );
+    assert!(
+        resolved >= 60_000,
+        "clamped value must still be sensibly large, got {resolved}ms"
+    );
+}
+
+/// A small explicit request passes through unchanged (down to the 1ms floor).
+#[test]
+fn test_m20_resolve_timeout_passes_small_explicit_through() {
+    let resolved = super::resolve_timeout_ms(Some(5_000));
+    assert_eq!(
+        resolved, 5_000,
+        "small explicit timeouts should pass through verbatim"
+    );
+}
+
+/// `BashToolConfig::effective_*` clamps pathological config values — most
+/// notably `default_timeout_ms = 0` or `max_timeout_ms = u64::MAX`.
+#[test]
+fn test_m20_bash_tool_config_clamps_pathological_values() {
+    use jcode_config_types::BashToolConfig;
+
+    let zero = BashToolConfig {
+        default_timeout_ms: 0,
+        max_timeout_ms: 0,
+    };
+    assert!(zero.effective_default_ms() >= 1_000);
+    assert!(zero.effective_max_ms() >= zero.effective_default_ms());
+
+    let huge = BashToolConfig {
+        default_timeout_ms: u64::MAX,
+        max_timeout_ms: u64::MAX,
+    };
+    assert_eq!(huge.effective_default_ms(), BashToolConfig::HARD_CAP_MS);
+    assert_eq!(huge.effective_max_ms(), BashToolConfig::HARD_CAP_MS);
+
+    // Inverted: max < default → effective_max should still be >= effective_default.
+    let inverted = BashToolConfig {
+        default_timeout_ms: 600_000,
+        max_timeout_ms: 60_000,
+    };
+    assert_eq!(inverted.effective_default_ms(), 600_000);
+    assert!(inverted.effective_max_ms() >= inverted.effective_default_ms());
+}
+
+/// Schema description should advertise the new ms-based default/cap so the
+/// model knows how to override.
+#[test]
+fn test_m20_schema_description_mentions_5min_default_and_20min_cap() {
+    let schema = BashTool::new().parameters_schema();
+    let desc = schema
+        .pointer("/properties/timeout/description")
+        .and_then(|v| v.as_str())
+        .expect("timeout schema must have a description");
+    assert!(
+        desc.contains("300000") || desc.contains("5 min"),
+        "schema description should mention 5min default; got: {desc}"
+    );
+    assert!(
+        desc.contains("1200000") || desc.contains("20 min"),
+        "schema description should mention 20min cap; got: {desc}"
+    );
+    assert!(
+        desc.contains("[tool.bash]") || desc.contains("config.toml"),
+        "schema description should point at the [tool.bash] config knob; got: {desc}"
+    );
+}
