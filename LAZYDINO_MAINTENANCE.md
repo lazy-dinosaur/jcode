@@ -485,6 +485,29 @@ Decision policy:
   - Useful ideas: embedded skills, deterministic skill router, skill doctor/import CLI, project init scaffolding, interview/wizard onboarding, wiki-memory safety prompts.
   - Suggested action: do not merge wholesale. Extract only small ideas after our local `.jcode` and skill-sync patches stabilize.
   - Interview mode direction: if adopted, make it explicit as `jcode init --interview` / `jcode init --wizard`, not the default chat behavior. It should ask project/harness questions, then generate durable `.jcode` config, prompt overlays, hooks, skills, and validation notes.
+  - Detailed slice map from the 100-commit PR:
+    - Already covered locally or mostly covered:
+      - `096 Fix Skill tool alias for Anthropic OAuth` and `098 Fix slash skill invocation with context` -> covered by `patch/project-skill-sync`.
+      - `048 Add project skill scope policy` -> covered by `.jcode/.claude/.agents/.opencode` project skill loading in `patch/project-skill-sync`.
+      - `005 Add project init bootstrap`, `029 Queue swarm analysis from init`, and `030 Add jcode init swarm analysis` -> partially covered by native `jcode init`; swarm-analysis bootstrap remains optional future work.
+    - High-value slices to reimplement next if useful:
+      - `003 Start interactive mode by default in harness` -> rework as explicit `jcode init --interview` / `--wizard`, not default chat mode.
+      - `002 Improve harness run and skills doctor`, `043 Add offline harness doctor diagnostics`, `045 Add offline skill validation gate`, and `046 Add safe skill import planner` -> good direction for `jcode doctor` / `jcode skills doctor`.
+      - `014 Add CLI quality preflight gate`, `027 Add release gates and clean-code fixtures`, `060 Add opt-in live provider smoke`, and `061 Add CI-friendly harness smoke e2e` -> good direction for a local `jcode doctor --release` validation bundle.
+      - `025 Add JSON output for skills commands`, `072-077 offline session JSON/NDJSON envelopes` -> useful if we need stable automation contracts for external harness tooling.
+      - `089-095 swarm await/scope/health/run-id/cleanup/retry` -> potentially valuable for reliable multi-agent orchestration; inspect separately before changing current swarm behavior.
+      - `097 Add hard timeout for reload handoff` and `059 Fix selfdev reload repo discovery` -> relevant to our install/reload workflow; inspect before implementing if reload hangs again.
+      - `082/085 user attention bell/background completion alerts` -> useful UX for long background builds/tests.
+    - Medium-value or conditional slices:
+      - `032 Add llmwiki memory skill`, `041 Add LLM wiki bridge preview`, `058 Document llmwiki bridge schema commands` -> adopt only as opt-in local memory/provenance skill. Do not make wiki memory a source-of-truth or sync secrets.
+      - `068-071 offline demo runner/manifest/sandboxed demo` -> useful for reproducible harness demos, lower priority than doctor/init.
+      - `078-080 ACP preview` and `086 ACP cancellation` -> interesting external protocol surface, defer unless ACP integration is needed.
+      - `039 Support OpenRouter reasoning effort`, `040 Set OpenAI reasoning effort to max by default`, `100 Allow local Ollama HTTP endpoints` -> provider-specific; adopt only for an actual route/user need.
+      - `012/013/015/038/055/056 security/error/OAuth hardening` -> inspect as separate small patches, but avoid importing broad churn blindly.
+    - Skip or avoid wholesale:
+      - `033 Rewrite README for harness fork`, `034 Add README engineering loop graphic`, `057 Polish JCode Harness branding` -> fork branding, not needed for Lazydino custom stack.
+      - `.codex-harness/*`, `.context/*`, bulk generated contracts/gates/decisions -> useful as artifact pattern, but should not be copied into the jcode source tree.
+      - `047/049-054 CI/security dependency churn` -> only adopt if upstream/base actually has that vulnerability or CI issue.
 - `#138` Filesystem sandboxing with `--sandbox` / `JCODE_SANDBOX_ROOT`
   - Status: valuable but touches many file tools and has partial security boundary for bash.
   - Suggested action: consider later as a focused safety project. Must audit every file-touching tool and document bash limitations clearly.

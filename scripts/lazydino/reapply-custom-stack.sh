@@ -59,6 +59,7 @@ PATCH_REFS=(
   patch/upstream-pr-triage-docs
   patch/project-skill-sync
   patch/custom-install-server-paths
+  patch/pr151-slice-analysis
 )
 
 while [[ $# -gt 0 ]]; do
