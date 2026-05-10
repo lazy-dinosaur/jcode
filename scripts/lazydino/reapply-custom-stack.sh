@@ -75,6 +75,7 @@ PATCH_REFS=(
   patch/swarm-run-id
   patch/empty-response-retry
   patch/altb-early-race
+  patch/bg-delivery-target
 )
 
 while [[ $# -gt 0 ]]; do

@@ -640,6 +640,37 @@ Track each custom patch as a small commit. Current known customizations:
    - Validation: `cargo check --all-targets`, `cargo test -p jcode-agent-runtime background_tool_signal`, `cargo test --lib --no-fail-fast altb_early_race`, `cargo test --lib --no-fail-fast interrupt_signal`, and `cargo test --lib --no-fail-fast turn_streaming`. A full `cargo test --lib --no-fail-fast` was attempted on this workstation but hit the local 10-minute harness timeout before completion; focused coverage for this patch passed.
    - Binary reinstall required: yes, because this changes turn-loop runtime behavior.
 
+
+25. Background task delivery target routing
+   - Commit: `fix: route background task notifications to parent/report-back delivery target`.
+   - Patch branch: `patch/bg-delivery-target`.
+   - Purpose: make background task completion/progress notifications route to the user-attached parent/report-back session instead of being absorbed by headless or detached child sessions.
+   - Root cause:
+     - `fanout_session_event` and background dispatch targeted only the task owner session id and did not follow `Session.parent_id` or `SwarmMember.report_back_to_session_id`.
+     - `run_background_task_message_in_live_session_if_idle` treated the headless drain `event_tx` as a live client, so headless workers could consume their own completion path.
+     - Alt+B adopted tools recorded only the owner session id, losing the parent delivery hint. `wake=true` policy remains deferred to a follow-up patch.
+   - Runtime behavior:
+     - `BackgroundTaskCompleted` and `BackgroundTaskProgressEvent` carry both `session_id` (owner/executor) and `delivery_session_id` (notification/wake target hint).
+     - Dispatch resolves `delivery_session_id` through `SwarmMember.report_back_to_session_id` and persisted `Session.parent_id`, walking up to 10 ancestors and selecting the first session with live attached clients.
+     - Live client detection now trusts only non-closed `event_txs` attachments, not headless drain channels.
+     - Alt+B adopt preserves current `wake=false` behavior but stores the parent session as the delivery hint when available.
+   - Touched paths:
+     - `crates/jcode-background-types/src/lib.rs`
+     - `src/bus.rs`
+     - `src/background.rs`
+     - `src/background/model.rs`
+     - `src/background/tests.rs`
+     - `src/server.rs`
+     - `src/server/background_tasks.rs`
+     - `src/server/tests.rs`
+     - `src/agent/turn_streaming_mpsc.rs`
+     - `src/tui/app/local.rs`
+     - `src/message/tests.rs`
+     - `src/tui/app/tests/remote_startup_input_02/part_02.rs`
+     - `src/tool/selfdev/tests.rs`
+   - Validation: `cargo check --all-targets`, `cargo test --lib server::tests::background_ --no-fail-fast`, `cargo test --lib background --no-fail-fast`, plus requested broader sweeps. Known failures remained limited to the documented inventory; focused new regressions passed.
+   - Binary reinstall required: yes, because this changes runtime delivery routing and bus event payloads.
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
