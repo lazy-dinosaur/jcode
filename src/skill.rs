@@ -230,16 +230,11 @@ impl SkillRegistry {
     }
 
     fn load_project_local_dirs(&mut self, working_dir: Option<&Path>) -> Result<()> {
-        // Load from ./.jcode/skills/ (project-local jcode skills)
-        let local_jcode = Self::project_local_dir(working_dir, ".jcode");
-        if local_jcode.exists() {
-            self.load_from_dir(&local_jcode)?;
-        }
-
-        // Fallback: ./.claude/skills/ (project-local Claude skills for compatibility)
-        let local_claude = Self::project_local_dir(working_dir, ".claude");
-        if local_claude.exists() {
-            self.load_from_dir(&local_claude)?;
+        for dir_name in [".jcode", ".claude", ".agents", ".opencode"] {
+            let local_dir = Self::project_local_dir(working_dir, dir_name);
+            if local_dir.exists() {
+                self.load_from_dir(&local_dir)?;
+            }
         }
 
         Ok(())
@@ -366,16 +361,11 @@ impl SkillRegistry {
             }
         }
 
-        // Load from ./.jcode/skills/ (project-local jcode skills)
-        let local_jcode = Self::project_local_dir(working_dir, ".jcode");
-        if local_jcode.exists() {
-            count += self.load_from_dir_count(&local_jcode)?;
-        }
-
-        // Fallback: ./.claude/skills/ (project-local Claude skills for compatibility)
-        let local_claude = Self::project_local_dir(working_dir, ".claude");
-        if local_claude.exists() {
-            count += self.load_from_dir_count(&local_claude)?;
+        for dir_name in [".jcode", ".claude", ".agents", ".opencode"] {
+            let local_dir = Self::project_local_dir(working_dir, dir_name);
+            if local_dir.exists() {
+                count += self.load_from_dir_count(&local_dir)?;
+            }
         }
 
         Ok(count)
@@ -540,6 +530,18 @@ mod tests {
             .expect("working-dir local skill should load");
         assert_eq!(skill.description, "Test skill wd-only");
         assert!(skill.path.starts_with(temp.path()));
+    }
+
+    #[test]
+    fn load_for_working_dir_reads_common_project_skill_scopes() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_test_skill(temp.path(), ".agents", "agent-skill");
+        write_test_skill(temp.path(), ".opencode", "opencode-skill");
+
+        let registry = SkillRegistry::load_for_working_dir(Some(temp.path())).expect("load skills");
+
+        assert!(registry.get("agent-skill").is_some());
+        assert!(registry.get("opencode-skill").is_some());
     }
 
     #[test]

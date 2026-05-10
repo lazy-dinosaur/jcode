@@ -295,6 +295,25 @@ Track each custom patch as a small commit. Current known customizations:
    - Validation: `cargo test tool::ambient --lib`.
    - Binary reinstall required: yes, because this changes ambient tool runtime behavior.
 
+8. Project skill sync and slash activation for remote sessions
+   - Upstream inspiration: adapted from the purposes behind PR `#166` and `#162`, with `#151` treated as a larger design reference.
+   - Commit: `feat: sync project skills in remote sessions`.
+   - Patch branch: `patch/project-skill-sync`.
+   - Goal: make project-local skills behave like real active project capabilities, not only passive UI suggestions.
+   - Skill directories loaded from the active working directory:
+     - `.jcode/skills/<skill>/SKILL.md`
+     - `.claude/skills/<skill>/SKILL.md`
+     - `.agents/skills/<skill>/SKILL.md`
+     - `.opencode/skills/<skill>/SKILL.md`
+   - Runtime behavior:
+     - Remote clients send `activate_skill` to the server when the user enters `/skill-name`.
+     - The server reloads project-local skill directories after session subscribe/working-dir changes.
+     - The server sets the agent's active skill, then emits `skill_activated` so the UI and model prompt state stay in sync.
+     - The `skill_manage` tool accepts both `name` and public-style `skill` parameters.
+   - Why: the UI could show project skills as active/available while the daemon-side agent did not reliably load or activate the same project-local skill registry.
+   - Validation: `cargo test skill --lib` and `cargo check`.
+   - Binary reinstall required: yes, because this changes client/server protocol and runtime behavior.
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
@@ -383,13 +402,13 @@ Decision policy:
   - Status: already adapted locally as `patch/ambient-serde-args`.
   - Benefit: prevents ambient tool deserialization failure when numbers arrive as strings.
 - `#166` Accept `skill` alias in skill tool
-  - Status: draft but small.
+  - Status: adapted locally in `patch/project-skill-sync`.
   - Benefit: makes external/public Skill-style calls compatible with internal `skill_manage`.
-  - Suggested action: fold into the upcoming project skill sync patch.
+  - Suggested action: keep covered by `cargo test skill --lib` after rebases.
 - `#162` Skill alias plus Gemini schema sanitization
   - Status: useful, medium size.
   - Benefit: fixes skill tool confusion and Gemini failures on MCP tool schemas containing `$defs`, `$ref`, `$schema`.
-  - Suggested action: take the Gemini schema sanitizer and combine the skill alias idea with `#166` carefully.
+  - Suggested action: skill alias/project-scope portion is adapted locally in `patch/project-skill-sync`; Gemini schema sanitizer remains a possible separate patch.
 - `#139` Correct Claude Haiku 4.5 dated model id
   - Status: tiny.
   - Benefit: aligns with our current dated `claude-haiku-4-5-20251001` policy.
@@ -419,8 +438,9 @@ Decision policy:
 
 - `#151` jcode-harness embedded skills and LLM wiki memory loop
   - Status: very large, conflicting, fork/product-direction branch.
-  - Useful ideas: embedded skills, deterministic skill router, skill doctor/import CLI, project init scaffolding, wiki-memory safety prompts.
+  - Useful ideas: embedded skills, deterministic skill router, skill doctor/import CLI, project init scaffolding, interview/wizard onboarding, wiki-memory safety prompts.
   - Suggested action: do not merge wholesale. Extract only small ideas after our local `.jcode` and skill-sync patches stabilize.
+  - Interview mode direction: if adopted, make it explicit as `jcode init --interview` / `jcode init --wizard`, not the default chat behavior. It should ask project/harness questions, then generate durable `.jcode` config, prompt overlays, hooks, skills, and validation notes.
 - `#138` Filesystem sandboxing with `--sandbox` / `JCODE_SANDBOX_ROOT`
   - Status: valuable but touches many file tools and has partial security boundary for bash.
   - Suggested action: consider later as a focused safety project. Must audit every file-touching tool and document bash limitations clearly.

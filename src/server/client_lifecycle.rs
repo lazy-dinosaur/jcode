@@ -1758,6 +1758,30 @@ pub(super) async fn handle_client(
                 handle_set_subagent_model(id, model, &agent, &client_event_tx).await;
             }
 
+            Request::ActivateSkill { id, name } => {
+                let result = {
+                    let mut agent_guard = agent.lock().await;
+                    agent_guard.activate_skill(&name)
+                };
+
+                match result {
+                    Ok((name, description)) => {
+                        let _ = client_event_tx.send(ServerEvent::SkillActivated {
+                            id,
+                            name,
+                            description,
+                        });
+                    }
+                    Err(error) => {
+                        let _ = client_event_tx.send(ServerEvent::Error {
+                            id,
+                            message: error.to_string(),
+                            retry_after_secs: None,
+                        });
+                    }
+                }
+            }
+
             Request::RunSubagent {
                 id,
                 prompt,

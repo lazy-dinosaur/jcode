@@ -57,6 +57,7 @@ PATCH_REFS=(
   patch/native-project-init
   patch/ambient-serde-args
   patch/upstream-pr-triage-docs
+  patch/project-skill-sync
 )
 
 while [[ $# -gt 0 ]]; do

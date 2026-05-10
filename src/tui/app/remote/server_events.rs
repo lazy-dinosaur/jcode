@@ -162,6 +162,23 @@ pub(in crate::tui::app) fn handle_server_event(
             false
         }
         ServerEvent::Pong { .. } => false,
+        ServerEvent::SkillActivated {
+            id: _,
+            name,
+            description,
+        } => {
+            app.active_skill = Some(name.clone());
+            app.push_display_message(DisplayMessage {
+                role: "system".to_string(),
+                content: format!("Activated skill: {} - {}", name, description),
+                tool_calls: vec![],
+                duration_secs: None,
+                title: None,
+                tool_data: None,
+            });
+            app.set_status_notice(format!("Skill active: /{}", name));
+            true
+        }
         ServerEvent::ConnectionPhase { phase } => {
             let cp = match phase.as_str() {
                 "authenticating" => crate::message::ConnectionPhase::Authenticating,

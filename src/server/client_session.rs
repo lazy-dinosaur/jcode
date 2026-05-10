@@ -393,6 +393,12 @@ pub(super) async fn handle_subscribe(
     if let Some(ref dir) = subscribe_working_dir {
         let mut agent_guard = agent.lock().await;
         agent_guard.set_working_dir(dir);
+        if let Err(error) = agent_guard.refresh_skills_for_working_dir() {
+            crate::logging::warn(&format!(
+                "Failed to reload project skills for working dir '{}': {}",
+                dir, error
+            ));
+        }
         drop(agent_guard);
 
         let new_path = PathBuf::from(dir);

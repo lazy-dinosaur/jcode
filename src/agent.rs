@@ -39,7 +39,7 @@ use anyhow::Result;
 use futures::StreamExt;
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, mpsc};
@@ -196,6 +196,35 @@ impl Agent {
             .iter()
             .map(|skill| skill.name.clone())
             .collect()
+    }
+
+    fn reload_skills_for_current_working_dir(&mut self) -> Result<Arc<SkillRegistry>> {
+        let working_dir = self.session.working_dir.as_deref().map(Path::new);
+        let reloaded = SkillRegistry::load_for_working_dir(working_dir)?;
+        if let Ok(mut shared) = self.registry.skills().try_write() {
+            *shared = reloaded.clone();
+        }
+        self.skills = Arc::new(reloaded.clone());
+        Ok(Arc::new(reloaded))
+    }
+
+    pub fn refresh_skills_for_working_dir(&mut self) -> Result<usize> {
+        let reloaded = self.reload_skills_for_current_working_dir()?;
+        Ok(reloaded.list().len())
+    }
+
+    pub fn activate_skill(&mut self, name: &str) -> Result<(String, String)> {
+        let mut skills = self.current_skills_snapshot();
+        let mut skill = skills.get(name).cloned();
+
+        if skill.is_none() {
+            skills = self.reload_skills_for_current_working_dir()?;
+            skill = skills.get(name).cloned();
+        }
+
+        let skill = skill.ok_or_else(|| anyhow::anyhow!("Unknown skill: /{}", name))?;
+        self.active_skill = Some(skill.name.clone());
+        Ok((skill.name, skill.description))
     }
 
     pub fn new(provider: Arc<dyn Provider>, registry: Registry) -> Self {

@@ -231,6 +231,10 @@ pub enum Request {
         model: Option<String>,
     },
 
+    /// Activate a skill on the server-side session.
+    #[serde(rename = "activate_skill")]
+    ActivateSkill { id: u64, name: String },
+
     /// Launch a subagent immediately in the active session.
     #[serde(rename = "run_subagent")]
     RunSubagent {
@@ -827,6 +831,14 @@ pub enum ServerEvent {
     McpStatus {
         /// Server names with tool counts in "name:count" format
         servers: Vec<String>,
+    },
+
+    /// Skill activation confirmed by the server-side session.
+    #[serde(rename = "skill_activated")]
+    SkillActivated {
+        id: u64,
+        name: String,
+        description: String,
     },
 
     /// Client debug command forwarded from debug socket to TUI
@@ -1876,6 +1888,7 @@ impl Request {
             Request::RefreshModels { id } => *id,
             Request::SetModel { id, .. } => *id,
             Request::SetSubagentModel { id, .. } => *id,
+            Request::ActivateSkill { id, .. } => *id,
             Request::RunSubagent { id, .. } => *id,
             Request::SetReasoningEffort { id, .. } => *id,
             Request::SetServiceTier { id, .. } => *id,

@@ -1,5 +1,6 @@
 use super::super::{PendingRemoteMessage, PendingSplitPrompt};
 use super::*;
+use crate::skill::SkillRegistry;
 
 #[expect(
     clippy::too_many_arguments,
@@ -81,6 +82,15 @@ pub(in crate::tui::app) async fn submit_prepared_remote_input(
 ) -> Result<()> {
     if let Some(command) = input::extract_input_shell_command(&prepared.expanded) {
         submit_remote_input_shell(app, remote, prepared.raw_input, command.to_string()).await?;
+        return Ok(());
+    }
+
+    if let Some(skill_name) = SkillRegistry::parse_invocation(&prepared.expanded) {
+        remote.activate_skill(skill_name).await?;
+        app.input.clear();
+        app.cursor_pos = 0;
+        app.pending_images.clear();
+        app.set_status_notice(format!("Activating skill: /{}", skill_name));
         return Ok(());
     }
 

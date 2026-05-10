@@ -25,7 +25,7 @@ struct SkillInput {
     #[serde(default = "default_action")]
     action: String,
     /// Skill name (required for load, reload, read)
-    #[serde(default)]
+    #[serde(default, alias = "skill")]
     name: Option<String>,
 }
 
@@ -56,6 +56,10 @@ impl Tool for SkillTool {
                 "name": {
                     "type": "string",
                     "description": "Skill name."
+                },
+                "skill": {
+                    "type": "string",
+                    "description": "Skill name alias accepted from Skill-style calls."
                 }
             }
         })
@@ -89,7 +93,11 @@ impl Tool for SkillTool {
 
 impl SkillTool {
     async fn load_skill(&self, name: Option<String>) -> Result<ToolOutput> {
-        let name = name.ok_or_else(|| anyhow::anyhow!("'name' is required for load action"))?;
+        let name = name.ok_or_else(|| {
+            anyhow::anyhow!(
+                "'name' is required for load action. Pass {{\"action\":\"load\",\"name\":\"<skill>\"}} or {{\"action\":\"load\",\"skill\":\"<skill>\"}}."
+            )
+        })?;
 
         let registry = self.registry.read().await;
         let skill = registry
@@ -120,7 +128,10 @@ impl SkillTool {
                 "No skills available.\n\n\
                 Skills are loaded from:\n\
                 - ~/.claude/skills/<skill-name>/SKILL.md\n\
-                - ./.claude/skills/<skill-name>/SKILL.md\n\n\
+                - ./.jcode/skills/<skill-name>/SKILL.md\n\
+                - ./.claude/skills/<skill-name>/SKILL.md\n\
+                - ./.agents/skills/<skill-name>/SKILL.md\n\
+                - ./.opencode/skills/<skill-name>/SKILL.md\n\n\
                 Create a SKILL.md file with YAML frontmatter:\n\
                 ---\n\
                 name: my-skill\n\
@@ -277,6 +288,7 @@ mod tests {
         assert_eq!(schema["type"], "object");
         assert!(schema["properties"]["action"].is_object());
         assert!(schema["properties"]["name"].is_object());
+        assert!(schema["properties"]["skill"].is_object());
     }
 
     #[tokio::test]
@@ -298,6 +310,17 @@ mod tests {
         let result = tool.execute(input, ctx).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("name"));
+    }
+
+    #[tokio::test]
+    async fn test_load_accepts_skill_alias() {
+        let tool = create_test_tool();
+        let ctx = create_test_context();
+        let input = json!({"action": "load", "skill": "missing-alias"});
+
+        let result = tool.execute(input, ctx).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("missing-alias"));
     }
 
     #[tokio::test]

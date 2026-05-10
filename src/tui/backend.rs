@@ -530,6 +530,18 @@ impl RemoteConnection {
         self.send_request(request).await
     }
 
+    /// Activate a skill on the server-side session.
+    pub async fn activate_skill(&mut self, name: &str) -> Result<u64> {
+        let id = self.next_request_id;
+        let request = Request::ActivateSkill {
+            id,
+            name: name.to_string(),
+        };
+        self.next_request_id += 1;
+        self.send_request(request).await?;
+        Ok(id)
+    }
+
     /// Launch a subagent immediately on the active remote session.
     pub async fn run_subagent(
         &mut self,
