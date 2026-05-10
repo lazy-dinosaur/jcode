@@ -90,6 +90,28 @@ fn cleanup_candidate_session_ids(
     )
 }
 
+async fn ensure_cleanup_coordinator(ctx: &ToolContext) -> Result<()> {
+    let request = Request::CommAssignRole {
+        id: REQUEST_ID,
+        session_id: ctx.session_id.clone(),
+        target_session: ctx.session_id.clone(),
+        role: "coordinator".to_string(),
+    };
+
+    match send_request(request).await {
+        Ok(response) => ensure_success(&response).map_err(|error| {
+            anyhow::anyhow!(
+                "Cleanup needs coordinator role before stopping workers: {}. Try `swarm assign_role target_session=current role=coordinator`, then retry cleanup.",
+                error
+            )
+        }),
+        Err(error) => Err(anyhow::anyhow!(
+            "Failed to verify cleanup coordinator role: {}",
+            error
+        )),
+    }
+}
+
 fn auto_assignment_needs_spawn(response: &ServerEvent) -> bool {
     check_error(response).is_some_and(|message| {
         message.contains(
@@ -135,6 +157,8 @@ async fn cleanup_swarm_workers(ctx: &ToolContext, params: &CommunicateInput) -> 
             target_status.join(", ")
         ));
     }
+
+    ensure_cleanup_coordinator(ctx).await?;
 
     let mut stopped = Vec::new();
     let mut failed = Vec::new();
