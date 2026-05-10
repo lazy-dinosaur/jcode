@@ -12,6 +12,11 @@ impl Agent {
         let mut empty_after_tool_continuations = 0u32;
 
         loop {
+            // Clear any stale background-tool request before the provider can emit
+            // ToolStart for this turn. Once ToolStart is visible to the UI, an
+            // Alt+B fire must be preserved until the tool execution select observes it.
+            self.background_tool_signal.reset();
+
             let repaired = self.repair_missing_tool_outputs();
             if repaired > 0 {
                 logging::warn(&format!(
@@ -826,9 +831,6 @@ impl Agent {
                         .execute(&tool_name_for_spawn, tool_input_for_spawn, ctx)
                         .await
                 });
-
-                // Reset background signal before waiting
-                self.background_tool_signal.reset();
 
                 // Wait for tool completion OR background signal from user (Alt+B)
                 // OR graceful shutdown signal from server reload

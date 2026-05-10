@@ -2,8 +2,7 @@ use super::*;
 use crate::agent::environment::EnvSnapshotDetail;
 use crate::message::{Message, StreamEvent, ToolDefinition};
 use crate::provider::{EventStream, Provider};
-use crate::tool::Registry;
-use crate::tool::ToolOutput;
+use crate::tool::{Registry, Tool, ToolContext, ToolOutput};
 use async_trait::async_trait;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -22,6 +21,18 @@ struct SequentialProvider {
     calls: Arc<AtomicUsize>,
 }
 
+struct GatedToolProvider {
+    tool_started: Arc<tokio::sync::Notify>,
+    release_tool_end: Arc<tokio::sync::Notify>,
+    calls: Arc<AtomicUsize>,
+}
+
+struct SingleToolProvider {
+    calls: Arc<AtomicUsize>,
+}
+
+struct DelayTestTool;
+
 impl SequentialProvider {
     fn new(responses: Vec<Vec<StreamEvent>>) -> (Self, Arc<AtomicUsize>) {
         let calls = Arc::new(AtomicUsize::new(0));
@@ -31,6 +42,22 @@ impl SequentialProvider {
                 calls: calls.clone(),
             },
             calls,
+        )
+    }
+}
+
+impl GatedToolProvider {
+    fn new() -> (Self, Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>) {
+        let tool_started = Arc::new(tokio::sync::Notify::new());
+        let release_tool_end = Arc::new(tokio::sync::Notify::new());
+        (
+            Self {
+                tool_started: tool_started.clone(),
+                release_tool_end: release_tool_end.clone(),
+                calls: Arc::new(AtomicUsize::new(0)),
+            },
+            tool_started,
+            release_tool_end,
         )
     }
 }
@@ -148,6 +175,146 @@ impl Provider for SequentialProvider {
             responses: std::sync::Mutex::new(responses),
             calls: self.calls.clone(),
         })
+    }
+}
+
+#[async_trait]
+impl Provider for GatedToolProvider {
+    async fn complete(
+        &self,
+        _messages: &[Message],
+        _tools: &[ToolDefinition],
+        _system: &str,
+        _resume_session_id: Option<&str>,
+    ) -> Result<EventStream> {
+        let call = self.calls.fetch_add(1, Ordering::SeqCst);
+        let (tx, rx) = tokio_mpsc::channel::<Result<StreamEvent>>(8);
+        if call == 0 {
+            let tool_started = self.tool_started.clone();
+            let release_tool_end = self.release_tool_end.clone();
+            tokio::spawn(async move {
+                let _ = tx
+                    .send(Ok(StreamEvent::ToolUseStart {
+                        id: "call_delay".to_string(),
+                        name: "delay_test".to_string(),
+                    }))
+                    .await;
+                tool_started.notify_waiters();
+                release_tool_end.notified().await;
+                let _ = tx
+                    .send(Ok(StreamEvent::ToolInputDelta(
+                        serde_json::json!({"delay_ms": 50}).to_string(),
+                    )))
+                    .await;
+                let _ = tx.send(Ok(StreamEvent::ToolUseEnd)).await;
+                let _ = tx
+                    .send(Ok(StreamEvent::MessageEnd {
+                        stop_reason: Some("tool_use".to_string()),
+                    }))
+                    .await;
+            });
+        } else {
+            tokio::spawn(async move {
+                let _ = tx
+                    .send(Ok(StreamEvent::TextDelta("done".to_string())))
+                    .await;
+                let _ = tx
+                    .send(Ok(StreamEvent::MessageEnd {
+                        stop_reason: Some("end_turn".to_string()),
+                    }))
+                    .await;
+            });
+        }
+        Ok(Box::pin(ReceiverStream::new(rx)))
+    }
+
+    fn name(&self) -> &str {
+        "gated-tool"
+    }
+
+    fn fork(&self) -> Arc<dyn Provider> {
+        Arc::new(Self {
+            tool_started: self.tool_started.clone(),
+            release_tool_end: self.release_tool_end.clone(),
+            calls: self.calls.clone(),
+        })
+    }
+}
+
+#[async_trait]
+impl Provider for SingleToolProvider {
+    async fn complete(
+        &self,
+        _messages: &[Message],
+        _tools: &[ToolDefinition],
+        _system: &str,
+        _resume_session_id: Option<&str>,
+    ) -> Result<EventStream> {
+        let call = self.calls.fetch_add(1, Ordering::SeqCst);
+        let events = if call == 0 {
+            vec![
+                StreamEvent::ToolUseStart {
+                    id: "call_delay".to_string(),
+                    name: "delay_test".to_string(),
+                },
+                StreamEvent::ToolInputDelta(serde_json::json!({"delay_ms": 50}).to_string()),
+                StreamEvent::ToolUseEnd,
+                StreamEvent::MessageEnd {
+                    stop_reason: Some("tool_use".to_string()),
+                },
+            ]
+        } else {
+            vec![
+                StreamEvent::TextDelta("done".to_string()),
+                StreamEvent::MessageEnd {
+                    stop_reason: Some("end_turn".to_string()),
+                },
+            ]
+        };
+        let (tx, rx) = tokio_mpsc::channel::<Result<StreamEvent>>(8);
+        tokio::spawn(async move {
+            for event in events {
+                let _ = tx.send(Ok(event)).await;
+            }
+        });
+        Ok(Box::pin(ReceiverStream::new(rx)))
+    }
+
+    fn name(&self) -> &str {
+        "single-tool"
+    }
+
+    fn fork(&self) -> Arc<dyn Provider> {
+        Arc::new(Self {
+            calls: self.calls.clone(),
+        })
+    }
+}
+
+#[async_trait]
+impl Tool for DelayTestTool {
+    fn name(&self) -> &str {
+        "delay_test"
+    }
+
+    fn description(&self) -> &str {
+        "Test-only delay tool"
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {"delay_ms": {"type": "integer"}}
+        })
+    }
+
+    async fn execute(&self, input: serde_json::Value, _ctx: ToolContext) -> Result<ToolOutput> {
+        let delay_ms = input
+            .get("delay_ms")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(50);
+        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+        Ok(ToolOutput::new("delay done"))
     }
 }
 
@@ -541,6 +708,21 @@ async fn interrupt_signal_reset_clears_flag() {
 }
 
 #[tokio::test]
+async fn interrupt_signal_altb_early_race_fire_survives_until_reset() {
+    let sig = InterruptSignal::new();
+    sig.fire();
+
+    tokio::time::timeout(Duration::from_millis(100), sig.notified())
+        .await
+        .expect("early fire should wake notified() immediately while the flag remains set");
+
+    sig.reset();
+    tokio::time::timeout(Duration::from_millis(25), sig.notified())
+        .await
+        .expect_err("reset signal should not wake notified() without a new fire");
+}
+
+#[tokio::test]
 async fn interrupt_signal_notified_completes_after_fire() {
     let sig = Arc::new(InterruptSignal::new());
     let sig2 = Arc::clone(&sig);
@@ -556,6 +738,105 @@ async fn interrupt_signal_notified_completes_after_fire() {
         .await
         .expect("notified() task timed out after fire()")
         .expect("task panicked");
+}
+
+#[tokio::test]
+async fn turn_streaming_mpsc_altb_early_race_preserves_fire_after_tool_start() {
+    let _guard = crate::storage::lock_test_env();
+    let (provider, tool_started, release_tool_end) = GatedToolProvider::new();
+    let provider: Arc<dyn Provider> = Arc::new(provider);
+    let registry = Registry::empty();
+    registry
+        .register("delay_test".to_string(), Arc::new(DelayTestTool))
+        .await;
+    let mut agent = Agent::new(provider, registry);
+    let background_signal = agent.background_tool_signal();
+    agent.add_message(
+        Role::User,
+        vec![ContentBlock::Text {
+            text: "run the delay tool".to_string(),
+            cache_control: None,
+        }],
+    );
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let task = tokio::spawn(async move { agent.run_turn_streaming_mpsc(tx).await });
+
+    tokio::time::timeout(Duration::from_millis(500), tool_started.notified())
+        .await
+        .expect("provider should emit ToolStart");
+    background_signal.fire();
+    release_tool_end.notify_waiters();
+
+    let mut saw_background_done = false;
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        match tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
+            Ok(Some(ServerEvent::ToolDone { output, .. }))
+                if output.contains("moved to background") =>
+            {
+                saw_background_done = true;
+                break;
+            }
+            Ok(Some(_)) => {}
+            Ok(None) => break,
+            Err(_) => {}
+        }
+    }
+
+    assert!(
+        saw_background_done,
+        "Alt+B fired after ToolStart should detach the running tool"
+    );
+    tokio::time::timeout(Duration::from_secs(2), task)
+        .await
+        .expect("turn should finish")
+        .expect("turn task should not panic")
+        .expect("turn should succeed");
+}
+
+#[tokio::test]
+async fn turn_streaming_mpsc_clears_stale_background_signal_before_next_tool_start() {
+    let _guard = crate::storage::lock_test_env();
+    let provider: Arc<dyn Provider> = Arc::new(SingleToolProvider {
+        calls: Arc::new(AtomicUsize::new(0)),
+    });
+    let registry = Registry::empty();
+    registry
+        .register("delay_test".to_string(), Arc::new(DelayTestTool))
+        .await;
+    let mut agent = Agent::new(provider, registry);
+    agent.add_message(
+        Role::User,
+        vec![ContentBlock::Text {
+            text: "run the delay tool".to_string(),
+            cache_control: None,
+        }],
+    );
+    agent.background_tool_signal().fire();
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    agent.run_turn_streaming_mpsc(tx).await.unwrap();
+
+    let tool_done_outputs: Vec<String> = std::iter::from_fn(|| rx.try_recv().ok())
+        .filter_map(|event| match event {
+            ServerEvent::ToolDone { output, .. } => Some(output),
+            _ => None,
+        })
+        .collect();
+
+    assert!(
+        tool_done_outputs
+            .iter()
+            .any(|output| output == "delay done"),
+        "stale background signal should be cleared before the tool starts"
+    );
+    assert!(
+        tool_done_outputs
+            .iter()
+            .all(|output| !output.contains("moved to background")),
+        "stale background signal must not auto-background a later tool"
+    );
 }
 
 #[tokio::test]

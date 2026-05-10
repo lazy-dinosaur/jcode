@@ -2791,8 +2791,18 @@ fn move_tool_to_background(
     session_control: &SessionControlHandle,
     client_event_tx: &mpsc::UnboundedSender<ServerEvent>,
 ) {
-    session_control.request_background_current_tool();
-    let _ = client_event_tx.send(ServerEvent::Ack { id });
+    if session_control.request_background_current_tool() {
+        let _ = client_event_tx.send(ServerEvent::Ack { id });
+    } else {
+        crate::logging::debug(
+            "background_tool requested but no active session control signal is registered",
+        );
+        let _ = client_event_tx.send(ServerEvent::Error {
+            id,
+            message: "No active tool is available to move to background".to_string(),
+            retry_after_secs: None,
+        });
+    }
 }
 
 /// Process a message and stream events (mpsc channel - per-client)

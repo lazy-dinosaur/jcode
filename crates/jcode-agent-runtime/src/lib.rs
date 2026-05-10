@@ -74,6 +74,27 @@ impl Default for InterruptSignal {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::InterruptSignal;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn background_tool_signal_fire_before_notified_survives_until_reset() {
+        let signal = InterruptSignal::new();
+        signal.fire();
+
+        tokio::time::timeout(Duration::from_millis(100), signal.notified())
+            .await
+            .expect("fire before notified() should wake immediately while the flag is set");
+
+        signal.reset();
+        tokio::time::timeout(Duration::from_millis(25), signal.notified())
+            .await
+            .expect_err("reset signal should not wake without another fire");
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 #[error("{message}")]
 pub struct StreamError {
