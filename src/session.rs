@@ -478,6 +478,11 @@ impl Session {
         };
     }
 
+    #[cfg(test)]
+    pub(crate) fn persisted_messages_len_for_test(&self) -> usize {
+        self.persist_state.messages_len
+    }
+
     fn reset_provider_messages_cache(&mut self) {
         self.provider_messages_cache.clear();
         self.provider_message_prefix_hashes_cache.clear();
@@ -1103,6 +1108,12 @@ impl Session {
             .merge_from(&summarize_blocks(&message.content));
         self.messages.push(message);
         self.mark_messages_append_dirty();
+        let message = self
+            .messages
+            .last()
+            .expect("append_stored_message just pushed a message")
+            .clone();
+        let _ = self.append_journal_entry_for_new_message(&message);
     }
 
     pub fn insert_message(&mut self, index: usize, message: StoredMessage) {
