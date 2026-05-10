@@ -150,7 +150,7 @@ fn agent_dirs_for_project(project_dir: &Path) -> [PathBuf; 4] {
     ]
 }
 
-fn split_frontmatter(content: &str) -> Result<Option<(&str, &str)>> {
+pub(crate) fn split_frontmatter(content: &str) -> Result<Option<(&str, &str)>> {
     let Some(rest) = content.strip_prefix("---\n") else {
         return Ok(None);
     };
@@ -174,7 +174,7 @@ fn file_stem_name(path: &Path) -> String {
         .to_string()
 }
 
-fn string_field(value: &Value, names: &[&str]) -> Option<String> {
+pub(crate) fn string_field(value: &Value, names: &[&str]) -> Option<String> {
     names
         .iter()
         .find_map(|name| value.get(*name))
@@ -182,7 +182,7 @@ fn string_field(value: &Value, names: &[&str]) -> Option<String> {
         .and_then(non_empty_string)
 }
 
-fn string_list_field(value: &Value, names: &[&str]) -> Vec<String> {
+pub(crate) fn string_list_field(value: &Value, names: &[&str]) -> Vec<String> {
     let Some(value) = names.iter().find_map(|name| value.get(*name)) else {
         return Vec::new();
     };
