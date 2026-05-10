@@ -72,6 +72,7 @@ PATCH_REFS=(
   patch/global-jcode-md-resources
   patch/jcode-doctor
   patch/swarm-stability-core
+  patch/swarm-run-id
 )
 
 while [[ $# -gt 0 ]]; do
