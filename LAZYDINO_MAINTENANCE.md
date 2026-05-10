@@ -204,6 +204,72 @@ Track each custom patch as a small commit. Current known customizations:
    - Binary reinstall required: yes, because this changes runtime behavior.
 
 
+
+## Project-local harness initialization skill
+
+A reusable Claude/Jcode skill exists to initialize project-local `.jcode/` harness directories on demand.
+
+Skill location:
+
+```text
+/home/lazydino/.claude/skills/jcode-init/SKILL.md
+/home/lazydino/.claude/skills/jcode-init/scripts/init-jcode-project.sh
+```
+
+Purpose:
+
+- Create a private project-local `.jcode/` harness without editing shared team `AGENTS.md`.
+- Generate project-local config, prompt files, routing policy notes, and basic tool hooks.
+- Keep `.jcode/` private by adding it to `.git/info/exclude` by default.
+- Support an explicit override mode for projects where the personal harness should ignore team instructions.
+
+Generated files:
+
+```text
+.jcode/config.toml
+.jcode/AGENTS.md
+.jcode/harness/10-routing-policy.md
+.jcode/harness/20-project-rules.md
+.jcode/hooks/check-bash.sh
+.jcode/hooks/log-tool.sh
+```
+
+Default command:
+
+```bash
+~/.claude/skills/jcode-init/scripts/init-jcode-project.sh <target-project>
+```
+
+Useful options:
+
+```bash
+--force               overwrite existing generated files
+--gitignore           add .jcode/ to project .gitignore instead of .git/info/exclude
+--ignore-team-agents  set [prompt].ignore_project_agents = true
+```
+
+Default policy:
+
+- Team/project `AGENTS.md` stays enabled.
+- Private `.jcode/AGENTS.md` and `.jcode/harness/*.md` load after team/global instructions.
+- `.jcode/` is ignored through `.git/info/exclude` so it remains local and private.
+
+Validation performed:
+
+```bash
+# temp git project
+~/.claude/skills/jcode-init/scripts/init-jcode-project.sh <tmp-project>
+python3 -c 'import tomllib, pathlib; tomllib.loads(pathlib.Path("<tmp-project>/.jcode/config.toml").read_text())'
+printf '{"input":{"command":"rm -rf /"}}' | <tmp-project>/.jcode/hooks/check-bash.sh
+
+git -C <tmp-project> check-ignore -v .jcode/config.toml
+```
+
+Expected hook behavior:
+
+- safe bash commands return `{"action":"allow"}`.
+- dangerous destructive patterns such as `rm -rf /` return `{"action":"deny", ...}`.
+
 ## Personal environment fixes
 
 ### tmux Ctrl+h/j/k/l passthrough for jcode
