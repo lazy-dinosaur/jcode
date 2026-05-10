@@ -22,6 +22,10 @@
 | M4  | TUI interleave 가 tool 완료 후에야 흡수됨 (jcode 원설계) | 🟡 BY-DESIGN with caveats — UX 개선 가치 | Medium |
 | M5  | Alt+B early race — `background_tool_signal.reset()` 이 너무 늦음 | ✅ **DONE** (commit `52375aac` + `f76dfdda`, binary `f76dfdda`) | — |
 | M6  | Alt+B 후 부모 turn 이 idle 빠져도 background task 완료 시 자동 wake | ✅ **DONE** (commit `f2c8430f` + `074dcbef`, binary `074dcbef`) — 라이브 30s idle wake 검증 완료 (T-PLAN 2026-05-10 12:36 UTC) | — |
+| M7  | 비정상 종료 시 메시지 유실 — `/reload`, server SIGKILL/crash 시 `/save` 안 부른 채로 종료하면 모든 메시지 날아감 | ✅ **DONE** (commit `5f597b98`, binary `5f597b98`) — `load_startup_stub` fallback 이 journal replay 하도록 fix + 회귀 테스트 추가 | **Critical (데이터 유실)** |
+| M8  | Alt+B 가 가끔 background 로 detach 안 되는 버그 (M5 잔여 또는 다른 race) | 🟠 OPEN — reproduction 정보 필요 (사용자 재현 시 로그 캡처) | High |
+| M9  | Hook 이중 발동 의심 — `jcode run` 단발 CLI 에서만 1회 관찰, TUI 재현 시도(3 세션) 모두 1회씩 정상 fire | 🟡 INVESTIGATING — 1회 관찰, 재현 안 됨 (T-M3 follow-up 2026-05-10 13:08 UTC) | Low-Medium (재현 어려움) |
+| M10 | Non-blocking lifecycle hook 이 단발성 CLI (`jcode run`) 에서 race 로 누락 — `tokio::spawn` fire-and-forget + 즉시 process 종료 | 🔴 OPEN — 라이브 재현 완료 (T-M3 2026-05-10 12:54 UTC, blocking=true 로 동작 검증) | Medium |
 
 ⚠️ **운영 노트** (2026-05-10): 모든 fix 가 binary 까지 깔려도 **이미 띄워진 jcode server process 는 옛 binary 를 메모리에 들고 있음**. 새 patch 효과를 보려면 사용자가 `/reload` 또는 `/restart` 로 server 재시작 필요. 이걸 안 해서 M5/M1 효과가 안 보이는 것처럼 느껴진 적이 있음 (현재 PID 479123 = 18:12 시작 server, M5 빌드 이전).
 
@@ -524,3 +528,282 @@ oracle 이중 검증 결과를 반영한 우선순위:
 fork (`lazy-dinosaur/jcode`): PR 0 개, issues disabled, hit 없음.
 
 상세 내용은 위 각 마일스톤 본문의 "upstream PR/issue 조사" 섹션 참고.
+
+---
+
+## 📍 Milestone M7 — 비정상 종료 시 메시지 유실 (reload + crash) 🔴 OPEN
+
+상태: **🔴 OPEN — oracle 진단 진행중 (task `167472npu9` 대기)**
+우선순위: **Critical (데이터 유실)**
+
+### 증상
+
+1. `~/.jcode/sessions/<id>.json` (snapshot) 이 메시지 1 개 (세션 시작 시점) 로 굳어 있음.
+2. `~/.jcode/sessions/<id>.journal.jsonl` 만 활발히 채워짐 (수십~수백 줄).
+3. `/reload` 또는 server SIGKILL/crash 후 `journal` 을 무시하는 경로로 reload 되면 메시지 다 사라짐.
+
+### 라이브 증거 (2026-05-10 12:43 UTC)
+
+```
+session_mouse_1778416384546_b20646bdb7e456c9
+  snap_msgs=1 snap_mtime=12:33:04 UTC (세션 시작)
+  jrn_lines=88 jrn_mtime=12:43:34 UTC (활발히 기록)
+  diff=630s (10.5 분간 snapshot 미갱신)
+```
+
+10 개 이상의 다른 세션에서도 동일 패턴 확인.
+
+### Root cause (oracle v1, task `096192ai9s`, 2026-05-10 12:48 UTC)
+
+**가장 유력 원인**: `src/session/persistence.rs:159-163` `load_startup_stub()` 가 snapshot JSON 만 읽고 journal 을 무시한다. 그리고 `src/session.rs:268-298` 의 `session_from_startup_stub()` 는 명시적으로 `session.messages.clear()` 등으로 transcript 를 다 비운다.
+
+`src/server/client_state.rs:162-163, 288-289, 340-341` 에서 reload/history 경로가 `Session::load_for_remote_startup` 실패 시 `Session::load_startup_stub` 으로 fallback 하는데, **이 fallback 이 발동하면 디스크의 journal 데이터를 봤어도 화면엔 0 메시지로 뜸**.
+
+세부 트리거:
+- 첫 save 전에 server crash → snapshot 파일이 0 메시지인 채로 굳음
+- `append_journal_entry_for_new_message` 의 early-return `!snapshot_path.exists()` (line 51) 로 새 세션 첫 메시지가 journal 에도 안 기록될 가능성
+- journal append 시 fsync 부재 (의심) — SIGKILL 시 OS buffer 의 데이터 유실
+
+(상세 root cause 매트릭스는 oracle v2 결과 도착 후 확정 — task `167472npu9`.)
+
+### 회귀 위험
+
+- `load_startup_stub` 에 journal 적용 추가 시 startup latency 영향 (현재는 paint 우선 빠른 stub 용도)
+- fsync 추가 시 hot path 성능 영향
+- fallback 경로 자체를 제거하면 normal-case 에서 stub 의 lightweight 의도 깨짐
+
+### 수정안 (oracle v2 결과 후 확정)
+
+후보 (잠정):
+- A. `load_startup_stub` fallback 시에도 journal 을 적용하도록 변경 (1 줄 가까운 fix)
+- B. journal append 시 fsync 옵션 추가
+- C. 메시지 push 즉시 durable persist 보장 (큰 변경)
+
+### 검증 계획
+
+- 단위 테스트: `load_startup_stub_preserves_journal_messages` 추가
+- 라이브 검증: 현재 `session_mouse_*` 세션을 사본 떠놓고 `/reload` 후 메시지 카운트 측정 (88 lines journal 이 화면 메시지에 반영되는지)
+- crash injection: kill -9 직후 reload 시 메시지 보존 측정
+
+---
+
+## 📍 Milestone M8 — Subagent Alt+B 가 가끔 background detach 안 됨 🟠 OPEN
+
+상태: **🟠 OPEN — reproduction 정보 수집중**
+우선순위: **High**
+
+### 증상 (사용자 보고, 2026-05-10)
+
+- subagent 도구 (가끔 edit/bash 도) 에 Alt+B 누르면 **"Moving tool to background..." status notice 만 뜨고 풀리지 않음**.
+- detach 안 되어 도구가 foreground 에서 계속 도는 채 turn 이 잠김.
+
+### 차별 (M5 와 다름)
+
+M5 는 `background_tool_signal.reset()` 이 fire 를 wipe 해서 신호 자체가 안 잡힌 케이스 (이미 수정됨, commit `52375aac`). M8 은 **status notice 까지 떴는데 풀리지 않는** 다른 패턴.
+
+### 의심 root cause (잠정)
+
+코드 흐름:
+1. TUI: `key_handling.rs:336-340` 에서 `ProcessingStatus::RunningTool` 일 때만 `remote.background_tool()` 호출.
+2. server: `client_lifecycle.rs:1330` `Request::BackgroundTool` → `move_tool_to_background` (line 2789) → `session_control.request_background_current_tool()` 호출.
+3. `state.rs:473-480`: `background_tool_signal` 이 등록된 경우만 fire, 아니면 false.
+
+**가설 A (가장 의심)**: subagent 호출 직후 client 측 status 가 잠시 `Streaming`/`Reasoning` 상태인 동안 Alt+B 무시됨 → 사용자가 다시 누르면 그땐 RunningTool 인데 server signal listener 가 이미 dropped 상태 (race).
+
+**가설 B**: subagent 의 nested tool 실행 중에 inner agent 가 자체 background_tool_signal 을 들고 있어서 outer (parent) 의 신호를 못 받음. M1 에서 부분적으로 다뤘지만 detach 자체에는 적용되지 않은 가능성.
+
+**가설 C**: `RunningTool` 상태 진입과 server 측 signal 등록 사이의 race. TUI 가 `RunningTool` 로 전환된 시점 ≠ server 가 signal 등록한 시점.
+
+### 라이브 데이터
+
+오늘 jcode 로그 (`~/.jcode/logs/jcode-2026-05-10.log`) 에서 12:00~12:48 UTC 사이 모든 Alt+B 시도가 정상 detach 됨 ("Tool 'subagent' moved to background after ..." 로그). 사용자 보고 케이스는 이 시점 이전 또는 다른 세션일 수 있음. 정확한 reproduction 정보 + 그때의 server 로그 필요.
+
+### 진단 다음 단계
+
+1. 사용자한테 reproduction 시 어떤 세션이었고, 시각, 로그 캡처 부탁
+2. 현재 세션에서 의도적으로 race 조건 만들어 재현 시도 (subagent 호출 직후 ms 단위로 Alt+B)
+3. server 측에 "background_tool requested but no active session control signal is registered" debug 로그 (line 2797) 가 떴는지 확인
+4. M8 은 M7 다음 진행 (M7 critical, M8 high)
+
+---
+
+## 📍 Milestone M9 — Hook 이중 발동 (project-local config 가 글로벌 config 를 자기 자신으로 인식) 🔴 OPEN
+
+상태: **🟡 INVESTIGATING — 1회 관찰, 후속 재현 시도 모두 실패 (2026-05-10 13:08 UTC)**
+우선순위: **Low-Medium (재현 어려움. 코드 가설은 그럴듯하지만 라이브 데이터로는 한 번만 관찰됨)**
+
+### 증상 (1회 관찰, T-M3 첫 검증, 2026-05-10 12:55 UTC)
+
+- `[hooks]` 섹션을 `~/.jcode/config.toml` 한 곳에만 정의했는데, **`response.completed` hook 의 동일 payload 가 한 turn 당 두 행씩 로그 파일에 추가됨** (session_id, message_id 동일).
+- 환경: `jcode run "OK"` 단발 CLI, working_dir=`/home/lazydino`, blocking=true.
+
+### 후속 재현 시도 (2026-05-10 13:06~13:08 UTC) — 모두 1회씩 정상 fire
+
+| 시도 | 환경 | 결과 |
+|------|------|------|
+| rooster session | TUI, working_dir=`/home/lazydino`, blocking=true | response.completed × 1, session.stop × 1 |
+| sheep session   | TUI, working_dir=`/home/lazydino/dev/jcode`, blocking=true | response.completed × 1, session.stop × 1 |
+| sloth session   | TUI, working_dir=`/home/lazydino`, blocking=true | response.completed × 1, session.stop × 1 |
+
+→ TUI 컨텍스트에서는 **모두 정상**. 단발 `jcode run` 컨텍스트에선 첫 1회만 이중 발동 후 미재현.
+
+### 결정적 코드 근거 (가설, 라이브 검증은 부분만 일치)
+
+`src/config/config_file.rs:104-119` `hooks_for_working_dir`:
+
+```rust
+pub fn hooks_for_working_dir(&self, working_dir: Option<&Path>) -> HooksConfig {
+    let mut hooks = self.hooks.clone();  // ← 글로벌 한 번
+    if let Some(project_dir) = working_dir.and_then(Self::find_project_config_dir) {
+        for config_path in [
+            project_dir.join(".jcode").join("config.toml"),
+            project_dir.join(".jcode").join("config.local.toml"),
+        ] {
+            if let Some(project_hooks) = Self::load_hooks_from_file(&config_path) {
+                hooks.enabled |= project_hooks.enabled || !project_hooks.commands.is_empty();
+                hooks.commands.extend(project_hooks.commands);  // ← 또 한 번 append
+            }
+        }
+    }
+    hooks
+}
+```
+
+`find_project_config_dir` 는 working_dir 부터 ancestors 를 훑어 첫 `.jcode/config.toml` 가 있는 dir 을 project root 로 잡음. 이론상 working_dir 가 home 하위면 `~/.jcode/config.toml` 이 hit 되어 같은 파일을 두 번 read → hooks 가 2회 등록되어야 함.
+
+**그런데 라이브 결과가 코드 가설과 어긋남**: TUI 3 세션 모두 1회씩만 fire 되었고, working_dir=`/home/lazydino` 인 케이스도 정상이었음. 가능한 설명:
+
+1. `find_project_config_dir` 실제 구현이 우리가 추측한 것과 다름 (예: 자기 참조 skip 로직이 이미 있거나, 글로벌 jcode_dir 를 명시적으로 제외).
+2. TUI 와 단발 CLI 의 hook register path 가 갈라져 있고, 단발 path 에만 중복 register 가 있음.
+3. 첫 검증의 2회 발동이 **다른 원인** (예: 같은 turn 에서 assistant message 가 두 번 emit, hot-reload 직후 일시적 stale state, 같은 server 에 다른 session 이 동시에 있어서 cross-fire 등).
+
+### 다음 진단 단계
+
+1. **`find_project_config_dir` 실구현 직접 read** — `~/.jcode/config.toml` 자기 참조를 정말 하는지 print/log 추가하지 않고도 코드만으로 판정 가능.
+2. 단발 `jcode run` 으로 동일 환경 (working_dir=home, hooks blocking=true) 재현해서 다시 테스트.
+3. 만약 단발 CLI 에서만 재현되면 M10 (race) 와 결합된 효과일 수도 있음 — 두 마일스톤 통합 검토.
+
+### 라이브 재현 데이터 (1회 관찰)
+
+```
+$ cat /tmp/jcode-response-completed.log   # 12:55 UTC, jcode run "OK" 직후
+{"event":"response.completed","session_id":"session_elephant_...",..."output_chars":2}{"event":"response.completed","session_id":"session_elephant_...",..."output_chars":2}
+```
+
+후속 검증 데이터 (13:08 UTC, 3 sessions, TUI):
+```
+session_sheep_177841...  cwd=/home/lazydino/dev/jcode  → 1 회
+session_sloth_177841...  cwd=/home/lazydino             → 1 회
+session_horse_177841...  cwd=/home/lazydino             → 1 회
+```
+
+### 해결 방향 (가설 기반, 코드 read 후 확정 필요)
+
+1. **자기 자신 제외**: `find_project_config_dir` 가 발견한 path 의 canonical 이 `JCODE_HOME` 과 같으면 project-local merge 를 skip. (이미 구현돼 있을 수 있음, 코드 확인 필요.)
+2. **명시적 marker**: project-local 만 인식하는 별도 marker 파일 사용.
+3. **glob expansion 시 dedupe**: `load_hooks_from_file` 결과를 commands 합치기 전에 `(event, command)` 튜플로 dedupe.
+
+### 회귀 위험 (fix 적용 시)
+
+- 진짜 working_dir 아래에 별도 `.jcode/config.toml` 이 있는 케이스 (예: `/home/lazydino/dev/jcode/.jcode/config.toml`) 는 그대로 동작해야 함.
+- prompt_for_working_dir, agents_for_working_dir 도 같은 패턴이라 영향 가능.
+
+### 검증 시나리오 (이 마일스톤을 close 하려면)
+
+1. **재현부터**: `jcode run "OK"` 단발 호출로 일관된 이중 발동 재현 시도. 로그 1회마다 정확히 2 행이 기록되는지 카운트.
+2. 재현되면 fix 적용 → 1 행으로 줄어드는지 확인.
+3. 재현 안 되면 **M9 close — Cannot reproduce** 처리. 원래 1회 관찰은 첫 검증의 일시적 인공물 (config hot-reload, double session start 등) 로 기록.
+
+### 관련 파일
+
+- `src/config/config_file.rs:104-119` `hooks_for_working_dir`
+- `src/config/config_file.rs:124-141` `prompt_for_working_dir` (같은 패턴)
+- `src/config/config_file.rs:148-178` `agents_for_working_dir` (같은 패턴)
+- `src/hooks.rs` `run_lifecycle_hook_commands` (caller)
+
+---
+
+## 📍 Milestone M10 — Non-blocking lifecycle hook 이 단발성 CLI process 에서 race 로 누락 🔴 OPEN
+
+상태: **🔴 OPEN — 라이브 재현 완료 (T-M3 검증 도중 발견, 2026-05-10 12:54 UTC)**
+우선순위: **Medium**
+
+### 증상
+
+- `[[hooks.commands]]` 에서 `blocking = false` 인 hook 은 `jcode run "..."` 같은 단발성 CLI 호출에서 **fire 안 됨** (로그 파일 0 byte).
+- `blocking = true` 로 바꾸면 즉시 정상 fire.
+- TUI 모드 / `jcode debug message --wait` 같은 server-attached path 에선 non-blocking 도 정상 작동 (server 가 살아있으니 spawn task 가 끝까지 살아남음).
+
+### 결정적 코드 근거
+
+`src/hooks.rs` `run_lifecycle_hook_commands`:
+
+```rust
+} else {
+    // non-blocking: tokio::spawn 으로 fire-and-forget
+    let command = hook.command.clone();
+    ...
+    tokio::spawn(async move {
+        if let Err(err) =
+            run_nonblocking_hook(&command, timeout_ms, cwd.as_deref(), &payload_json).await
+        {
+            crate::logging::warn(...);
+        }
+    });
+}
+```
+
+`tokio::spawn` 은 task 를 runtime 에 넘기고 **JoinHandle 을 버림**. caller 함수는 즉시 return. 그러면:
+
+1. `jcode run` 의 turn loop 가 `fire_response_completed_hook().await` 호출.
+2. 그 안에서 `tokio::spawn(...)` 으로 non-blocking hook task 등록 + 즉시 return.
+3. turn 끝남 → process 종료 절차 시작 → tokio runtime drop.
+4. 등록된 non-blocking spawn task 는 **start 도 못 한 채 cancel** 되거나, hook 명령의 child process 만 시작됐다 strand.
+5. 결과: `/tmp/jcode-response-completed.log` 에 아무것도 안 쓰여짐.
+
+### 회귀 여부
+
+- **upstream 동작 그대로** 가능성 높음. tool.execute.before/after 의 non-blocking 형태도 같은 path 라 단발성 CLI 에서는 같은 race 가 있음 (기존 ���용자가 단발 CLI 에서 hook 검증 안 했을 가능성).
+- 우리 M3 patch 가 새로 만든 `session.stop`/`response.completed` 도 그대로 영향.
+
+### 라이브 검증 데이터
+
+T-M3 시나리오 1 라이브:
+- `blocking = false` × 2 회 `jcode run "OK"`: log 0 byte ❌
+- `blocking = true` 로 변경 후 1 회: log 에 payload 2 줄 (M9 이중발동 영향) ✅
+
+### 해결 방향 (안)
+
+1. **process 종료 전에 spawn task 들 join 까지 wait**:
+   - hooks 모듈에 weak set / counter 로 in-flight non-blocking task 추적.
+   - main 의 process exit 직전 (CLI dispatch 마지막) `wait_for_pending_lifecycle_hooks(timeout)` 호출.
+2. **단발 CLI 모드에선 강제 blocking**:
+   - `run_lifecycle_hook_commands` 가 "single-shot CLI 컨텍스트" 인지 알 수 있다면 blocking 으로 fallback.
+   - 단점: caller 가 명시 컨텍스트 hint 를 넘겨야 해서 boilerplate 늘어남.
+3. **tokio runtime shutdown_timeout 늘리기**:
+   - process 종료 시 runtime drop 하는 시점에 `shutdown_timeout(Duration::from_secs(...))` 사용해 task 가 끝까지 돌게.
+   - 단점: hook 이 hung 되면 process 가 그만큼 늦게 종료.
+
+옵션 1 이 정확한 해결. 옵션 3 은 단순하지만 race timeout 정확도가 낮음.
+
+### 회귀 위험
+
+- TUI/server-long-running 컨텍스트에선 영향 없음 (이미 잘 작동).
+- non-blocking 의 의도는 turn 응답 시간을 막지 않으려는 것 — 옵션 1 도 결국 process 종료 직전엔 wait 하므로 단발 CLI 한정으로는 trade-off OK.
+- timeout 너무 길면 사용자가 jcode run 결과 받고 추가 응답 대기 시간 길어짐.
+
+### 검증 시나리오
+
+1. `blocking = false` hook + `jcode run "ok"` → fix 적용 후 log 한 줄 기록.
+2. blocking 과 non-blocking 섞은 hook 여러 개 → 모두 fire 후 process 종료.
+3. hook 명령이 5 초 sleep 같이 느린 경우 → wait timeout 안에 끝나면 jcode run 도 그만큼 기다려야 함.
+4. 회귀: TUI 에서 non-blocking 이 turn 응답을 막지 않는지 (이건 옵션 1 도 turn 종료 시점이 아니라 process 종료 시점에만 wait 하므로 OK).
+
+### 관련 파일
+
+- `src/hooks.rs` `run_lifecycle_hook_commands` (직접 수정 위치)
+- `src/hooks.rs` `run_tool_hook_commands` (tool.execute.* 도 같은 패턴, 확인 필요)
+- `src/cli/dispatch.rs` (CLI process 종료 직전 wait 호출 추가 위치)
+
+---
+
