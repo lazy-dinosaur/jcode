@@ -1,13 +1,53 @@
 use super::*;
 
 impl Agent {
+    fn lifecycle_hook_reminder(reason: &str) -> String {
+        format!(
+            "A lifecycle hook denied completion of the previous turn. Follow this instruction before stopping again:\n\n{}",
+            reason.trim()
+        )
+    }
+
+    pub(super) fn set_pending_lifecycle_system_reminder(&mut self, reason: String) {
+        let reason = reason.trim();
+        if reason.is_empty() {
+            return;
+        }
+        self.pending_lifecycle_system_reminder = Some(Self::lifecycle_hook_reminder(reason));
+    }
+
+    pub(super) fn take_pending_lifecycle_system_reminder(&mut self) -> Option<String> {
+        self.pending_lifecycle_system_reminder.take()
+    }
+
+    pub(super) fn merge_current_and_pending_system_reminders(
+        current: Option<String>,
+        pending: Option<String>,
+    ) -> Option<String> {
+        let current = current.and_then(|value| {
+            let trimmed = value.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        });
+        let pending = pending.and_then(|value| {
+            let trimmed = value.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        });
+
+        match (current, pending) {
+            (Some(current), Some(pending)) => Some(format!("{current}\n\n{pending}")),
+            (Some(current), None) => Some(current),
+            (None, Some(pending)) => Some(pending),
+            (None, None) => None,
+        }
+    }
+
     /// Run turns until no more tool calls
     /// Maximum number of context-limit compaction retries before giving up.
     pub(super) const MAX_CONTEXT_LIMIT_RETRIES: u32 = 5;
     pub(super) const MAX_INCOMPLETE_CONTINUATION_ATTEMPTS: u32 = 3;
 
     pub(super) async fn fire_response_completed_hook(
-        &self,
+        &mut self,
         message_id: Option<&str>,
         stop_reason: Option<&str>,
         tool_calls_count: usize,
@@ -25,8 +65,10 @@ impl Agent {
             tool_calls_count,
             output_chars,
         };
-        if let Err(err) = crate::hooks::run_response_hooks(payload).await {
-            logging::warn(&format!("response.completed hook failed: {err:#}"));
+        match crate::hooks::run_response_hooks(payload).await {
+            Ok(Some(reason)) => self.set_pending_lifecycle_system_reminder(reason),
+            Ok(None) => {}
+            Err(err) => logging::warn(&format!("response.completed hook failed: {err:#}")),
         }
     }
 

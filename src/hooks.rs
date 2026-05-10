@@ -97,11 +97,13 @@ pub async fn post_tool_use(
     }
 }
 
-pub async fn run_session_hooks(payload: SessionStopHookPayload<'_>) -> Result<()> {
+pub async fn run_session_hooks(payload: SessionStopHookPayload<'_>) -> Result<Option<String>> {
     run_lifecycle_hooks(SESSION_STOP, payload.working_dir.as_deref(), &payload).await
 }
 
-pub async fn run_response_hooks(payload: ResponseCompletedHookPayload<'_>) -> Result<()> {
+pub async fn run_response_hooks(
+    payload: ResponseCompletedHookPayload<'_>,
+) -> Result<Option<String>> {
     run_lifecycle_hooks(RESPONSE_COMPLETED, payload.working_dir.as_deref(), &payload).await
 }
 
@@ -179,13 +181,17 @@ async fn run_tool_hooks(
     Ok(())
 }
 
-async fn run_lifecycle_hooks<T>(event: &'static str, cwd: Option<&str>, payload: &T) -> Result<()>
+async fn run_lifecycle_hooks<T>(
+    event: &'static str,
+    cwd: Option<&str>,
+    payload: &T,
+) -> Result<Option<String>>
 where
     T: Serialize + ?Sized,
 {
     let hooks = config().hooks_for_working_dir(cwd.map(std::path::Path::new));
     if !hooks.enabled {
-        return Ok(());
+        return Ok(None);
     }
 
     let matching = matching_lifecycle_hooks(&hooks.commands, event);
@@ -209,23 +215,26 @@ async fn run_lifecycle_hook_commands<T>(
     matching: Vec<crate::config::HookCommandConfig>,
     cwd: Option<&str>,
     payload: &T,
-) -> Result<()>
+) -> Result<Option<String>>
 where
     T: Serialize + ?Sized,
 {
     if matching.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
 
     let payload_json = serde_json::to_vec(payload)?;
 
     for hook in matching {
         if hook.blocking {
-            if let Err(err) =
-                run_blocking_lifecycle_hook(&hook.command, hook.timeout_ms, cwd, &payload_json)
-                    .await
+            match run_blocking_lifecycle_hook(&hook.command, hook.timeout_ms, cwd, &payload_json)
+                .await
             {
-                crate::logging::warn(&format!("blocking lifecycle hook failed: {err:#}"));
+                Ok(Some(reason)) => return Ok(Some(reason)),
+                Ok(None) => {}
+                Err(err) => {
+                    crate::logging::warn(&format!("blocking lifecycle hook failed: {err:#}"));
+                }
             }
         } else {
             let command = hook.command.clone();
@@ -242,7 +251,7 @@ where
         }
     }
 
-    Ok(())
+    Ok(None)
 }
 
 async fn run_blocking_hook(
@@ -263,20 +272,36 @@ async fn run_blocking_hook(
         ));
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    if stdout.trim().is_empty() {
+    let Some(decision) = parse_hook_decision_stdout(&output.stdout, command)? else {
         return Ok(());
+    };
+
+    match hook_decision_denial_reason(decision)? {
+        Some(reason) => Err(anyhow!("tool call denied by hook: {reason}")),
+        None => Ok(()),
+    }
+}
+
+fn parse_hook_decision_stdout(output_stdout: &[u8], command: &str) -> Result<Option<HookDecision>> {
+    let stdout = String::from_utf8_lossy(output_stdout);
+    let stdout = stdout.trim();
+    if stdout.is_empty() {
+        return Ok(None);
     }
 
-    let decision: HookDecision = serde_json::from_str(stdout.trim())
+    let decision: HookDecision = serde_json::from_str(stdout)
         .with_context(|| format!("invalid hook decision JSON from command: {command}"))?;
+    Ok(Some(decision))
+}
+
+fn hook_decision_denial_reason(decision: HookDecision) -> Result<Option<String>> {
     match decision.action.as_str() {
-        "allow" | "" => Ok(()),
-        "deny" => Err(anyhow!(
-            "tool call denied by hook: {}",
+        "allow" | "" => Ok(None),
+        "deny" => Ok(Some(
             decision
                 .reason
-                .unwrap_or_else(|| "no reason provided".to_string())
+                .filter(|reason| !reason.trim().is_empty())
+                .unwrap_or_else(|| "no reason provided".to_string()),
         )),
         other => Err(anyhow!("unsupported hook action: {other}")),
     }
@@ -304,7 +329,7 @@ async fn run_blocking_lifecycle_hook(
     timeout_ms: u64,
     cwd: Option<&str>,
     payload_json: &[u8],
-) -> Result<()> {
+) -> Result<Option<String>> {
     let output = run_hook_command(command, timeout_ms, cwd, payload_json)
         .await
         .with_context(|| format!("lifecycle hook command failed: {command}"))?;
@@ -316,7 +341,11 @@ async fn run_blocking_lifecycle_hook(
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }
-    Ok(())
+
+    let Some(decision) = parse_hook_decision_stdout(&output.stdout, command)? else {
+        return Ok(None);
+    };
+    hook_decision_denial_reason(decision)
 }
 
 async fn run_hook_command(
@@ -381,6 +410,44 @@ mod tests {
             serde_json::from_str(r#"{"action":"deny","reason":"blocked"}"#).unwrap();
         assert_eq!(decision.action, "deny");
         assert_eq!(decision.reason.as_deref(), Some("blocked"));
+    }
+
+    #[test]
+    fn hook_decision_stdout_empty_means_no_decision() {
+        assert!(
+            parse_hook_decision_stdout(b"  \n", "cmd")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn hook_decision_rejects_noisy_multiline_stdout() {
+        let err = parse_hook_decision_stdout(
+            b"log line\n{\"action\":\"deny\",\"reason\":\"blocked\"}",
+            "cmd",
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("invalid hook decision JSON"));
+    }
+
+    #[test]
+    fn hook_decision_unsupported_action_is_error() {
+        let decision: HookDecision = serde_json::from_str(r#"{"action":"ask"}"#).unwrap();
+        let err = hook_decision_denial_reason(decision).unwrap_err();
+
+        assert_eq!(err.to_string(), "unsupported hook action: ask");
+    }
+
+    #[test]
+    fn hook_decision_deny_without_reason_uses_fallback() {
+        let decision: HookDecision = serde_json::from_str(r#"{"action":"deny"}"#).unwrap();
+
+        assert_eq!(
+            hook_decision_denial_reason(decision).unwrap().as_deref(),
+            Some("no reason provided")
+        );
     }
 
     #[test]
@@ -506,9 +573,10 @@ mod tests {
             output_chars: 5,
         };
 
-        run_lifecycle_hook_commands(commands, None, &payload)
+        let denial = run_lifecycle_hook_commands(commands, None, &payload)
             .await
             .unwrap();
+        assert!(denial.is_none());
 
         let written = std::fs::read_to_string(out).unwrap();
         let value: Value = serde_json::from_str(&written).unwrap();
@@ -517,8 +585,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lifecycle_blocking_hook_ignores_deny_decision() {
-        run_blocking_lifecycle_hook(
+    async fn lifecycle_blocking_hook_returns_deny_reason() {
+        let denial = run_blocking_lifecycle_hook(
             "cat >/dev/null; printf '%s' '{\"action\":\"deny\",\"reason\":\"ignored\"}'",
             1000,
             None,
@@ -526,5 +594,47 @@ mod tests {
         )
         .await
         .unwrap();
+
+        assert_eq!(denial.as_deref(), Some("ignored"));
+    }
+
+    #[tokio::test]
+    async fn lifecycle_hook_commands_stop_after_deny() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let marker = temp.path().join("ran-after-deny");
+        let commands = vec![
+            crate::config::HookCommandConfig {
+                event: RESPONSE_COMPLETED.to_string(),
+                tool: None,
+                command:
+                    "cat >/dev/null; printf '%s' '{\"action\":\"deny\",\"reason\":\"blocked\"}'"
+                        .to_string(),
+                blocking: true,
+                timeout_ms: 1000,
+            },
+            crate::config::HookCommandConfig {
+                event: RESPONSE_COMPLETED.to_string(),
+                tool: None,
+                command: format!("touch {}", marker.display()),
+                blocking: true,
+                timeout_ms: 1000,
+            },
+        ];
+        let payload = ResponseCompletedHookPayload {
+            event: RESPONSE_COMPLETED,
+            session_id: "sess-1",
+            message_id: "msg-1",
+            working_dir: None,
+            stop_reason: Some("end_turn"),
+            tool_calls_count: 0,
+            output_chars: 5,
+        };
+
+        let denial = run_lifecycle_hook_commands(commands, None, &payload)
+            .await
+            .unwrap();
+
+        assert_eq!(denial.as_deref(), Some("blocked"));
+        assert!(!marker.exists());
     }
 }
