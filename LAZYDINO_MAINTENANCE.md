@@ -280,6 +280,181 @@ Track each custom patch as a small commit. Current known customizations:
    - Validation: `cargo test project_init --lib`, `cargo check`, and temp-project CLI smoke via `cargo run --bin jcode -- init <tmp-project>`.
    - Binary reinstall required: yes, because this adds a user-facing CLI command.
 
+7. Ambient numeric argument serde compatibility
+   - Upstream source: adapted from PR `#173` (`Fix ambient serde bug: handle string or u32 for Claude tool parameters`).
+   - Commit: `fix: accept stringified ambient numeric args`.
+   - Patch branch: `patch/ambient-serde-args`.
+   - Goal: make ambient tools accept Claude-style stringified numeric tool arguments such as `"0"`, `"15"`, and normal JSON numbers.
+   - Touched fields:
+     - `EndCycleInput.memories_modified`
+     - `EndCycleInput.compactions`
+     - `NextScheduleInput.wake_in_minutes`
+     - `ScheduleInput.wake_in_minutes`
+     - `ScheduleToolInput.wake_in_minutes`
+   - Why: ambient cycles can fail when a provider emits numeric tool parameters as strings. This blocks scheduled/idle ambient work and memory consolidation.
+   - Validation: `cargo test tool::ambient --lib`.
+   - Binary reinstall required: yes, because this changes ambient tool runtime behavior.
+
+## Upstream PR triage notes
+
+Last reviewed: 2026-05-10.
+
+Use these notes when deciding whether to adopt upstream PR ideas into `custom/lazydino-harness`. The primary question is not "can we cherry-pick this exact diff?" but:
+
+```text
+What problem is this PR trying to solve?
+Does that problem matter for Lazydino's harness?
+If yes, should we cherry-pick, adapt, or reimplement the idea in our own architecture?
+```
+
+Decision policy:
+
+- Prefer purpose-first adoption: problem -> desired behavior -> local design -> implementation.
+- Cherry-pick only when the diff is small, isolated, current, and fits our custom stack.
+- Reimplement when the PR direction is good but the code is stale, too broad, conflicting, or not aligned with our `.jcode`/hook/agent-profile architecture.
+- Record every adopted behavior as its own `patch/*` branch so it can be replayed after upstream updates.
+
+### Purpose-based roadmap
+
+1. Skill and harness ergonomics
+   - Related PRs: `#166`, `#162`, `#151`, `#113`.
+   - Goal: make skills discoverable, callable, project-aware, and useful for private harness engineering.
+   - Our direction:
+     - Fix `skill_manage` / public `Skill` parameter confusion.
+     - Ensure project skill dirs are loaded reliably from active working directory.
+     - Add support for common ecosystem directories such as `.jcode/skills`, `.claude/skills`, `.agents/skills`, and `.opencode/skills` where appropriate.
+     - Use selected skill content ideas like `verification-loop`, `search-first`, and `promptify` as private/local skills rather than source-tree baggage.
+     - Treat `#151` as a design reference for embedded skills and deterministic routing, not as a merge candidate.
+
+2. Agent reliability and provider hot-reload
+   - Related PRs: `#75`, `#69`, `#139`, `#148`, `#95`, `#94`.
+   - Goal: reduce broken sessions after login/model changes and make provider/model routing less fragile.
+   - Our direction:
+     - Adopt lazy provider/auth reinitialization if restored sessions or `/model` switching fail after login.
+     - Keep canonical Claude model IDs accurate, especially Haiku and Opus Max routes.
+     - Avoid sending provider-specific unsupported tools, e.g. OpenAI image generation to Codex models.
+     - Defer custom provider/gateway support until the user actually needs that gateway.
+
+3. Usage, cost, and failover correctness
+   - Related PRs: `#178`, `#101` cheap-mode side note.
+   - Goal: make quota/cost displays and failover decisions trustworthy.
+   - Our direction:
+     - Adopt the OpenAI usage-percent normalization idea because bad quota display can trigger wrong model/failover decisions.
+     - Do not blindly add cheap-mode defaults because this user's harness intentionally uses premium Opus/GPT routing. If we add budget modes, make them explicit opt-in profiles, not global surprises.
+
+4. Ambient and scheduled background work
+   - Related PRs: `#173`, `#116`.
+   - Goal: keep ambient cycles, schedule tools, and memory consolidation from failing on provider argument shape differences.
+   - Our direction:
+     - Already adopted string-or-number numeric deserialization as `patch/ambient-serde-args`.
+     - Keep ambient conservative because it runs without a live user prompt.
+
+5. Terminal and tmux workflow
+   - Related PRs: `#78`, `#68`, `#101`, `#55` keyboard portion.
+   - Goal: make jcode feel native inside the user's tmux/terminal workflow.
+   - Our direction:
+     - Already fixed tmux Ctrl+h/j/k/l passthrough in user tmux config.
+     - Consider native tmux new-window spawning only if the current workflow needs spawning/resume panes.
+     - Consider OSC52 clipboard fallback for SSH/tmux environments.
+     - Consider recursive stdin detection if wrapper processes hang or stdin prompts are missed.
+
+6. Safety and containment
+   - Related PRs: `#138`, `#137`.
+   - Goal: reduce accidental or unsafe file operations.
+   - Our direction:
+     - Treat sandboxing as a serious separate project, not a casual cherry-pick.
+     - If adopted, reimplement carefully with tests for every file-touching tool and explicitly document that bash requires OS-level sandboxing for hard guarantees.
+     - Continue using lifecycle hooks as the fast safety layer for bash/tool policy.
+
+7. Native search/tool expansion
+   - Related PRs: `#90`.
+   - Goal: improve search/research capability.
+   - Our direction:
+     - Defer native Exa because this harness already has MCP Exa/websearch integrations.
+     - Add native tools only when they reduce setup friction or improve reliability over MCP.
+
+### Adopt / reimplement soon
+
+- `#178` Fix OpenAI usage percent normalization for low values
+  - Status: small, mergeable, high practical value.
+  - Benefit: fixes `/usage` and info-widget bars that show 1% weekly usage as 100% exhausted.
+  - Suggested action: apply as a small patch branch after current skill-sync work.
+- `#173` Fix ambient serde bug
+  - Status: already adapted locally as `patch/ambient-serde-args`.
+  - Benefit: prevents ambient tool deserialization failure when numbers arrive as strings.
+- `#166` Accept `skill` alias in skill tool
+  - Status: draft but small.
+  - Benefit: makes external/public Skill-style calls compatible with internal `skill_manage`.
+  - Suggested action: fold into the upcoming project skill sync patch.
+- `#162` Skill alias plus Gemini schema sanitization
+  - Status: useful, medium size.
+  - Benefit: fixes skill tool confusion and Gemini failures on MCP tool schemas containing `$defs`, `$ref`, `$schema`.
+  - Suggested action: take the Gemini schema sanitizer and combine the skill alias idea with `#166` carefully.
+- `#139` Correct Claude Haiku 4.5 dated model id
+  - Status: tiny.
+  - Benefit: aligns with our current dated `claude-haiku-4-5-20251001` policy.
+  - Suggested action: apply if upstream has not already fixed sidecar fallback.
+- `#148` Disable OpenAI image generation tool for Codex models
+  - Status: small.
+  - Benefit: avoids sending unsupported native image generation to Codex-family models.
+  - Suggested action: apply if GPT/Codex payload errors appear.
+- `#68` OSC52 clipboard fallback
+  - Status: useful for SSH/tmux/remote terminal work.
+  - Benefit: copy-to-clipboard works even without Wayland/X11 clipboard tools.
+  - Suggested action: apply after testing in the user's terminal setup.
+- `#75` Lazy auth init on restored sessions
+  - Status: medium, practical.
+  - Benefit: prevents repeated login prompts after credentials were written but provider was initialized earlier.
+  - Suggested action: reimplement small helper if the login/restore issue appears.
+- `#69` Lazy OpenAI provider hot-init
+  - Status: small but overlaps provider init code.
+  - Benefit: `/model gpt-*` can recover after OpenAI login from another shell.
+  - Suggested action: apply with `#75` as a provider hot-init bundle.
+- `#101` Recursive Linux stdin detection
+  - Status: useful for nested wrappers.
+  - Benefit: better detects child/grandchild processes waiting for stdin.
+  - Suggested action: apply if stdin prompts or wrapper processes misbehave.
+
+### Consider later / partial extraction only
+
+- `#151` jcode-harness embedded skills and LLM wiki memory loop
+  - Status: very large, conflicting, fork/product-direction branch.
+  - Useful ideas: embedded skills, deterministic skill router, skill doctor/import CLI, project init scaffolding, wiki-memory safety prompts.
+  - Suggested action: do not merge wholesale. Extract only small ideas after our local `.jcode` and skill-sync patches stabilize.
+- `#138` Filesystem sandboxing with `--sandbox` / `JCODE_SANDBOX_ROOT`
+  - Status: valuable but touches many file tools and has partial security boundary for bash.
+  - Suggested action: consider later as a focused safety project. Must audit every file-touching tool and document bash limitations clearly.
+- `#113` MAS-inspired project skills
+  - Status: skill content pack, draft.
+  - Useful ideas: `verification-loop`, `search-first`, `promptify` skills.
+  - Suggested action: copy/adapt selected skills into private `~/.jcode/skills` or project `.jcode/skills`, not into upstream source.
+- `#90` Exa search tool
+  - Status: useful but we already have MCP Exa/websearch tools in this harness.
+  - Suggested action: skip unless native built-in Exa without MCP becomes necessary.
+- `#94` Anthropic-compatible provider and custom headers
+  - Status: useful for custom gateways, nontrivial provider surface.
+  - Suggested action: defer until a real Anthropic-compatible gateway is needed.
+- `#95` Align OpenAI base URL with Codex config
+  - Status: useful for Codex-compatible gateways, touches provider/session/auth.
+  - Suggested action: defer unless the user needs Codex config gateway reuse.
+- `#78` tmux pane spawning support
+  - Status: directly relevant to tmux workflow but conflicts.
+  - Suggested action: consider after current tmux key passthrough stabilizes. Reimplement small `tmux new-window` support if needed.
+- `#55` System prompt config plus VSCode keyboard fix
+  - Status: small but overlaps our private `.jcode` prompt-overlay approach.
+  - Suggested action: do not add broad `provider.system_prompt` unless a hard override is required. The VSCode keyboard portion can be extracted separately if needed.
+
+### Low priority / already upstream / not relevant now
+
+- `#169`, `#168`, `#126`, `#56`: already merged upstream.
+- `#172`: Windows docs only.
+- `#150`, `#134`: MiniMax endpoint, not currently used.
+- `#149`: Firefox browser host packaging, only relevant if browser setup fails.
+- `#137`: broad audit cleanup, inspect only if security work starts.
+- `#125`, `#123`: docs for compiler allows, low value.
+- `#124`: deprecated flag cleanup, avoid until upstream direction is clear.
+- `#103`, `#102`, `#92`, `#91`, `#83`, `#77`, `#72`, `#70`, `#47`, `#58`: situational provider/platform/release improvements. Revisit only if the matching issue appears.
+
 
 
 ## Project-local harness initialization

@@ -55,6 +55,8 @@ PATCH_REFS=(
   patch/jcode-init-skill-docs
   patch/reapply-custom-stack
   patch/native-project-init
+  patch/ambient-serde-args
+  patch/upstream-pr-triage-docs
 )
 
 while [[ $# -gt 0 ]]; do
