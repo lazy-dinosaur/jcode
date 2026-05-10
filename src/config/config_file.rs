@@ -101,13 +101,25 @@ impl Config {
     /// is the nearest ancestor containing a `.jcode` directory/config. This intentionally keeps
     /// the initial project-local merge narrow: hooks append, and `enabled` is true if any layer
     /// enables hooks.
+    ///
+    /// M9 fix: when the working_dir's nearest project-config path resolves to the same file as
+    /// the global config (typical for `jcode` invocations launched from `~`), skip the project
+    /// merge so each hook command is only registered once. Without this, every lifecycle / tool
+    /// hook fires twice.
     pub fn hooks_for_working_dir(&self, working_dir: Option<&Path>) -> HooksConfig {
         let mut hooks = self.hooks.clone();
         if let Some(project_dir) = working_dir.and_then(Self::find_project_config_dir) {
+            let global_path = Self::path();
             for config_path in [
                 project_dir.join(".jcode").join("config.toml"),
                 project_dir.join(".jcode").join("config.local.toml"),
             ] {
+                // M9: skip if this project-config path is literally the global path
+                // (canonical equality). Without this guard, running jcode from `~` or any
+                // ancestor of `~/.jcode` re-loads the same hooks file twice.
+                if Self::paths_resolve_to_same_file(global_path.as_deref(), &config_path) {
+                    continue;
+                }
                 if let Some(project_hooks) = Self::load_hooks_from_file(&config_path) {
                     hooks.enabled |= project_hooks.enabled || !project_hooks.commands.is_empty();
                     hooks.commands.extend(project_hooks.commands);
@@ -115,6 +127,19 @@ impl Config {
             }
         }
         hooks
+    }
+
+    /// True when both paths exist and resolve (via `canonicalize`, falling back to
+    /// lexical normalization on error) to the same filesystem location. Used by M9
+    /// hook-merge dedupe to detect "global config == project-discovered config".
+    fn paths_resolve_to_same_file(a: Option<&Path>, b: &Path) -> bool {
+        let Some(a) = a else { return false };
+        let canon_a = std::fs::canonicalize(a).ok();
+        let canon_b = std::fs::canonicalize(b).ok();
+        match (canon_a, canon_b) {
+            (Some(ca), Some(cb)) => ca == cb,
+            _ => a == b,
+        }
     }
 
     /// Build the prompt config effective for a working directory.

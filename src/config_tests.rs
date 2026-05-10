@@ -864,3 +864,130 @@ impl Config {
             .any(|value| value.trim().eq_ignore_ascii_case(&entry))
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// M9 regression: hook double-fire when global config path equals project
+// config path (typical for `jcode` invocations launched from `~`).
+// ─────────────────────────────────────────────────────────────────────────
+
+/// M9 regression. When `JCODE_HOME` and the project root resolve to the same
+/// directory, `hooks_for_working_dir` must NOT re-merge the same hooks file,
+/// otherwise every lifecycle/tool hook command fires twice.
+///
+/// Repro before fix: 1 global hook + same-path "project" hook → 2 commands
+/// in the merged result. After fix: 1 command (project merge skipped because
+/// the discovered path canonicalizes to the global path).
+#[test]
+fn test_hooks_for_working_dir_dedupes_when_global_path_equals_project_path() {
+    let _guard = crate::storage::lock_test_env();
+    let prev_home = std::env::var_os("JCODE_HOME");
+
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let project_root = dir.path().to_path_buf();
+    let jcode_home = project_root.join(".jcode");
+    std::fs::create_dir_all(&jcode_home).expect("mkdir JCODE_HOME");
+    crate::env::set_var("JCODE_HOME", &jcode_home);
+
+    // Write the file at JCODE_HOME/config.toml. Because JCODE_HOME ==
+    // <project_root>/.jcode, `find_project_config_dir(project_root)` discovers
+    // the same `<project_root>/.jcode/config.toml` that `Config::path()` returns.
+    std::fs::write(
+        jcode_home.join("config.toml"),
+        r#"
+        [hooks]
+        enabled = true
+
+        [[hooks.commands]]
+        event = "tool.execute.after"
+        tool = "*"
+        command = "log-tool.sh"
+        blocking = false
+        timeout_ms = 1000
+        "#,
+    )
+    .expect("write JCODE_HOME/config.toml");
+
+    // Build a Config that mirrors what Self::load() would yield from this file.
+    let mut cfg = Config::default();
+    cfg.hooks.enabled = true;
+    cfg.hooks.commands.push(HookCommandConfig {
+        event: "tool.execute.after".to_string(),
+        tool: Some("*".to_string()),
+        command: "log-tool.sh".to_string(),
+        blocking: false,
+        timeout_ms: 1000,
+    });
+
+    // working_dir == project_root so find_project_config_dir(project_root)
+    // returns project_root and discovers `<project_root>/.jcode/config.toml`,
+    // which canonically equals `Config::path()` (== JCODE_HOME/config.toml).
+    let hooks = cfg.hooks_for_working_dir(Some(&project_root));
+
+    assert_eq!(
+        hooks.commands.len(),
+        1,
+        "M9: hooks must not be merged twice when project config path equals global config path; got commands: {:?}",
+        hooks.commands.iter().map(|c| &c.command).collect::<Vec<_>>()
+    );
+
+    if let Some(prev) = prev_home {
+        crate::env::set_var("JCODE_HOME", prev);
+    } else {
+        crate::env::remove_var("JCODE_HOME");
+    }
+}
+
+/// M9 sanity: a *different* project path must still merge (we don't want the
+/// dedupe to suppress legitimate project-local hooks).
+#[test]
+fn test_hooks_for_working_dir_still_merges_distinct_project_path() {
+    let _guard = crate::storage::lock_test_env();
+    let prev_home = std::env::var_os("JCODE_HOME");
+
+    let global_dir = tempfile::TempDir::new().expect("global tempdir");
+    let project_dir = tempfile::TempDir::new().expect("project tempdir");
+    let global_home = global_dir.path().join(".jcode");
+    std::fs::create_dir_all(&global_home).expect("mkdir global .jcode");
+    crate::env::set_var("JCODE_HOME", &global_home);
+
+    std::fs::write(
+        global_home.join("config.toml"),
+        "[hooks]\nenabled = true\n",
+    )
+    .expect("write global");
+    std::fs::create_dir_all(project_dir.path().join(".jcode")).expect("mkdir .jcode");
+    std::fs::write(
+        project_dir.path().join(".jcode").join("config.toml"),
+        r#"
+        [hooks]
+        enabled = true
+
+        [[hooks.commands]]
+        event = "tool.execute.before"
+        tool = "bash"
+        command = "project-only.sh"
+        blocking = true
+        timeout_ms = 1
+        "#,
+    )
+    .expect("write project");
+
+    let mut cfg = Config::default();
+    cfg.hooks.enabled = true;
+    cfg.hooks.commands.push(HookCommandConfig {
+        event: "tool.execute.after".to_string(),
+        tool: Some("*".to_string()),
+        command: "global.sh".to_string(),
+        blocking: false,
+        timeout_ms: 0,
+    });
+
+    let hooks = cfg.hooks_for_working_dir(Some(project_dir.path()));
+    assert_eq!(hooks.commands.len(), 2, "distinct paths must still merge");
+
+    if let Some(prev) = prev_home {
+        crate::env::set_var("JCODE_HOME", prev);
+    } else {
+        crate::env::remove_var("JCODE_HOME");
+    }
+}
