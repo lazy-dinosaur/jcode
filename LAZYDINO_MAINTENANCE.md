@@ -1253,11 +1253,21 @@ origin https://github.com/1jehuang/jcode.git (fetch)
 origin https://github.com/1jehuang/jcode.git (push)
 ```
 
-## Upstream sync state (2026-05-11)
+## Upstream sync state (2026-05-11 update)
 
-- `fork/master` 가 `origin/master` 보다 **226 commit 뒤짐**.
-- 모든 ref push 가 `[remote rejected]` (PAT `workflow` scope 부족 +
-  fork master 가 옛 workflow 파일 가지고 있어서).
+- Correct remote mapping is **`origin=https://github.com/1jehuang/jcode.git`**
+  and **`fork=https://github.com/lazy-dinosaur/jcode.git`**. Do **not** add/use
+  `upstream=https://github.com/sst/jcode.git`; that remote is invalid for this
+  repo and makes `git fetch --all` fail.
+- `fork/master` 가 `origin/master` 보다 **226 commit 뒤짐**
+  (`git rev-list --left-right --count fork/master...origin/master` → `0 226`).
+- `deploy/m9-m10` 와 일반 patch branch 들은 이미 `origin/master` 베이스
+  (`git rebase origin/master` dry-run on deploy → `HEAD가 최신 상태입니다.`).
+  즉 현재 M21 의 첫 blocker 는 rebase conflict 가 아니라 **fork/master FF push**.
+- 실제 시도 기록 (2026-05-11):
+  `git push fork origin/master:master` → `[remote rejected] ... workflow
+  .github/workflows/release.yml without workflow scope`. PAT `workflow` scope
+  갱신 전까지 M21 remote 단계는 blocked.
 - 자세한 절차는 **M21 (upstream rebase + dedupe)** 등록됨 —
   `LAZYDINO_MILESTONES.md` 와
   `docs/lazydino/sessions/2026-05-11-m19-m20-deployed.md` §9 참조.
