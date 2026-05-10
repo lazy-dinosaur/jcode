@@ -74,6 +74,7 @@ PATCH_REFS=(
   patch/swarm-stability-core
   patch/swarm-run-id
   patch/empty-response-retry
+  patch/altb-early-race
 )
 
 while [[ $# -gt 0 ]]; do

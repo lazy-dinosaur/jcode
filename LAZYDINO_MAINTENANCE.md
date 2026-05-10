@@ -621,6 +621,25 @@ Track each custom patch as a small commit. Current known customizations:
    - Validation: `cargo check`, `cargo test response_recovery --lib --no-fail-fast`, `cargo test empty_response --lib --no-fail-fast`, `cargo test turn_streaming --lib --no-fail-fast`, `cargo test agent --lib --no-fail-fast`, `cargo test --lib --no-run`, and the 13-test known-failure smoke.
    - Binary reinstall required: yes, because this changes agent turn-loop runtime behavior.
 
+24. Alt+B early background race fix
+   - Commit: `fix: preserve early Alt+B fire by moving background signal reset before ToolStart`.
+   - Patch branch: `patch/altb-early-race`.
+   - Purpose: make Alt+B reliable when the user presses it immediately after a tool becomes visible in the UI.
+   - Root cause: `BackgroundToolSignal` is an `InterruptSignal` latch, but `run_turn_streaming_mpsc` reset the latch after `ToolStart` had already been emitted and just before entering the tool execution `select!`. An Alt+B fire in that window was cleared before the select could observe it.
+   - Runtime behavior:
+     - The mpsc turn loop now clears stale background-tool requests at the start of each provider turn, before any `ToolStart` can be emitted.
+     - Once `ToolStart` is visible to the UI, an Alt+B fire remains latched until the tool execution select sees it and detaches the running tool.
+     - A stale background request from a previous turn is cleared before the next tool can start, preventing false-positive auto-backgrounding.
+     - `move_tool_to_background` now returns an explicit error event, plus a debug log, when no active background-tool signal is registered instead of silently acknowledging a no-op.
+     - `turn_streaming_broadcast` was inspected and left unchanged because it does not have the async Alt+B detach/select pattern.
+   - Touched paths:
+     - `crates/jcode-agent-runtime/src/lib.rs`
+     - `src/agent/turn_streaming_mpsc.rs`
+     - `src/agent_tests.rs`
+     - `src/server/client_lifecycle.rs`
+   - Validation: `cargo check --all-targets`, `cargo test -p jcode-agent-runtime background_tool_signal`, `cargo test --lib --no-fail-fast altb_early_race`, `cargo test --lib --no-fail-fast interrupt_signal`, and `cargo test --lib --no-fail-fast turn_streaming`. A full `cargo test --lib --no-fail-fast` was attempted on this workstation but hit the local 10-minute harness timeout before completion; focused coverage for this patch passed.
+   - Binary reinstall required: yes, because this changes turn-loop runtime behavior.
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
