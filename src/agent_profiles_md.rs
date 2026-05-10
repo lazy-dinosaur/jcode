@@ -105,6 +105,19 @@ pub fn load_agents_from_dir(dir: &Path) -> BTreeMap<String, AgentRouteConfig> {
     agents
 }
 
+/// Load agent profiles from `~/.jcode/agents/*.md`.
+/// Tolerant: missing dir -> empty map; per-file errors logged at warn.
+pub fn load_global_jcode_agent_md() -> BTreeMap<String, AgentRouteConfig> {
+    let Ok(jcode_dir) = crate::storage::jcode_dir() else {
+        return BTreeMap::new();
+    };
+    let agents_dir = jcode_dir.join("agents");
+    if !agents_dir.is_dir() {
+        return BTreeMap::new();
+    }
+    load_agents_from_dir(&agents_dir)
+}
+
 /// Load project-local markdown agent profiles from the four ecosystem dirs.
 /// Returns merged map with project precedence: .jcode > .claude > .agents > .opencode.
 pub fn load_project_local_agent_md(
@@ -217,6 +230,36 @@ fn non_empty_string(value: String) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
+    use std::ffi::{OsStr, OsString};
+
+    struct EnvVarGuard {
+        key: &'static str,
+        prev: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<OsStr>) -> Self {
+            let prev = std::env::var_os(key);
+            crate::env::set_var(key, value.as_ref());
+            Self { key, prev }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(prev) = self.prev.as_ref() {
+                crate::env::set_var(self.key, prev);
+            } else {
+                crate::env::remove_var(self.key);
+            }
+        }
+    }
+
+    fn write(path: &Path, content: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).expect("create parent");
+        std::fs::write(path, content).expect("write file");
+    }
 
     #[test]
     fn parse_agent_md_file_accepts_yaml_parse_error_as_plain_markdown() {
@@ -247,5 +290,94 @@ mod tests {
 
         assert_eq!(name, "x");
         assert_eq!(config.prompt.as_deref(), Some("Use this prompt"));
+    }
+
+    #[test]
+    fn load_global_jcode_agent_md_returns_empty_when_no_dir() {
+        let _lock = crate::storage::lock_test_env();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let _home = EnvVarGuard::set("JCODE_HOME", dir.path());
+
+        let agents = load_global_jcode_agent_md();
+
+        assert!(agents.is_empty());
+    }
+
+    #[test]
+    fn load_global_jcode_agent_md_loads_md_files() {
+        let _lock = crate::storage::lock_test_env();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let _home = EnvVarGuard::set("JCODE_HOME", dir.path());
+        write(
+            &dir.path().join("agents/reviewer.md"),
+            "---\ndescription: Reviews code\nmodel: haiku\nwhen:\n  - reviewing\n---\nReview carefully.",
+        );
+
+        let agents = load_global_jcode_agent_md();
+        let reviewer = agents.get("reviewer").expect("reviewer agent");
+
+        assert_eq!(reviewer.description.as_deref(), Some("Reviews code"));
+        assert_eq!(reviewer.model.as_deref(), Some("haiku"));
+        assert_eq!(reviewer.when, vec!["reviewing"]);
+        assert_eq!(reviewer.prompt.as_deref(), Some("Review carefully."));
+    }
+
+    #[test]
+    fn agents_for_working_dir_global_md_overrides_global_toml() {
+        let _lock = crate::storage::lock_test_env();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let _home = EnvVarGuard::set("JCODE_HOME", dir.path());
+        write(
+            &dir.path().join("config.toml"),
+            "[agents.profiles.x]\nmodel = \"opus\"\n",
+        );
+        write(
+            &dir.path().join("agents/x.md"),
+            "---\nmodel: haiku\n---\nGlobal markdown prompt.",
+        );
+
+        let agents = Config::load().agents_for_working_dir(None);
+
+        assert_eq!(agents.profiles["x"].model.as_deref(), Some("haiku"));
+    }
+
+    #[test]
+    fn agents_for_working_dir_project_md_overrides_global_md() {
+        let _lock = crate::storage::lock_test_env();
+        let home = tempfile::TempDir::new().expect("tempdir");
+        let _home = EnvVarGuard::set("JCODE_HOME", home.path());
+        let project = tempfile::TempDir::new().expect("project tempdir");
+        write(
+            &home.path().join("agents/x.md"),
+            "---\nmodel: global-md\n---\nGlobal prompt.",
+        );
+        write(
+            &project.path().join(".jcode/agents/x.md"),
+            "---\nmodel: project-md\n---\nProject prompt.",
+        );
+
+        let agents = Config::load().agents_for_working_dir(Some(project.path()));
+
+        assert_eq!(agents.profiles["x"].model.as_deref(), Some("project-md"));
+    }
+
+    #[test]
+    fn agents_for_working_dir_project_toml_overrides_global_md() {
+        let _lock = crate::storage::lock_test_env();
+        let home = tempfile::TempDir::new().expect("tempdir");
+        let _home = EnvVarGuard::set("JCODE_HOME", home.path());
+        let project = tempfile::TempDir::new().expect("project tempdir");
+        write(
+            &home.path().join("agents/x.md"),
+            "---\nmodel: global-md\n---\nGlobal prompt.",
+        );
+        write(
+            &project.path().join(".jcode/config.toml"),
+            "[agents.profiles.x]\nmodel = \"project-toml\"\n",
+        );
+
+        let agents = Config::load().agents_for_working_dir(Some(project.path()));
+
+        assert_eq!(agents.profiles["x"].model.as_deref(), Some("project-toml"));
     }
 }

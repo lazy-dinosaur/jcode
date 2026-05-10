@@ -7,7 +7,8 @@
 //! When invoked, the .md body becomes the user's prompt (with `$ARGUMENTS`
 //! substitution if the user passed args).
 //!
-//! Per policy: project-local only, no global discovery.
+//! Per policy: global discovery is jcode-only (`~/.jcode/commands`), while
+//! project-local discovery covers the four supported ecosystem dirs.
 
 use serde_yaml::Value;
 use std::collections::BTreeMap;
@@ -82,12 +83,12 @@ impl ProjectCommandRegistry {
 
     pub fn load_for_working_dir(working_dir: Option<&Path>) -> Self {
         Self {
-            commands: load_project_local_commands(working_dir),
+            commands: load_all_commands(working_dir),
         }
     }
 
     pub fn reload_all_for_working_dir(&mut self, working_dir: Option<&Path>) -> usize {
-        self.commands = load_project_local_commands(working_dir);
+        self.commands = load_all_commands(working_dir);
         self.commands.len()
     }
 
@@ -228,6 +229,19 @@ pub fn load_commands_from_dir(dir: &Path) -> BTreeMap<String, ProjectCommand> {
     commands
 }
 
+/// Load slash commands from `~/.jcode/commands/*.md`.
+/// Tolerant: missing dir -> empty map; per-file errors logged at warn.
+pub fn load_global_jcode_commands() -> BTreeMap<String, ProjectCommand> {
+    let Ok(jcode_dir) = crate::storage::jcode_dir() else {
+        return BTreeMap::new();
+    };
+    let commands_dir = jcode_dir.join("commands");
+    if !commands_dir.is_dir() {
+        return BTreeMap::new();
+    }
+    load_commands_from_dir(&commands_dir)
+}
+
 /// Load project-local commands from the four ecosystem dirs.
 /// Priority: `.jcode > .claude > .agents > .opencode`.
 pub fn load_project_local_commands(working_dir: Option<&Path>) -> BTreeMap<String, ProjectCommand> {
@@ -251,6 +265,14 @@ pub fn load_project_local_commands(working_dir: Option<&Path>) -> BTreeMap<Strin
     ] {
         commands.extend(load_commands_from_dir(&project_dir.join(relative)));
     }
+    commands
+}
+
+/// Load all available slash commands: project (4-way) overlaid on top of global jcode.
+/// Project commands override global commands with the same name.
+pub fn load_all_commands(working_dir: Option<&Path>) -> BTreeMap<String, ProjectCommand> {
+    let mut commands = load_global_jcode_commands();
+    commands.extend(load_project_local_commands(working_dir));
     commands
 }
 
@@ -300,7 +322,31 @@ fn is_valid_command_name(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::{OsStr, OsString};
     use tempfile::tempdir;
+
+    struct EnvVarGuard {
+        key: &'static str,
+        prev: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<OsStr>) -> Self {
+            let prev = std::env::var_os(key);
+            crate::env::set_var(key, value.as_ref());
+            Self { key, prev }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(prev) = self.prev.as_ref() {
+                crate::env::set_var(self.key, prev);
+            } else {
+                crate::env::remove_var(self.key);
+            }
+        }
+    }
 
     fn write(path: &Path, content: &str) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -413,6 +459,76 @@ mod tests {
         let project = tempdir().unwrap();
 
         let commands = load_project_local_commands(Some(project.path()));
+        assert!(!commands.contains_key("leaked"));
+    }
+
+    #[test]
+    fn load_global_jcode_commands_empty_when_no_dir() {
+        let _lock = crate::storage::lock_test_env();
+        let home = tempdir().unwrap();
+        let _home = EnvVarGuard::set("JCODE_HOME", home.path());
+
+        let commands = load_global_jcode_commands();
+
+        assert!(commands.is_empty());
+    }
+
+    #[test]
+    fn load_global_jcode_commands_loads_files() {
+        let _lock = crate::storage::lock_test_env();
+        let home = tempdir().unwrap();
+        let _home = EnvVarGuard::set("JCODE_HOME", home.path());
+        write(
+            &home.path().join("commands/explain.md"),
+            "Explain this code",
+        );
+
+        let commands = load_global_jcode_commands();
+
+        assert_eq!(commands["explain"].body, "Explain this code");
+    }
+
+    #[test]
+    fn load_all_commands_project_overrides_global() {
+        let _lock = crate::storage::lock_test_env();
+        let home = tempdir().unwrap();
+        let _home = EnvVarGuard::set("JCODE_HOME", home.path());
+        let project = tempdir().unwrap();
+        write(&home.path().join("commands/x.md"), "global");
+        write(&project.path().join(".jcode/commands/x.md"), "project");
+
+        let commands = load_all_commands(Some(project.path()));
+
+        assert_eq!(commands["x"].body, "project");
+    }
+
+    #[test]
+    fn load_all_commands_global_visible_when_no_project_override() {
+        let _lock = crate::storage::lock_test_env();
+        let home = tempdir().unwrap();
+        let _home = EnvVarGuard::set("JCODE_HOME", home.path());
+        let project = tempdir().unwrap();
+        write(&home.path().join("commands/explain.md"), "global explain");
+
+        let commands = load_all_commands(Some(project.path()));
+
+        assert_eq!(commands["explain"].body, "global explain");
+    }
+
+    #[test]
+    fn load_all_commands_only_jcode_global_not_other_globals() {
+        let _lock = crate::storage::lock_test_env();
+        let home = tempdir().unwrap();
+        let _home = EnvVarGuard::set("JCODE_HOME", home.path().join(".jcode"));
+        write(&home.path().join(".claude/commands/leaked.md"), "claude");
+        write(
+            &home.path().join(".opencode/commands/leaked.md"),
+            "opencode",
+        );
+        write(&home.path().join(".agents/commands/leaked.md"), "agents");
+
+        let commands = load_all_commands(None);
+
         assert!(!commands.contains_key("leaked"));
     }
 
