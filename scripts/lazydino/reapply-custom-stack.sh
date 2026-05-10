@@ -69,6 +69,7 @@ PATCH_REFS=(
   patch/agent-profiles-project-merge
   patch/agent-profiles-md-files
   patch/project-slash-commands
+  patch/global-jcode-md-resources
 )
 
 while [[ $# -gt 0 ]]; do

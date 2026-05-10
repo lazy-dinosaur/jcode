@@ -536,6 +536,23 @@ Track each custom patch as a small commit. Current known customizations:
    - Validation: `cargo check`, `cargo test project_commands --lib --no-fail-fast`, `cargo test project_command --lib --no-fail-fast`, `cargo test agents_for_working_dir --lib --no-fail-fast`, `cargo test skill --lib --no-fail-fast`, `cargo test --lib --no-run`, and the 13-test known-failure smoke.
    - Binary reinstall required: yes, because this changes TUI slash command discovery and dispatch behavior.
 
+19. Global jcode markdown agents and slash commands
+   - Commit: `feat: load global jcode .md agents and slash commands`.
+   - Patch branch: `patch/global-jcode-md-resources`.
+   - Purpose: close the consistency gaps left by patches #17 and #18 by discovering jcode-owned global markdown resources alongside existing global `~/.jcode/skills/`, `~/.jcode/config.toml`, and `~/.jcode/mcp.json` support.
+   - Global resource directories:
+     - `~/.jcode/agents/*.md`
+     - `~/.jcode/commands/*.md`
+   - Policy:
+     - Global discovery remains jcode-only per patch #15.
+     - `~/.claude/agents`, `~/.claude/commands`, `~/.codex`, `~/.opencode`, and `~/.agents` global directories are not read.
+     - Project-local discovery remains 4-way for `.jcode`, `.claude`, `.agents`, and `.opencode`.
+   - Merge behavior:
+     - agents: global TOML first, global `~/.jcode/agents/*.md` second, project markdown agents third, project `.jcode/config.toml` / `.jcode/config.local.toml` last.
+     - slash commands: global `~/.jcode/commands/*.md` is loaded into the project command registry, then project markdown commands override duplicate names. Built-in commands and installed skills still take precedence at dispatch/autocomplete time.
+   - Validation: `cargo check`, `cargo test agents_for_working_dir --lib --no-fail-fast`, `cargo test load_global_jcode --lib --no-fail-fast`, `cargo test project_commands --lib --no-fail-fast`, `cargo test agent_profiles_md --lib --no-fail-fast`, `cargo test --lib --no-run`, and the 13-test known-failure smoke.
+   - Binary reinstall required: yes, because this changes runtime subagent profile and TUI slash command discovery behavior.
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
