@@ -588,6 +588,21 @@ Track each custom patch as a small commit. Current known customizations:
    - Validation: `cargo check`, `cargo test communicate --lib --no-fail-fast`, `cargo test comm_await --lib --no-fail-fast`, `cargo test comm_control --lib --no-fail-fast`, `cargo test swarm --lib --no-fail-fast -- --test-threads=1`, `cargo test --lib --no-run`, and the 13-test known-failure smoke.
    - Binary reinstall required: yes, because this changes protocol and runtime swarm coordination behavior.
 
+22. Swarm run-id infrastructure
+   - Commit stack: `feat: tag swarm workers with run ids`, `feat: scope swarm await and cleanup by run id`, and `feat: scope swarm list output by run id`.
+   - Patch branch: `patch/swarm-run-id`.
+   - Source: adapted from PR #151 slices 092, 093, and 094 list portion. The health portion of 094 is deferred to Phase C.
+   - Purpose: tag workers spawned by one orchestration run with a shared run id, then use that id to safely scope multi-run await, cleanup, and list operations.
+   - Scope:
+     - protocol and persisted swarm records gain optional `run_id` fields with backward-compatible `None` defaults.
+     - `swarm spawn` and `swarm assign_next` accept explicit `run_id`; `swarm run_plan` and `swarm fill_slots` generate a fresh run id when omitted and propagate it to spawned workers.
+     - `swarm await_members` and `swarm cleanup` accept optional `run_id` filters, and `run_plan` scopes its internal await/cleanup calls to its generated run id.
+     - persisted await keys include run id so reload/reattach resumes the same scoped await.
+     - `swarm list run_id=<id>` filters output to members tagged with that run id while unscoped list output remains unchanged.
+   - Explicitly deferred: `swarm health`, `swarm reconcile`, `swarm cleanup dry_run`, and `operation_id` from later PR #151 slices.
+   - Validation: `cargo check`, `cargo test communicate --lib --no-fail-fast`, `cargo test comm_await --lib --no-fail-fast`, `cargo test comm_control --lib --no-fail-fast`, `cargo test swarm --lib --no-fail-fast`, `cargo test --lib --no-run`, and the 13-test known-failure smoke.
+   - Binary reinstall required: yes, because this changes protocol and runtime swarm coordination behavior.
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
