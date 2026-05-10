@@ -286,7 +286,32 @@ pub(super) struct RemoteResumeActivity {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum PendingReloadReconnectStatus {
-    AwaitingHistory { session_id: Option<String> },
+    AwaitingHistory {
+        session_id: Option<String>,
+        started_at: Instant,
+        deadline: Instant,
+        timeout_secs: u64,
+    },
+}
+
+impl PendingReloadReconnectStatus {
+    fn awaiting_history(session_id: Option<String>, timeout_secs: u64) -> Self {
+        let started_at = Instant::now();
+        Self::AwaitingHistory {
+            session_id,
+            started_at,
+            deadline: started_at + Duration::from_secs(timeout_secs),
+            timeout_secs,
+        }
+    }
+
+    fn awaiting_history_timeout_secs() -> u64 {
+        crate::config::config()
+            .reload
+            .awaiting_history_timeout_secs
+            .unwrap_or(10)
+            .max(1)
+    }
 }
 
 const MEMORY_INJECTION_SUPPRESSION_SECS: u64 = 90;
@@ -571,6 +596,8 @@ pub struct App {
     remote_resume_activity: Option<RemoteResumeActivity>,
     // Reload reconnect is waiting for server history before deciding whether to continue.
     pending_reload_reconnect_status: Option<PendingReloadReconnectStatus>,
+    // Last server event seen by the remote TUI, used for reload recovery diagnostics.
+    last_remote_server_event_at: Option<Instant>,
     // Accurate TPS tracking: only counts actual token streaming time, not tool execution
     /// Set when first TextDelta arrives in a streaming response
     streaming_tps_start: Option<Instant>,

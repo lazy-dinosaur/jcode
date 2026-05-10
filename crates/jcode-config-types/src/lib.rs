@@ -261,6 +261,24 @@ impl Default for CompactionConfig {
     }
 }
 
+/// Reload/reconnect recovery configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ReloadConfig {
+    /// Maximum time to wait for the new server to deliver session History
+    /// after a reload/reconnect before falling back to locally cached messages.
+    /// Default: 10 seconds.
+    pub awaiting_history_timeout_secs: Option<u64>,
+}
+
+impl Default for ReloadConfig {
+    fn default() -> Self {
+        Self {
+            awaiting_history_timeout_secs: Some(10),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum NamedProviderType {

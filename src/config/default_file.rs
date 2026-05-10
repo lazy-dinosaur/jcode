@@ -258,6 +258,10 @@ work_branch_prefix = "ambient/"
 # Show ambient cycle in a terminal window (default: true)
 # visible = true
 
+[reload]
+# Max seconds to wait for server History after reload before using local cached messages.
+awaiting_history_timeout_secs = 10
+
 [gateway]
 # Enable WebSocket gateway for iOS/web clients
 enabled = false

@@ -661,12 +661,15 @@ pub(in crate::tui::app) async fn handle_post_connect<B: ratatui::backend::Backen
     );
 
     if reload_reconnect_needs_server_history {
-        app.pending_reload_reconnect_status = Some(PendingReloadReconnectStatus::AwaitingHistory {
-            session_id: session_to_resume.map(str::to_string),
-        });
+        let timeout_secs = PendingReloadReconnectStatus::awaiting_history_timeout_secs();
+        app.pending_reload_reconnect_status = Some(PendingReloadReconnectStatus::awaiting_history(
+            session_to_resume.map(str::to_string),
+            timeout_secs,
+        ));
         app.push_display_message(DisplayMessage::system(
-            "Reload complete — checking restored history to decide whether continuation is needed."
-                .to_string(),
+            format!(
+                "Reload complete — checking restored history to decide whether continuation is needed (up to {timeout_secs}s)."
+            ),
         ));
         ReloadContext::log_recovery_outcome(
             "tui_reconnect",
