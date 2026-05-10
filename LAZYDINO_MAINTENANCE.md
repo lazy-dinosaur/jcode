@@ -358,6 +358,20 @@ Track each custom patch as a small commit. Current known customizations:
    - Validation: `bash -n scripts/lazydino/install-custom-jcode.sh`, `scripts/lazydino/install-custom-jcode.sh --help`, and a release install smoke.
    - Binary reinstall required: no for the script itself, but this script exists to do binary reinstalls correctly.
 
+10. OpenAI usage percent normalization
+   - Upstream source: adapted from PR `#178` (`Fix OpenAI usage percent normalization for low values`).
+   - Commit: `fix: normalize OpenAI usage percentages`.
+   - Patch branch: `patch/openai-usage-percent-normalization`.
+   - Goal: fix `jcode usage`, `/usage`, and compact quota widgets incorrectly showing `used_percent: 1` as 100% exhausted.
+   - Root cause: OpenAI `wham/usage` returns `used_percent` in `[0, 100]`, but the old helper treated values `<= 1.0` as ratios, so `1` became `1.0` instead of `0.01`.
+   - Runtime behavior: `normalize_ratio(raw)` now always treats OpenAI usage values as percentages and returns `(raw / 100.0).clamp(0.0, 1.0)`.
+   - Touched paths:
+     - `src/usage/openai_helpers.rs`
+     - `src/usage_openai.rs`
+     - `src/usage/tests.rs`
+   - Validation: `cargo test usage::tests --lib` and `cargo check`.
+   - Binary reinstall required: yes, because this changes usage/quota runtime behavior.
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
@@ -439,9 +453,9 @@ Decision policy:
 ### Adopt / reimplement soon
 
 - `#178` Fix OpenAI usage percent normalization for low values
-  - Status: small, mergeable, high practical value.
+  - Status: adapted locally as `patch/openai-usage-percent-normalization`.
   - Benefit: fixes `/usage` and info-widget bars that show 1% weekly usage as 100% exhausted.
-  - Suggested action: apply as a small patch branch after current skill-sync work.
+  - Suggested action: keep covered by `cargo test usage::tests --lib` after rebases.
 - `#173` Fix ambient serde bug
   - Status: already adapted locally as `patch/ambient-serde-args`.
   - Benefit: prevents ambient tool deserialization failure when numbers arrive as strings.

@@ -60,6 +60,7 @@ PATCH_REFS=(
   patch/project-skill-sync
   patch/custom-install-server-paths
   patch/pr151-slice-analysis
+  patch/openai-usage-percent-normalization
 )
 
 while [[ $# -gt 0 ]]; do

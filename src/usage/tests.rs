@@ -228,6 +228,18 @@ fn test_classify_openai_limits_recognizes_five_weekly_and_spark() {
 }
 
 #[test]
+fn test_normalize_ratio_treats_low_integer_values_as_percent() {
+    assert_eq!(openai_helpers::normalize_ratio(0.0), 0.0);
+    assert_eq!(openai_helpers::normalize_ratio(1.0), 0.01);
+    assert_eq!(openai_helpers::normalize_ratio(5.0), 0.05);
+    assert_eq!(openai_helpers::normalize_ratio(50.0), 0.5);
+    assert_eq!(openai_helpers::normalize_ratio(100.0), 1.0);
+    assert_eq!(openai_helpers::normalize_ratio(150.0), 1.0);
+    assert_eq!(openai_helpers::normalize_ratio(-10.0), 0.0);
+    assert_eq!(openai_helpers::normalize_ratio(f32::NAN), 0.0);
+}
+
+#[test]
 fn test_parse_usage_percent_supports_used_limit_shape() {
     let mut obj = serde_json::Map::new();
     obj.insert("used".to_string(), serde_json::json!(20));
@@ -439,6 +451,49 @@ fn test_parse_openai_usage_payload_prefers_wham_windows_and_additional_limits() 
     assert_eq!(parsed.limits[1].usage_percent, 50.0);
     assert_eq!(parsed.limits[2].name, "Codex Spark (5h)");
     assert_eq!(parsed.limits[2].usage_percent, 75.0);
+}
+
+#[test]
+fn test_parse_openai_usage_payload_reports_low_percentages_correctly() {
+    let json = serde_json::json!({
+        "plan_type": "pro",
+        "rate_limit": {
+            "allowed": true,
+            "primary_window": {
+                "used_percent": 5,
+                "reset_at": 1_766_000_000
+            },
+            "secondary_window": {
+                "used_percent": 1,
+                "reset_at": 1_766_086_400
+            }
+        },
+        "additional_rate_limits": [{
+            "limit_name": "Codex Spark",
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 1,
+                    "reset_at": 1_766_000_000
+                }
+            }
+        }]
+    });
+
+    let parsed = openai_helpers::parse_openai_usage_payload(&json);
+    let classified = openai_helpers::classify_openai_limits(&parsed.limits);
+
+    assert_eq!(parsed.limits[0].usage_percent, 5.0);
+    assert_eq!(parsed.limits[1].usage_percent, 1.0);
+    assert_eq!(parsed.limits[2].usage_percent, 1.0);
+    assert_eq!(
+        classified.five_hour.as_ref().map(|w| w.usage_ratio),
+        Some(0.05)
+    );
+    assert_eq!(
+        classified.seven_day.as_ref().map(|w| w.usage_ratio),
+        Some(0.01)
+    );
+    assert_eq!(classified.spark.as_ref().map(|w| w.usage_ratio), Some(0.01));
 }
 
 #[test]
