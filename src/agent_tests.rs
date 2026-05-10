@@ -5,6 +5,8 @@ use crate::provider::{EventStream, Provider};
 use crate::tool::Registry;
 use crate::tool::ToolOutput;
 use async_trait::async_trait;
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::mpsc as tokio_mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -14,6 +16,24 @@ struct DelayedProvider {
 }
 
 struct NativeAutoCompactionProvider;
+
+struct SequentialProvider {
+    responses: std::sync::Mutex<VecDeque<Vec<StreamEvent>>>,
+    calls: Arc<AtomicUsize>,
+}
+
+impl SequentialProvider {
+    fn new(responses: Vec<Vec<StreamEvent>>) -> (Self, Arc<AtomicUsize>) {
+        let calls = Arc::new(AtomicUsize::new(0));
+        (
+            Self {
+                responses: std::sync::Mutex::new(responses.into()),
+                calls: calls.clone(),
+            },
+            calls,
+        )
+    }
+}
 
 #[async_trait]
 impl Provider for DelayedProvider {
@@ -82,6 +102,52 @@ impl Provider for NativeAutoCompactionProvider {
 
     fn fork(&self) -> Arc<dyn Provider> {
         Arc::new(Self)
+    }
+}
+
+#[async_trait]
+impl Provider for SequentialProvider {
+    async fn complete(
+        &self,
+        _messages: &[Message],
+        _tools: &[ToolDefinition],
+        _system: &str,
+        _resume_session_id: Option<&str>,
+    ) -> Result<EventStream> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let events = self
+            .responses
+            .lock()
+            .expect("sequential provider responses lock poisoned")
+            .pop_front()
+            .unwrap_or_else(|| {
+                vec![StreamEvent::MessageEnd {
+                    stop_reason: Some("end_turn".to_string()),
+                }]
+            });
+        let (tx, rx) = tokio_mpsc::channel::<Result<StreamEvent>>(8);
+        tokio::spawn(async move {
+            for event in events {
+                let _ = tx.send(Ok(event)).await;
+            }
+        });
+        Ok(Box::pin(ReceiverStream::new(rx)))
+    }
+
+    fn name(&self) -> &str {
+        "sequential"
+    }
+
+    fn fork(&self) -> Arc<dyn Provider> {
+        let responses = self
+            .responses
+            .lock()
+            .expect("sequential provider responses lock poisoned")
+            .clone();
+        Arc::new(Self {
+            responses: std::sync::Mutex::new(responses),
+            calls: self.calls.clone(),
+        })
     }
 }
 
@@ -195,6 +261,123 @@ async fn run_turn_streaming_mpsc_emits_keepalive_while_provider_is_quiet() {
 
     assert!(saw_text, "expected delayed provider text after keepalive");
     task.await.unwrap().unwrap();
+}
+
+fn empty_response_events() -> Vec<StreamEvent> {
+    vec![StreamEvent::MessageEnd {
+        stop_reason: Some("end_turn".to_string()),
+    }]
+}
+
+fn text_response_events(text: &str) -> Vec<StreamEvent> {
+    vec![
+        StreamEvent::TextDelta(text.to_string()),
+        StreamEvent::MessageEnd {
+            stop_reason: Some("end_turn".to_string()),
+        },
+    ]
+}
+
+fn add_tool_result_message(agent: &mut Agent) {
+    agent.add_message(
+        Role::User,
+        vec![ContentBlock::ToolResult {
+            tool_use_id: "call_empty_retry".to_string(),
+            content: "tool output that needs a response".to_string(),
+            is_error: None,
+        }],
+    );
+}
+
+fn assistant_text_messages(agent: &Agent) -> Vec<String> {
+    agent
+        .session
+        .messages
+        .iter()
+        .filter(|message| message.role == Role::Assistant)
+        .flat_map(|message| message.content.iter())
+        .filter_map(|block| match block {
+            ContentBlock::Text { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn empty_response_after_tool_result_is_retried_once_via_streaming_mpsc() {
+    let _guard = crate::storage::lock_test_env();
+    let retry_text = "Here is the concise follow-up.";
+    let (provider, calls) = SequentialProvider::new(vec![
+        empty_response_events(),
+        text_response_events(retry_text),
+    ]);
+    let provider: Arc<dyn Provider> = Arc::new(provider);
+    let registry = Registry::new(provider.clone()).await;
+    let mut agent = Agent::new(provider, registry);
+    add_tool_result_message(&mut agent);
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    agent.run_turn_streaming_mpsc(tx).await.unwrap();
+
+    let text_events: Vec<String> = std::iter::from_fn(|| rx.try_recv().ok())
+        .filter_map(|event| match event {
+            ServerEvent::TextDelta { text } => Some(text),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert!(text_events.iter().any(|text| text == retry_text));
+    assert!(
+        assistant_text_messages(&agent)
+            .iter()
+            .any(|text| text == retry_text)
+    );
+}
+
+#[tokio::test]
+async fn empty_response_without_prior_tool_result_does_not_retry() {
+    let _guard = crate::storage::lock_test_env();
+    let (provider, calls) = SequentialProvider::new(vec![
+        empty_response_events(),
+        text_response_events("should not be requested"),
+    ]);
+    let provider: Arc<dyn Provider> = Arc::new(provider);
+    let registry = Registry::new(provider.clone()).await;
+    let mut agent = Agent::new(provider, registry);
+    agent.add_message(
+        Role::User,
+        vec![ContentBlock::Text {
+            text: "plain prompt".to_string(),
+            cache_control: None,
+        }],
+    );
+
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    agent.run_turn_streaming_mpsc(tx).await.unwrap();
+
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(assistant_text_messages(&agent).is_empty());
+}
+
+#[tokio::test]
+async fn second_empty_response_after_tool_result_does_not_retry_again() {
+    let _guard = crate::storage::lock_test_env();
+    let (provider, calls) = SequentialProvider::new(vec![
+        empty_response_events(),
+        empty_response_events(),
+        text_response_events("should not be requested"),
+    ]);
+    let provider: Arc<dyn Provider> = Arc::new(provider);
+    let registry = Registry::new(provider.clone()).await;
+    let mut agent = Agent::new(provider, registry);
+    add_tool_result_message(&mut agent);
+
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    agent.run_turn_streaming_mpsc(tx).await.unwrap();
+
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert!(assistant_text_messages(&agent).is_empty());
 }
 
 #[tokio::test]
