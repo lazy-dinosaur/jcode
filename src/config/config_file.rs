@@ -74,6 +74,36 @@ impl Config {
         config
     }
 
+    /// M19: like [`Self::load`] but propagates parse errors instead of falling
+    /// back to default. Used by hot-reload (`force_reload_config` /
+    /// `maybe_reload`) so a transiently invalid TOML file (e.g. mid-edit save)
+    /// does not silently wipe the user's effective config back to defaults —
+    /// callers can keep the previous snapshot instead.
+    ///
+    /// Behaviour:
+    /// - returns `Ok(default + env overrides)` if no config file exists
+    ///   (matches `load()` for that case).
+    /// - returns `Ok(parsed + env overrides)` on successful parse.
+    /// - returns `Err(...)` on read or parse failure.
+    pub fn try_load() -> anyhow::Result<Self> {
+        let path = Self::path();
+        let mut config = match path {
+            Some(ref p) if p.exists() => {
+                let content = std::fs::read_to_string(p).map_err(|e| {
+                    anyhow::anyhow!("failed to read {}: {}", p.display(), e)
+                })?;
+                let mut parsed: Self = toml::from_str(&content).map_err(|e| {
+                    anyhow::anyhow!("failed to parse {}: {}", p.display(), e)
+                })?;
+                parsed.display.apply_legacy_compat();
+                parsed
+            }
+            _ => Self::default(),
+        };
+        config.apply_env_overrides();
+        Ok(config)
+    }
+
     /// Load config from file only (no env overrides)
     fn load_from_file() -> Option<Self> {
         let path = Self::path()?;
@@ -341,11 +371,14 @@ impl Config {
         cfg.provider.default_provider = provider.map(|s| s.to_string());
         cfg.save()?;
 
-        // Update the global singleton so current session reflects the change
-        let global = CONFIG.get_or_init(|| cfg.clone());
-        // CONFIG is a OnceLock so we can't mutate it directly, but the file is saved
-        // and will take effect on next restart. For this session we log it.
-        let _ = global; // suppress unused
+        // M19: previously this site had to live with the fact that the global
+        // `OnceLock<Config>` could not be mutated, so the change only took
+        // effect after restart. Now the global config hot-reloads on mtime
+        // change; the `cfg.save()` above bumps mtime, so the next `config()`
+        // call will pick up the new defaults automatically (within the
+        // debounce window). Force an immediate reload so callers that read
+        // the global config in the same turn see the new value.
+        let _ = crate::config::force_reload_config();
         crate::logging::info(&format!(
             "Saved default model: {}, provider: {}",
             model.unwrap_or("(none)"),
