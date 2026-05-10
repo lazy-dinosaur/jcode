@@ -188,6 +188,15 @@ pub(crate) enum Command {
         ignore_team_agents: bool,
     },
 
+    /// Diagnose the full jcode harness (config, hooks, skills, agents, commands, mcp).
+    /// For auth-only diagnosis use `jcode auth doctor`.
+    Doctor {
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        quiet: bool,
+    },
+
     /// Run in simple REPL mode (no TUI)
     Repl,
 

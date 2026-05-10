@@ -120,6 +120,13 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     RegisteredCommand::hidden("/zstatus", "Secret premium-mode status command"),
 ];
 
+pub(crate) fn registered_command_names() -> Vec<&'static str> {
+    REGISTERED_COMMANDS
+        .iter()
+        .map(|command| command.name)
+        .collect()
+}
+
 impl App {
     /// Find word boundary going backward (for Ctrl+W, Alt+B)
     pub(super) fn find_word_boundary_back(&self) -> usize {

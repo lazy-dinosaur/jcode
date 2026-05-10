@@ -9,8 +9,8 @@ use super::args::{
     RestartCommand, SessionCommand, TranscriptModeArg,
 };
 use crate::{
-    agent, auth, build, project_init, provider, provider_catalog, server, session, setup_hints,
-    startup_profile, tui,
+    agent, auth, build, doctor, project_init, provider, provider_catalog, server, session,
+    setup_hints, startup_profile, tui,
 };
 
 use super::{
@@ -129,6 +129,17 @@ pub(crate) async fn run_main(mut args: Args) -> Result<()> {
                 ignore_team_agents,
             })?;
             report.print_human();
+        }
+        Some(Command::Doctor { json, quiet }) => {
+            let code = doctor::run(doctor::DoctorOptions {
+                json,
+                quiet,
+                working_dir: std::env::current_dir().ok(),
+            })
+            .await?;
+            if code != 0 {
+                std::process::exit(code);
+            }
         }
         Some(Command::Repl) => {
             let (provider, registry) =

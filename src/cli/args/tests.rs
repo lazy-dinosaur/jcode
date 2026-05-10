@@ -333,6 +333,18 @@ fn auth_doctor_subcommand_parses() {
 }
 
 #[test]
+fn top_level_doctor_subcommand_parses() {
+    let args = Args::try_parse_from(["jcode", "doctor", "--json", "--quiet"]).unwrap();
+    match args.command {
+        Some(Command::Doctor { json, quiet }) => {
+            assert!(json);
+            assert!(quiet);
+        }
+        other => panic!("unexpected command: {:?}", other),
+    }
+}
+
+#[test]
 fn provider_list_subcommand_parses() {
     let args = Args::try_parse_from(["jcode", "provider", "list", "--json"]).unwrap();
     match args.command {

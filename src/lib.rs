@@ -24,6 +24,7 @@ pub mod compaction;
 pub mod config;
 pub mod copilot_usage;
 pub mod dictation;
+pub mod doctor;
 #[cfg(feature = "embeddings")]
 pub mod embedding;
 #[cfg(not(feature = "embeddings"))]
@@ -87,6 +88,9 @@ pub mod update;
 pub mod usage;
 pub mod util;
 pub mod video_export;
+
+#[cfg(test)]
+mod doctor_tests;
 
 use anyhow::Result;
 use std::sync::Mutex;
