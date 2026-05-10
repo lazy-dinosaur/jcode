@@ -321,3 +321,44 @@ fn split_history_event(event: ServerEvent) -> Option<(Vec<HistoryMessage>, Vec<R
         _ => None,
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn m18_split_history_event_preserves_image_bytes() {
+        let event: ServerEvent = serde_json::from_value(serde_json::json!({
+            "type": "history",
+            "id": 7,
+            "session_id": "session-1",
+            "messages": [
+                {"role": "user", "content": "see attached"}
+            ],
+            "images": [
+                {
+                    "media_type": "image/png",
+                    "data": "base64-bytes",
+                    "label": "attachment.png",
+                    "source": {"kind": "user_input"}
+                }
+            ]
+        }))
+        .expect("minimal history event should deserialize");
+
+        let (messages, images) = split_history_event(event).expect("history event");
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].content, "see attached");
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].media_type, "image/png");
+        assert_eq!(images[0].data, "base64-bytes");
+    }
+
+    #[test]
+    fn m18_split_history_event_ignores_non_history_events() {
+        let event = ServerEvent::Ack { id: 7 };
+
+        assert!(split_history_event(event).is_none());
+    }
+}
+
