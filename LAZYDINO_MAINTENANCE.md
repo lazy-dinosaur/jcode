@@ -751,6 +751,33 @@ Track each custom patch as a small commit. Current known customizations:
    - Binary reinstall required: yes (changes runtime compaction trigger gating and emergency recovery behaviour).
    - Deployment note (2026-05-10): the previous deployment pattern of overwriting only `~/.local/bin/jcode` left the active TUI server (`~/.jcode/builds/stable/jcode`) on an old binary. Going forward, every fix that changes runtime behaviour should also re-link `~/.jcode/builds/stable/jcode` and `~/.jcode/builds/current/jcode` to a new `versions/lazydino-<sha>/jcode` directory so the next `/restart` actually loads the patched build. Consider folding this into a deploy helper script.
 
+30. Hook merge dedupe when global config path == project-discovered path (M9)
+   - Commit: `82b7c81f` (deploy/m9-m10) / source `9774d9a6` `fix(m9): dedupe hooks_for_working_dir when global path == project path`.
+   - Patch branch: `patch/hook-config-dedupe` (based on `patch/project-local-hook-config`).
+   - Purpose: stop every lifecycle and tool hook from firing twice when `jcode` is launched from `~` or any ancestor of `~/.jcode`. Root cause was introduced by `ed918aeb` ("feat: load project-local hook config"): `Config::hooks_for_working_dir` unconditionally appends hooks discovered under `<cwd>/.jcode/` to the already-loaded global hooks. When the working_dir's nearest project-config search resolved to `~/.jcode/config.toml` itself, the same file got read twice and each hook command got registered twice.
+   - Fix: new private helper `Config::paths_resolve_to_same_file` (canonicalize both paths, fall back to lexical equality if either canonicalize fails). `hooks_for_working_dir` now skips a project candidate path when it resolves to the same filesystem location as `Config::path()`. Distinct project paths still merge as before.
+   - Touched paths:
+     - `src/config/config_file.rs`
+     - `src/config_tests.rs`
+   - Validation: 2 new regression tests pass: `test_hooks_for_working_dir_dedupes_when_global_path_equals_project_path` proves a same-path setup yields 1 command instead of 2; `test_hooks_for_working_dir_still_merges_distinct_project_path` proves legitimate project-local hooks are not suppressed by the dedupe. Pre-existing `test_project_local_hooks_*` tests (4) still pass.
+   - Binary reinstall required: yes (runtime hook registration path).
+
+31. Track and flush non-blocking hooks before single-shot CLI exit (M10)
+   - Commit: `13dd3132` (deploy/m9-m10) / source `e74791df` `fix(m10): track and flush non-blocking hooks before single-shot CLI exit`.
+   - Patch branch: `patch/lifecycle-hook-cli-flush` (based on `patch/lifecycle-hooks`).
+   - Purpose: stop lifecycle hooks (`response.completed`, `session.stop`) and `blocking=false` tool hooks from being silently dropped when non-server `jcode` entrypoints (e.g. `jcode run`, oneshot `jcode --version`-like flows that still trigger hooks) exit. Root cause: `run_tool_hooks` and `run_lifecycle_hook_commands` used fire-and-forget `tokio::spawn`. The `JoinHandle` was dropped immediately, so when `runtime.block_on(jcode::run())` returned, the runtime was dropped before the hook task could finish. Because `run_hook_command` sets `kill_on_drop(true)` on the child process, the spawned shell got killed mid-execution. `jcode serve` did not show the bug only because its event loop runs forever.
+   - Fix: process-global registry `OnceLock<Mutex<Vec<JoinHandle<()>>>>` exposed via:
+     - `pending_nonblocking_hooks()` (lazy-init).
+     - `spawn_tracked_nonblocking_hook(future)` (replaces both `tokio::spawn` call sites in `src/hooks.rs`).
+     - `pub async fn flush_nonblocking_hooks(timeout: Duration) -> usize` drains the registry and awaits each handle, bounded by the timeout so a slow/hung hook cannot wedge process exit. Returns the count of completed handles for observability.
+   - `src/cli/startup.rs::run` calls `flush_nonblocking_hooks(Duration::from_secs(5))` between `dispatch::run_main(args).await` and the `Err` propagation, so the flush runs whether the dispatch succeeded or failed. The 5s budget matches the existing tool-hook timeout for well-behaved hooks.
+   - Touched paths:
+     - `src/hooks.rs`
+     - `src/cli/startup.rs`
+   - Validation: 3 new regression tests pass (serial mutex `M10_GLOBAL` because the registry is process-global): `flush_nonblocking_hooks_awaits_tracked_handle` (tracked side effect runs and is reported), `flush_nonblocking_hooks_returns_zero_when_empty` (no-hook fast path short-circuits regardless of timeout, required for hot path), `flush_nonblocking_hooks_bounded_by_timeout` (a never-returning hook is dropped after the deadline, flush returns 0).
+   - Long-running `jcode serve` is unaffected: the flush still runs at shutdown but typically finds the slot empty (each `tokio::spawn` task has long since completed). Server graceful-shutdown semantics are unchanged.
+   - Binary reinstall required: yes (hook spawn/flush plumbing on a hot path).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
