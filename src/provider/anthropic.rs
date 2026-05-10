@@ -69,7 +69,7 @@ pub(crate) fn new_oauth_request_id() -> String {
 }
 
 fn configured_agent_profile_docs_for_oauth() -> (Vec<String>, Vec<String>) {
-    let agents = &crate::config::config().agents;
+    let agents = crate::config::config().agents_for_working_dir(None);
     let mut examples = vec!["general".to_string()];
     examples.extend(agents.profiles.keys().cloned());
     examples.extend(agents.routes.keys().cloned());

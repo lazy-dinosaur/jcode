@@ -10,6 +10,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
 
@@ -43,25 +44,29 @@ impl SubagentTool {
         existing_session_model: Option<&str>,
         routed_model: Option<&str>,
         parent_subagent_model: Option<&str>,
+        configured_swarm_model: Option<&str>,
         provider_model: &str,
     ) -> String {
         requested_model
             .or(existing_session_model)
             .or(routed_model)
             .or(parent_subagent_model)
-            .or(crate::config::config().agents.swarm_model.as_deref())
+            .or(configured_swarm_model)
             .unwrap_or(provider_model)
             .to_string()
     }
 
-    fn route_for_subagent_type(subagent_type: &str) -> ResolvedSubagentRoute {
-        let agents = &crate::config::config().agents;
+    fn route_for_subagent_type(
+        subagent_type: &str,
+        working_dir: Option<&Path>,
+    ) -> ResolvedSubagentRoute {
+        let agents = crate::config::config().agents_for_working_dir(working_dir);
         let direct = subagent_type.trim();
         if direct.is_empty() {
             return ResolvedSubagentRoute::default();
         }
 
-        let rich_route = Self::profile_for_subagent_type(agents, direct);
+        let rich_route = Self::profile_for_subagent_type(&agents, direct);
         if let Some(route) = rich_route {
             let raw_model = route
                 .model
@@ -144,9 +149,9 @@ impl SubagentTool {
         model.starts_with("gpt-") || model.starts_with("openai/")
     }
 
-    fn configured_subagent_types() -> Vec<String> {
-        let agents = &crate::config::config().agents;
-        Self::configured_subagent_types_for_agents(agents)
+    fn configured_subagent_types(working_dir: Option<&Path>) -> Vec<String> {
+        let agents = crate::config::config().agents_for_working_dir(working_dir);
+        Self::configured_subagent_types_for_agents(&agents)
     }
 
     fn configured_subagent_types_for_agents(agents: &crate::config::AgentsConfig) -> Vec<String> {
@@ -160,9 +165,9 @@ impl SubagentTool {
         types.into_iter().collect()
     }
 
-    fn configured_subagent_type_docs() -> Vec<String> {
-        let agents = &crate::config::config().agents;
-        Self::configured_subagent_type_docs_for_agents(agents)
+    fn configured_subagent_type_docs(working_dir: Option<&Path>) -> Vec<String> {
+        let agents = crate::config::config().agents_for_working_dir(working_dir);
+        Self::configured_subagent_type_docs_for_agents(&agents)
     }
 
     fn configured_subagent_type_docs_for_agents(
@@ -308,8 +313,8 @@ impl Tool for SubagentTool {
     }
 
     fn parameters_schema(&self) -> Value {
-        let configured_types = Self::configured_subagent_types();
-        let configured_docs = Self::configured_subagent_type_docs();
+        let configured_types = Self::configured_subagent_types(None);
+        let configured_docs = Self::configured_subagent_type_docs(None);
         let type_description = if configured_docs.is_empty() {
             "Subagent type.".to_string()
         } else {
@@ -382,12 +387,15 @@ impl Tool for SubagentTool {
         };
         let parent_subagent_model = Self::preferred_parent_subagent_model(&ctx.session_id);
         let provider_model = self.provider.model();
-        let route = Self::route_for_subagent_type(&params.subagent_type);
+        let agents = crate::config::config().agents_for_working_dir(ctx.working_dir.as_deref());
+        let route =
+            Self::route_for_subagent_type(&params.subagent_type, ctx.working_dir.as_deref());
         let resolved_model = Self::resolve_model(
             params.model.as_deref(),
             session.model.as_deref(),
             route.model.as_deref(),
             parent_subagent_model.as_deref(),
+            agents.swarm_model.as_deref(),
             &provider_model,
         );
         session.model = Some(resolved_model.clone());
@@ -669,13 +677,15 @@ mod tests {
     }
 
     #[test]
-    fn resolve_model_prefers_explicit_then_existing_then_route_then_parent_then_provider() {
+    fn resolve_model_prefers_explicit_then_existing_then_route_then_parent_then_configured_then_provider()
+     {
         assert_eq!(
             super::SubagentTool::resolve_model(
                 Some("explicit"),
                 Some("existing"),
                 Some("route"),
                 Some("parent"),
+                Some("configured"),
                 "provider"
             ),
             "explicit"
@@ -686,6 +696,7 @@ mod tests {
                 Some("existing"),
                 Some("route"),
                 Some("parent"),
+                Some("configured"),
                 "provider"
             ),
             "existing"
@@ -696,22 +707,36 @@ mod tests {
                 None,
                 Some("route"),
                 Some("parent"),
+                Some("configured"),
                 "provider"
             ),
             "route"
         );
         assert_eq!(
-            super::SubagentTool::resolve_model(None, None, None, Some("parent"), "provider"),
+            super::SubagentTool::resolve_model(
+                None,
+                None,
+                None,
+                Some("parent"),
+                Some("configured"),
+                "provider"
+            ),
             "parent"
         );
-        let configured_or_provider = crate::config::config()
-            .agents
-            .swarm_model
-            .as_deref()
-            .unwrap_or("provider");
         assert_eq!(
-            super::SubagentTool::resolve_model(None, None, None, None, "provider"),
-            configured_or_provider
+            super::SubagentTool::resolve_model(
+                None,
+                None,
+                None,
+                None,
+                Some("configured"),
+                "provider"
+            ),
+            "configured"
+        );
+        assert_eq!(
+            super::SubagentTool::resolve_model(None, None, None, None, None, "provider"),
+            "provider"
         );
     }
 
@@ -804,6 +829,38 @@ mod tests {
         assert!(
             docs.iter()
                 .any(|doc| doc.contains("use when: the request needs decomposition"))
+        );
+    }
+
+    #[test]
+    fn test_subagent_routes_use_project_agents_config() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(project.join(".jcode")).expect("create .jcode");
+        std::fs::write(
+            project.join(".jcode").join("config.toml"),
+            r#"
+            [agents.profiles.localreviewer]
+            model = "project-local-model"
+            description = "Project-local reviewer"
+            prompt = "Use the project-local review checklist."
+            "#,
+        )
+        .expect("write project config");
+
+        let global_route = super::SubagentTool::route_for_subagent_type("localreviewer", None);
+        let project_route =
+            super::SubagentTool::route_for_subagent_type("localreviewer", Some(&project));
+
+        assert_ne!(global_route.model.as_deref(), Some("project-local-model"));
+        assert_eq!(project_route.model.as_deref(), Some("project-local-model"));
+        assert_eq!(
+            project_route.description.as_deref(),
+            Some("Project-local reviewer")
+        );
+        assert_eq!(
+            project_route.prompt.as_deref(),
+            Some("Use the project-local review checklist.")
         );
     }
 
