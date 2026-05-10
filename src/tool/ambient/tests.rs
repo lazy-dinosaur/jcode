@@ -61,6 +61,25 @@ fn test_end_cycle_input_deserialization() {
 }
 
 #[test]
+fn test_end_cycle_input_accepts_stringified_counts() {
+    let input = json!({
+        "summary": "No changes",
+        "memories_modified": "0",
+        "compactions": "0",
+        "next_schedule": {
+            "wake_in_minutes": "20",
+            "context": "Check again",
+            "priority": "normal"
+        }
+    });
+
+    let parsed: EndCycleInput = serde_json::from_value(input).unwrap();
+    assert_eq!(parsed.memories_modified, 0);
+    assert_eq!(parsed.compactions, 0);
+    assert_eq!(parsed.next_schedule.unwrap().wake_in_minutes, Some(20));
+}
+
+#[test]
 fn test_end_cycle_input_minimal() {
     let input = json!({
         "summary": "Nothing to do",
@@ -87,6 +106,24 @@ fn test_schedule_input_deserialization() {
     assert!(parsed.wake_at.is_none());
     assert_eq!(parsed.context, "Check CI results");
     assert_eq!(parsed.priority.as_deref(), Some("normal"));
+}
+
+#[test]
+fn test_schedule_inputs_accept_stringified_wake_minutes() {
+    let ambient_input = json!({
+        "wake_in_minutes": "15",
+        "context": "Check CI results",
+        "priority": "normal"
+    });
+    let parsed: ScheduleInput = serde_json::from_value(ambient_input).unwrap();
+    assert_eq!(parsed.wake_in_minutes, Some(15));
+
+    let schedule_input = json!({
+        "task": "Review logs",
+        "wake_in_minutes": "30"
+    });
+    let parsed: ScheduleToolInput = serde_json::from_value(schedule_input).unwrap();
+    assert_eq!(parsed.wake_in_minutes, Some(30));
 }
 
 #[test]
