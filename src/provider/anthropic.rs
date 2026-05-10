@@ -890,9 +890,37 @@ impl AnthropicProvider {
                     cache_control: None,
                 },
                 ApiTool {
+                    // M13: Keep the OAuth-facing name as `ScheduleWakeup` (the
+                    // `schedule` -> `ScheduleWakeup` outgoing rename is applied
+                    // by `anthropic_map_tool_name_for_oauth`, and incoming
+                    // `ScheduleWakeup` is normalized back to `schedule` by
+                    // `anthropic_map_tool_name_from_oauth`). Only the advertised
+                    // schema changes: it must match `ScheduleTool::parameters_schema`
+                    // (`task` required), not the dead `delaySeconds`/`reason`
+                    // schema for an unimplemented `/loop` dynamic mode.
                     name: "ScheduleWakeup".to_string(),
-                    description: "Schedule when to resume work in /loop dynamic mode.".to_string(),
-                    input_schema: json!({"type":"object","properties":{"delaySeconds":{"type":"number"},"reason":{"type":"string"},"prompt":{"type":"string"}},"required":["delaySeconds","reason","prompt"],"additionalProperties":false}),
+                    description:
+                        "Schedule a task for future execution (requires wake_in_minutes or wake_at)."
+                            .to_string(),
+                    input_schema: json!({
+                        "type": "object",
+                        "required": ["task"],
+                        "properties": {
+                            "task": {"type": "string", "description": "Task description for the scheduled run."},
+                            "wake_in_minutes": {"type": "integer", "description": "Wake N minutes from now."},
+                            "wake_at": {"type": "string", "description": "RFC3339 timestamp for absolute scheduling."},
+                            "priority": {"type": "string", "enum": ["low", "normal", "high"]},
+                            "relevant_files": {"type": "array", "items": {"type": "string"}},
+                            "background_context": {"type": "string"},
+                            "success_criteria": {"type": "string"},
+                            "target": {
+                                "type": "string",
+                                "enum": ["resume", "spawn", "ambient"],
+                                "description": "Delivery target. Defaults to resuming the originating session."
+                            }
+                        },
+                        "additionalProperties": false
+                    }),
                     cache_control: None,
                 },
                 ApiTool {
@@ -902,11 +930,29 @@ impl AnthropicProvider {
                     cache_control: None,
                 },
                 ApiTool {
+                    // M12: align advertised `ToolSearch` schema with the actual
+                    // dispatch handler `CodeSearchTool` (see
+                    // `src/tool/codesearch.rs`). The previous schema required
+                    // `max_results`, which has no analogue in the local
+                    // dispatcher — the local tool takes `query` (required) and
+                    // `max_tokens` (optional). Wire-name `ToolSearch` is kept
+                    // and routed to `codesearch` by `anthropic_map_tool_name_*`.
                     name: "ToolSearch".to_string(),
                     description:
-                        "Fetches full schema definitions for deferred tools so they can be called."
+                        "Search code, docs, and tool examples by semantic query."
                             .to_string(),
-                    input_schema: json!({"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"number","default":5}},"required":["query","max_results"],"additionalProperties":false}),
+                    input_schema: json!({
+                        "type": "object",
+                        "required": ["query"],
+                        "properties": {
+                            "query": {"type": "string", "description": "Search query."},
+                            "max_tokens": {
+                                "type": "integer",
+                                "description": "Maximum tokens of results to return."
+                            }
+                        },
+                        "additionalProperties": false
+                    }),
                     cache_control: None,
                 },
                 ApiTool {

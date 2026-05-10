@@ -58,6 +58,81 @@ fn test_oauth_agent_schema_advertises_flexible_subagent_profiles() {
     assert!(subagent_type_schema.get("enum").is_none());
 }
 
+/// M13 regression: the OAuth tool advertisement for the scheduling tool
+/// must match the actual `ScheduleTool` dispatch handler, not the dead
+/// `ScheduleWakeup` / `delaySeconds` schema for an unimplemented feature.
+#[test]
+fn test_oauth_schedule_tool_advertised_schema_matches_dispatch() {
+    use crate::tool::Tool;
+    use crate::tool::ambient::ScheduleTool;
+
+    let provider = AnthropicProvider::new();
+    let api_tools = provider.format_tools(&[], true);
+
+    // Wire-name stays `ScheduleWakeup` (for back-compat with the existing
+    // `schedule` <-> `ScheduleWakeup` mapping); only the schema must match
+    // the real dispatch handler that takes `task` as the only required field.
+    let schedule = api_tools
+        .iter()
+        .find(|t| t.name == "ScheduleWakeup")
+        .expect("OAuth tool list must advertise `ScheduleWakeup` (wire-name for the local `schedule` tool)");
+
+    let dispatch_schema = ScheduleTool::new().parameters_schema();
+    assert_eq!(
+        dispatch_schema["required"],
+        serde_json::json!(["task"]),
+        "ScheduleTool dispatch schema invariant changed; update advertised schema too"
+    );
+    assert_eq!(
+        schedule.input_schema["required"],
+        serde_json::json!(["task"]),
+        "Advertised schedule schema must require `task` to match dispatch (was the M13 bug — required `delaySeconds`)"
+    );
+    assert!(
+        schedule.input_schema["properties"]["task"].is_object(),
+        "Advertised schedule schema must expose `task` property"
+    );
+    // The legacy `delaySeconds` schema must not return.
+    assert!(
+        schedule.input_schema["properties"]["delaySeconds"].is_null(),
+        "Advertised schedule schema must not contain the dead `delaySeconds` field"
+    );
+}
+
+/// M12 regression: the OAuth tool advertisement for `ToolSearch` must match
+/// the actual `CodeSearchTool` dispatch handler that the
+/// `anthropic_map_tool_name_from_oauth` mapping routes it to.
+#[test]
+fn test_oauth_tool_search_advertised_schema_matches_codesearch_dispatch() {
+    use crate::tool::Tool;
+    use crate::tool::codesearch::CodeSearchTool;
+
+    let provider = AnthropicProvider::new();
+    let api_tools = provider.format_tools(&[], true);
+
+    let tool_search = api_tools
+        .iter()
+        .find(|t| t.name == "ToolSearch")
+        .expect("OAuth tool list must advertise `ToolSearch` (wire-name for the local `codesearch` tool)");
+
+    let dispatch_schema = CodeSearchTool::new().parameters_schema();
+    assert_eq!(
+        dispatch_schema["required"],
+        serde_json::json!(["query"]),
+        "CodeSearchTool dispatch schema invariant changed; update advertised schema too"
+    );
+    assert_eq!(
+        tool_search.input_schema["required"],
+        serde_json::json!(["query"]),
+        "Advertised ToolSearch schema must require only `query` to match dispatch (was the M12 bug — required `max_results` which has no analogue)"
+    );
+    // The legacy `max_results` field must not return.
+    assert!(
+        tool_search.input_schema["properties"]["max_results"].is_null(),
+        "Advertised ToolSearch schema must not contain the dead `max_results` field"
+    );
+}
+
 #[tokio::test]
 async fn test_dangling_tool_use_repair() {
     let provider = AnthropicProvider::new();
