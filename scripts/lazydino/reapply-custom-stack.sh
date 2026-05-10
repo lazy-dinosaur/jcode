@@ -68,6 +68,7 @@ PATCH_REFS=(
   patch/ecosystem-paths-policy
   patch/agent-profiles-project-merge
   patch/agent-profiles-md-files
+  patch/project-slash-commands
 )
 
 while [[ $# -gt 0 ]]; do

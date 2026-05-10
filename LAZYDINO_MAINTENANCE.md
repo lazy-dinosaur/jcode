@@ -513,6 +513,29 @@ Track each custom patch as a small commit. Current known customizations:
    - Validation: `cargo check`, `cargo test agents_for_working_dir --lib --no-fail-fast`, `cargo test agent_profiles_md --lib --no-fail-fast`, `cargo test config_tests --lib --no-fail-fast`, `cargo test task --lib --no-fail-fast` (known baseline `spawn_target_creates_one_child_session_and_runs_task` failure remains), `cargo test --lib --no-run`, and the 13-test known-failure smoke.
    - Binary reinstall required: yes, because this changes runtime subagent profile discovery behavior.
 
+18. Project-local markdown slash commands
+   - Commit: `feat: load slash commands from project-local markdown files`.
+   - Patch branch: `patch/project-slash-commands`.
+   - Purpose: let project harnesses ship Claude-style slash commands as markdown files that expand into normal user prompts in the TUI.
+   - Command directories:
+     - `<project>/.jcode/commands/*.md`
+     - `<project>/.claude/commands/*.md`
+     - `<project>/.agents/commands/*.md`
+     - `<project>/.opencode/commands/*.md`
+   - Frontmatter behavior:
+     - Frontmatter is optional; files without frontmatter use the entire markdown body as the prompt and the filename stem as the command name.
+     - Accepted aliases include `description` / `desc`, `argument-hint` / `argument_hint` / `args`, `allowed-tools` / `allowed_tools` / `tools`, and `model`.
+     - `allowed-tools` and `model` are parsed for ecosystem compatibility but are informational only in this patch.
+   - Runtime behavior:
+     - Built-in slash commands win over project commands.
+     - Installed skills win over project commands.
+     - Matching project commands render their markdown body with `$ARGUMENTS` substitution; if no placeholder exists, non-empty user args are appended as a separate paragraph.
+     - Rendered text is submitted as a normal user message. Project commands do not execute external code.
+     - Discovery is project-local only; no global `~/.claude/commands` or `~/.jcode/commands` are loaded.
+   - Precedence: `.jcode > .claude > .agents > .opencode`.
+   - Validation: `cargo check`, `cargo test project_commands --lib --no-fail-fast`, `cargo test project_command --lib --no-fail-fast`, `cargo test agents_for_working_dir --lib --no-fail-fast`, `cargo test skill --lib --no-fail-fast`, `cargo test --lib --no-run`, and the 13-test known-failure smoke.
+   - Binary reinstall required: yes, because this changes TUI slash command discovery and dispatch behavior.
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
