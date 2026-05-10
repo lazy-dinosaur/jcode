@@ -153,7 +153,7 @@ async fn cleanup_swarm_workers(ctx: &ToolContext, params: &CommunicateInput) -> 
 
     if candidates.is_empty() {
         return Ok(format!(
-            "No cleanup candidates found. Default cleanup only stops sessions spawned by this coordinator with status in [{}].",
+            "No cleanup candidates found. Default cleanup only stops terminal/stale sessions spawned by this coordinator with status in [{}].",
             target_status.join(", ")
         ));
     }
