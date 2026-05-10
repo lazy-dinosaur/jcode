@@ -77,6 +77,7 @@ PATCH_REFS=(
   patch/empty-response-retry
   patch/altb-early-race
   patch/bg-delivery-target
+  patch/altb-wake-parent
 )
 
 while [[ $# -gt 0 ]]; do

@@ -671,7 +671,23 @@ Track each custom patch as a small commit. Current known customizations:
    - Validation: `cargo check --all-targets`, `cargo test --lib server::tests::background_ --no-fail-fast`, `cargo test --lib background --no-fail-fast`, plus requested broader sweeps. Known failures remained limited to the documented inventory; focused new regressions passed.
    - Binary reinstall required: yes, because this changes runtime delivery routing and bus event payloads.
 
-26. Lifecycle hook events for session/response boundaries
+26. Alt+B background task parent wake
+   - Commit: `feat: wake parent turn on Alt+B background task completion`.
+   - Patch branch: `patch/altb-wake-parent`.
+   - Purpose: M1 follow-up that makes an Alt+B-detached tool wake the parent/report-back turn when the adopted background task completes, so the model receives the real completion result instead of only the synthetic detached ToolResult.
+   - Runtime behavior:
+     - `BackgroundTaskManager::adopt_with_delivery` now accepts an explicit `wake_on_completion` policy.
+     - The generic `adopt(...)` helper keeps the prior `wake=false` default for compatibility.
+     - The MPSC Alt+B detach path passes `wake=true` while preserving the parent delivery session hint added by `patch/bg-delivery-target`.
+     - `turn_streaming_broadcast` was inspected and left unchanged because it has no `adopt_with_delivery` Alt+B detach path in this branch.
+   - Touched paths:
+     - `src/background.rs`
+     - `src/background/tests.rs`
+     - `src/agent/turn_streaming_mpsc.rs`
+   - Validation: `cargo check --all-targets`, `cargo test --lib background --no-fail-fast`, `cargo test --lib agent::tests --no-fail-fast`, and `cargo test --lib server::background_tasks --no-fail-fast`.
+   - Binary reinstall required: yes, because this changes turn-loop wake behavior after Alt+B background completion.
+
+27. Lifecycle hook events for session/response boundaries
    - Commit: `feat: add session.stop and response.completed lifecycle hooks`.
    - Patch branch: `patch/lifecycle-hooks`.
    - Purpose: extend command hooks beyond tool execution with `session.stop` and `response.completed` so external harness automation can observe true session termination and final assistant turn completion.
