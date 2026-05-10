@@ -573,6 +573,21 @@ Track each custom patch as a small commit. Current known customizations:
    - Validation: `cargo check`, `cargo test doctor --lib --no-fail-fast`, `cargo test --lib --no-run`, direct CLI smoke for human/json/quiet output, and the 13-test known-failure smoke.
    - Binary reinstall required: yes, because this adds a new top-level CLI command.
 
+21. Swarm stability core fixes
+   - Commit stack: `feat: auto-promote current session to swarm coordinator before cleanup`, `feat: add owned_only scope to swarm await_members`, `feat: include stale workers in default swarm cleanup target statuses`, and `feat: retry swarm spawn after coordinator self-promotion`.
+   - Patch branch: `patch/swarm-stability-core`.
+   - Source: adapted from PR #151 slices 089 (partial), 090, `b57ff273`, and `ad422ee9`.
+   - Purpose: adopt the core stability fixes that prevent multi-agent flows from blocking on stale/unrelated workers and recover from coordinator role drift after reload/crash scenarios.
+   - Scope:
+     - `swarm cleanup` self-promotes the requester to coordinator before stopping owned cleanup candidates.
+     - `swarm await_members` supports protocol field `owned_only: Option<bool>` and defaults to owned-only server-side when no explicit `session_ids` / `target_session` are provided.
+     - owned-only await snapshots only non-terminal workers that report back to the requester and excludes stale statuses (`crashed`, `closed`, `disconnected`, `running_stale`).
+     - default cleanup statuses include stale workers so Closed/Crashed drained sessions are removed by ordinary cleanup.
+     - coordinator self-promotion eagerly demotes other coordinators in the same swarm, and spawn retries once after automatic self-promotion when the server denies spawn due to coordinator drift.
+   - Explicitly deferred: PR #151 run-id infrastructure, swarm health/reconcile diagnostics, dry-run support, idempotency operation IDs, and other Phase B/C work.
+   - Validation: `cargo check`, `cargo test communicate --lib --no-fail-fast`, `cargo test comm_await --lib --no-fail-fast`, `cargo test comm_control --lib --no-fail-fast`, `cargo test swarm --lib --no-fail-fast -- --test-threads=1`, `cargo test --lib --no-run`, and the 13-test known-failure smoke.
+   - Binary reinstall required: yes, because this changes protocol and runtime swarm coordination behavior.
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
