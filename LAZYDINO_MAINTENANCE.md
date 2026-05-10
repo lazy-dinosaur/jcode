@@ -203,6 +203,70 @@ Track each custom patch as a small commit. Current known customizations:
    - Validation: `cargo test private_jcode --lib`, `cargo test prompt_config --lib`, and `cargo check`.
    - Binary reinstall required: yes, because this changes runtime behavior.
 
+
+## Personal environment fixes
+
+### tmux Ctrl+h/j/k/l passthrough for jcode
+
+Problem:
+
+```text
+jcode runs inside tmux, but Ctrl+h/j/k/l are intercepted by tmux pane navigation instead of reaching jcode.
+```
+
+Root cause:
+
+- The user's tmux setup uses `christoomey/vim-tmux-navigator`.
+- That plugin binds `Ctrl+h/j/k/l` globally and only passes the keys through when the active pane command matches its vim/fzf regex.
+- `jcode` was not in that regex, so tmux treated jcode like a normal shell pane and moved panes instead of sending the key to jcode.
+
+Actual config location:
+
+```text
+/home/lazydino/.config/tmux/tmux.conf
+```
+
+Applied backup:
+
+```text
+/home/lazydino/.config/tmux/tmux.conf.bak-20260510T000423Z
+```
+
+Important correction:
+
+- `/home/lazydino/.tmux.conf` was accidentally edited first, then immediately restored from `/home/lazydino/.tmux.conf.bak-20260510T000333Z`.
+- The real active configuration is the XDG config file above.
+
+Applied block, placed after TPM/plugin initialization so it overrides `vim-tmux-navigator` bindings:
+
+```tmux
+# LazyDino/Jcode: override vim-tmux-navigator to pass Ctrl+h/j/k/l into jcode.
+# Must appear after TPM/plugin initialization because vim-tmux-navigator binds these keys too.
+is_vim_fzf_or_jcode="ps -o state= -o comm= -t '#{pane_tty}' | grep -iqE '^[^TXZ ]+ +(\\S+/)?(jcode|g?\\.?(view|l?n?vim?x?|fzf)(diff)?(-wrapped)?)$'"
+bind-key -n C-h if-shell "$is_vim_fzf_or_jcode" "send-keys C-h" "select-pane -L"
+bind-key -n C-j if-shell "$is_vim_fzf_or_jcode" "send-keys C-j" "select-pane -D"
+bind-key -n C-k if-shell "$is_vim_fzf_or_jcode" "send-keys C-k" "select-pane -U"
+bind-key -n C-l if-shell "$is_vim_fzf_or_jcode" "send-keys C-l" "select-pane -R"
+bind-key -n C-\\ if-shell "$is_vim_fzf_or_jcode" "send-keys C-\\" "select-pane -l"
+```
+
+Reload command:
+
+```bash
+tmux source-file ~/.config/tmux/tmux.conf
+```
+
+Validation command:
+
+```bash
+tmux list-keys -T root | grep -E 'C-(h|j|k|l|\\)'
+```
+
+Expected behavior:
+
+- In `jcode`, vim/nvim, or fzf panes: `Ctrl+h/j/k/l` is passed through to the application.
+- In normal shell panes: `Ctrl+h/j/k/l` still performs tmux pane navigation.
+
 ## Hook design note
 
 The recommended hook strategy is:
