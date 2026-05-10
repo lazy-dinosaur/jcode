@@ -457,6 +457,22 @@ Track each custom patch as a small commit. Current known customizations:
    - Validation: `cargo check -p jcode-tui-mermaid`, `cargo check`, `cargo test -p jcode-tui-mermaid --no-fail-fast`, `cargo test -p jcode-tui-markdown test_lazy_renderer_deferred_mermaid_returns_placeholder_on_cache_miss --no-fail-fast`, and `cargo test mermaid --lib --no-fail-fast` (known unrelated filtered failure: `side_panel_mermaid_probe_reports_viewport_fill_for_underutilized_fit` expected `127%` but got `129%`).
    - Binary reinstall required: yes, because this changes TUI rendering/runtime behavior.
 
+15. Ecosystem paths policy
+   - Commit: `feat: enforce ecosystem path policy (global=jcode-only, project=4-way)`.
+   - Patch branch: `patch/ecosystem-paths-policy`.
+   - Purpose: codify the resource discovery rule that global resources are jcode-only while project-local resources can be discovered from the four supported ecosystem directories.
+   - Policy:
+     - Global: read only jcode-owned `~/.jcode/...` resources.
+     - Project-local: read `.jcode`, `.claude`, `.agents`, and `.opencode` resources from the project working directory.
+   - Runtime behavior:
+     - First-run global skill import from `~/.claude/skills`, `~/.codex/skills`, and `~/.opencode/skills` is disabled.
+     - First-run global MCP import from `~/.claude/mcp.json` and `~/.codex/config.toml` is disabled.
+     - Project-local MCP discovery now includes `.agents/mcp.json` and `.opencode/mcp.json`, loaded before `.claude/mcp.json` and `.jcode/mcp.json` so `.jcode` has highest priority on duplicate server names.
+     - Project-local skill discovery remains unchanged and continues to cover `.jcode/skills`, `.claude/skills`, `.agents/skills`, and `.opencode/skills`.
+   - Rationale: installing Claude Code, Codex, or opencode globally should not silently feed their global resources into jcode. Cross-tool compatibility is opt-in at project scope through checked-in or local project directories.
+   - Validation: `cargo check`, `cargo test skill --lib --no-fail-fast`, `cargo test mcp --lib --no-fail-fast`, `cargo test --lib --no-run`, and the 12-test known-failure smoke.
+   - Binary reinstall required: yes, because this changes startup/config resource loading behavior.
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
