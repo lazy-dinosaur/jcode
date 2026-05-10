@@ -473,6 +473,148 @@ fn load_for_remote_startup_preserves_messages_and_replay_but_skips_heavy_vectors
     Ok(())
 }
 
+/// Regression test for M7 (data loss on abnormal shutdown).
+///
+/// Scenario: server crashes / SIGKILL after journal append but before the
+/// next snapshot checkpoint. Then on restart `load_for_remote_startup` could
+/// fail (e.g. snapshot file got truncated mid-write, or contains an unknown
+/// message variant) and the caller falls back to `load_startup_stub`. Before
+/// the M7 fix that fallback returned an empty `messages` vector, silently
+/// dropping every message that was only present in the journal. With the
+/// fix, the stub fallback now replays the journal so messages survive.
+#[test]
+fn load_startup_stub_recovers_messages_from_journal() -> Result<()> {
+    use crate::session::{session_journal_path, session_path};
+
+    let _env_lock = lock_env();
+    let temp_home = tempfile::Builder::new()
+        .prefix("jcode-startup-stub-journal-recovery-")
+        .tempdir()
+        .map_err(|e| anyhow!(e))?;
+    let _home = EnvVarGuard::set("JCODE_HOME", temp_home.path().as_os_str());
+
+    let session_id = "session_m7_journal_recovery";
+    let mut session = Session::create_with_id(
+        session_id.to_string(),
+        None,
+        Some("M7 recovery".to_string()),
+    );
+    session.model = Some("gpt-5.4".to_string());
+    // Initial save -> writes a snapshot, journal stays empty.
+    session.append_stored_message(StoredMessage {
+        id: "msg_pre_snapshot".to_string(),
+        role: Role::User,
+        content: vec![ContentBlock::Text {
+            text: "pre-snapshot message".to_string(),
+            cache_control: None,
+        }],
+        display_role: None,
+        timestamp: Some(Utc::now()),
+        tool_duration_ms: None,
+        token_usage: None,
+    });
+    session.save()?;
+
+    // Two more messages -> these go to the journal (append, not snapshot).
+    session.append_stored_message(StoredMessage {
+        id: "msg_journal_1".to_string(),
+        role: Role::Assistant,
+        content: vec![ContentBlock::Text {
+            text: "journal-only message 1".to_string(),
+            cache_control: None,
+        }],
+        display_role: None,
+        timestamp: Some(Utc::now()),
+        tool_duration_ms: None,
+        token_usage: None,
+    });
+    session.append_stored_message(StoredMessage {
+        id: "msg_journal_2".to_string(),
+        role: Role::User,
+        content: vec![ContentBlock::Text {
+            text: "journal-only message 2".to_string(),
+            cache_control: None,
+        }],
+        display_role: None,
+        timestamp: Some(Utc::now()),
+        tool_duration_ms: None,
+        token_usage: None,
+    });
+    session.save()?;
+
+    // Sanity check: journal file exists with at least one entry.
+    let journal_path = session_journal_path(session_id)?;
+    assert!(
+        journal_path.exists(),
+        "journal must exist after appending after snapshot"
+    );
+    let journal_contents = std::fs::read_to_string(&journal_path)?;
+    assert!(
+        !journal_contents.trim().is_empty(),
+        "journal must have content (post-snapshot appends)"
+    );
+
+    // Drop the live `Session` so we exercise the disk-only load paths.
+    drop(session);
+
+    // Confirm `load_for_remote_startup` (the primary read path) sees all 3
+    // messages — this exercises the journal-replay logic that already worked.
+    let primary = Session::load_for_remote_startup(session_id)?;
+    assert_eq!(
+        primary.messages.len(),
+        3,
+        "primary load_for_remote_startup should restore snapshot + journal messages"
+    );
+
+    // Simulate the snapshot being unrecoverable: truncate to zero bytes so
+    // any deserialize attempt fails. The journal stays intact on disk.
+    let snapshot_path = session_path(session_id)?;
+    std::fs::write(&snapshot_path, b"")?;
+
+    // The primary path now fails because the snapshot can't be parsed.
+    assert!(
+        Session::load_for_remote_startup(session_id).is_err(),
+        "primary should fail when snapshot is corrupt"
+    );
+
+    // Stub fallback also fails on a fully-empty snapshot (need at least the
+    // metadata fields). Restore a minimal but valid stub-shaped snapshot so
+    // we can exercise the fallback recovery path. Snapshot has no messages
+    // (simulating a stale checkpoint or incompatible variant), but the
+    // journal still holds all post-snapshot appends.
+    let minimal_stub = serde_json::json!({
+        "id": session_id,
+        "title": "M7 recovery",
+        "created_at": Utc::now(),
+        "updated_at": Utc::now(),
+        "model": "gpt-5.4",
+    });
+    std::fs::write(&snapshot_path, serde_json::to_string(&minimal_stub)?)?;
+
+    // With the fix: stub fallback replays the journal, so journal-only
+    // messages are recovered even when the snapshot lost its message vector.
+    let recovered = Session::load_startup_stub(session_id)?;
+    assert_eq!(recovered.id, session_id);
+    assert_eq!(recovered.model.as_deref(), Some("gpt-5.4"));
+    assert!(
+        recovered.messages.len() >= 2,
+        "stub fallback must recover the 2 journal-only messages (got {})",
+        recovered.messages.len()
+    );
+    let ids: Vec<_> = recovered.messages.iter().map(|m| m.id.as_str()).collect();
+    assert!(
+        ids.contains(&"msg_journal_1"),
+        "msg_journal_1 should be recovered from journal: ids={:?}",
+        ids
+    );
+    assert!(
+        ids.contains(&"msg_journal_2"),
+        "msg_journal_2 should be recovered from journal: ids={:?}",
+        ids
+    );
+    Ok(())
+}
+
 #[test]
 fn test_create_marks_debug_when_test_session_env_enabled() {
     let _env_lock = lock_env();
