@@ -8,6 +8,7 @@ pub(in crate::tui::app) fn handle_server_event(
     event: ServerEvent,
     remote: &mut impl RemoteEventState,
 ) -> bool {
+    app.last_remote_server_event_at = Some(Instant::now());
     let eager_stream_redraw = !crate::perf::tui_policy().enable_decorative_animations;
     if app.is_processing {
         app.last_stream_activity = Some(Instant::now());
@@ -757,16 +758,18 @@ pub(in crate::tui::app) fn handle_server_event(
 
             app.maybe_show_catchup_after_history(&session_id);
 
-            let should_consume_pending_reload_status = match app
-                .pending_reload_reconnect_status
-                .as_ref()
-            {
-                Some(PendingReloadReconnectStatus::AwaitingHistory {
-                    session_id: Some(expected),
-                }) => expected == &session_id,
-                Some(PendingReloadReconnectStatus::AwaitingHistory { session_id: None }) => true,
-                _ => false,
-            };
+            let should_consume_pending_reload_status =
+                match app.pending_reload_reconnect_status.as_ref() {
+                    Some(PendingReloadReconnectStatus::AwaitingHistory {
+                        session_id: Some(expected),
+                        ..
+                    }) => expected == &session_id,
+                    Some(PendingReloadReconnectStatus::AwaitingHistory {
+                        session_id: None,
+                        ..
+                    }) => true,
+                    _ => false,
+                };
             let pending_reload_reconnect_status = if should_consume_pending_reload_status {
                 app.pending_reload_reconnect_status.take()
             } else {

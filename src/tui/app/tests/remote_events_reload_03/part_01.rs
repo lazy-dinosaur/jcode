@@ -314,9 +314,10 @@ fn test_handle_server_event_history_after_reload_reports_no_continuation_needed(
     let rt = tokio::runtime::Runtime::new().unwrap();
     let _guard = rt.enter();
     let mut remote = crate::tui::backend::RemoteConnection::dummy();
-    app.pending_reload_reconnect_status = Some(PendingReloadReconnectStatus::AwaitingHistory {
-        session_id: Some("ses_reload_done".to_string()),
-    });
+    app.pending_reload_reconnect_status = Some(PendingReloadReconnectStatus::awaiting_history(
+        Some("ses_reload_done".to_string()),
+        10,
+    ));
 
     app.handle_server_event(
         crate::protocol::ServerEvent::History {
@@ -367,6 +368,124 @@ fn test_handle_server_event_history_after_reload_reports_no_continuation_needed(
             && m.content.contains("no continuation needed")
             && m.content.contains("previous response had already finished")
     }));
+}
+
+#[test]
+fn test_awaiting_history_timeout_fires_and_preserves_local_messages() {
+    let mut app = create_test_app();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+    let now = Instant::now();
+
+    app.push_display_message(DisplayMessage::user("cached prompt".to_string()));
+    app.set_remote_startup_phase(crate::tui::app::RemoteStartupPhase::LoadingSession);
+    app.pending_reload_reconnect_status = Some(PendingReloadReconnectStatus::AwaitingHistory {
+        session_id: Some("ses_timeout".to_string()),
+        started_at: now - Duration::from_secs(12),
+        deadline: now - Duration::from_secs(1),
+        timeout_secs: 10,
+    });
+
+    let redrew = rt.block_on(remote::handle_awaiting_history_timeout(&mut app, &mut remote));
+
+    assert!(redrew);
+    assert!(app.pending_reload_reconnect_status.is_none());
+    assert!(remote.has_loaded_history());
+    assert_ne!(crate::tui::TuiState::provider_model(&app), "loading session…");
+    assert!(app.display_messages().iter().any(|m| {
+        m.role == "user" && m.content == "cached prompt"
+    }));
+}
+
+#[test]
+fn test_awaiting_history_early_history_arrival_cancels_timeout() {
+    let mut app = create_test_app();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+
+    app.pending_reload_reconnect_status = Some(PendingReloadReconnectStatus::awaiting_history(
+        Some("ses_history_first".to_string()),
+        10,
+    ));
+
+    app.handle_server_event(
+        crate::protocol::ServerEvent::History {
+            id: 2,
+            session_id: "ses_history_first".to_string(),
+            messages: vec![],
+            images: vec![],
+            provider_name: Some("claude".to_string()),
+            provider_model: Some("claude-sonnet-4-20250514".to_string()),
+            subagent_model: None,
+            autoreview_enabled: None,
+            autojudge_enabled: None,
+            available_models: vec![],
+            available_model_routes: vec![],
+            mcp_servers: vec![],
+            skills: vec![],
+            total_tokens: None,
+            all_sessions: vec![],
+            client_count: None,
+            is_canary: None,
+            server_version: None,
+            server_name: None,
+            server_icon: None,
+            server_has_update: None,
+            was_interrupted: Some(false),
+            reload_recovery: None,
+            connection_type: Some("websocket".to_string()),
+            status_detail: None,
+            upstream_provider: None,
+            reasoning_effort: None,
+            service_tier: None,
+            compaction_mode: crate::config::CompactionMode::Reactive,
+            activity: None,
+            side_panel: crate::side_panel::SidePanelSnapshot::default(),
+        },
+        &mut remote,
+    );
+
+    let redrew = rt.block_on(remote::handle_awaiting_history_timeout(&mut app, &mut remote));
+
+    assert!(!redrew);
+    assert!(app.pending_reload_reconnect_status.is_none());
+    assert!(!app.display_messages().iter().any(|m| {
+        m.content.contains("Server did not deliver session history")
+    }));
+}
+
+#[test]
+fn test_awaiting_history_timeout_emits_user_warning() {
+    let mut app = create_test_app();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+    let now = Instant::now();
+
+    app.last_remote_server_event_at = Some(now - Duration::from_secs(3));
+    app.pending_reload_reconnect_status = Some(PendingReloadReconnectStatus::AwaitingHistory {
+        session_id: None,
+        started_at: now - Duration::from_secs(11),
+        deadline: now - Duration::from_secs(1),
+        timeout_secs: 10,
+    });
+
+    assert!(rt.block_on(remote::handle_awaiting_history_timeout(
+        &mut app,
+        &mut remote
+    )));
+
+    let warning = app
+        .display_messages()
+        .iter()
+        .find(|m| m.content.contains("Server did not deliver session history"))
+        .expect("missing AwaitingHistory timeout warning");
+    assert_eq!(warning.role, "system");
+    assert!(warning.content.contains("using locally cached messages"));
+    assert!(warning.content.contains("Last server event:"));
+    assert_eq!(app.status_notice(), Some("Using locally cached history".to_string()));
 }
 
 #[test]

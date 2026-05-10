@@ -62,6 +62,7 @@ pub(super) enum RemoteEventOutcome {
 
 pub(super) async fn handle_tick(app: &mut App, remote: &mut RemoteConnection) -> bool {
     let mut needs_redraw = crate::tui::periodic_redraw_required(app);
+    needs_redraw |= handle_awaiting_history_timeout(app, remote).await;
     app.maybe_capture_runtime_memory_heartbeat();
     app.progress_mouse_scroll_animation();
     needs_redraw |= dispatch_compacted_history_load(app, remote).await;
@@ -223,6 +224,80 @@ pub(super) async fn handle_tick(app: &mut App, remote: &mut RemoteConnection) ->
 
     detect_and_cancel_stall(app, remote).await;
     needs_redraw
+}
+
+pub(super) async fn handle_awaiting_history_timeout(
+    app: &mut App,
+    remote: &mut RemoteConnection,
+) -> bool {
+    let Some(PendingReloadReconnectStatus::AwaitingHistory {
+        started_at,
+        deadline,
+        timeout_secs,
+        ..
+    }) = app.pending_reload_reconnect_status.as_ref()
+    else {
+        return false;
+    };
+
+    if Instant::now() < *deadline {
+        return false;
+    }
+
+    let waited_secs = started_at.elapsed().as_secs().max(*timeout_secs);
+    finish_awaiting_history_with_local_cache(
+        app,
+        remote,
+        format!("Server did not deliver session history within {waited_secs}s"),
+    )
+    .await
+}
+
+pub(super) async fn abort_awaiting_history_with_local_cache(
+    app: &mut App,
+    remote: &mut RemoteConnection,
+) -> bool {
+    if app.pending_reload_reconnect_status.is_none() {
+        return false;
+    }
+    finish_awaiting_history_with_local_cache(
+        app,
+        remote,
+        "Reload history check cancelled".to_string(),
+    )
+    .await
+}
+
+async fn finish_awaiting_history_with_local_cache(
+    app: &mut App,
+    remote: &mut RemoteConnection,
+    reason: String,
+) -> bool {
+    if !matches!(
+        app.pending_reload_reconnect_status,
+        Some(PendingReloadReconnectStatus::AwaitingHistory { .. })
+    ) {
+        return false;
+    }
+
+    let last_event = app
+        .last_remote_server_event_at
+        .map(|at| format!("{}s ago", at.elapsed().as_secs()))
+        .unwrap_or_else(|| "none since reconnect".to_string());
+    let warning =
+        format!("{reason}; using locally cached messages. Last server event: {last_event}.");
+    crate::logging::warn(&warning);
+    app.pending_reload_reconnect_status = None;
+    remote.mark_history_loaded();
+    app.clear_remote_startup_phase();
+    app.set_status_notice("Using locally cached history");
+    app.push_display_message(DisplayMessage::system(warning));
+
+    if !app.is_processing && app.has_queued_followups() {
+        process_remote_followups(app, remote).await;
+    }
+
+    true
 }
 
 pub(super) async fn handle_terminal_event(

@@ -9,7 +9,8 @@ pub use jcode_config_types::{
     DiagramPanePosition, DiffDisplayMode, DisplayConfig, FeatureConfig, GatewayConfig,
     HookCommandConfig, HooksConfig, KeybindingsConfig, MarkdownSpacingMode, NamedProviderAuth,
     NamedProviderConfig, NamedProviderModelConfig, NamedProviderType, NativeScrollbarConfig,
-    PromptConfig, ProviderConfig, SafetyConfig, SessionPickerResumeAction, UpdateChannel,
+    PromptConfig, ProviderConfig, ReloadConfig, SafetyConfig, SessionPickerResumeAction,
+    UpdateChannel,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -70,6 +71,9 @@ pub struct Config {
 
     /// Compaction configuration
     pub compaction: CompactionConfig,
+
+    /// Reload/reconnect recovery configuration
+    pub reload: ReloadConfig,
 
     /// Auto-review configuration
     pub autoreview: AutoReviewConfig,
