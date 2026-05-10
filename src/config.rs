@@ -5,12 +5,12 @@
 
 pub use jcode_config_types::{
     AgentRouteConfig, AgentsConfig, AmbientConfig, AuthConfig, AutoJudgeConfig, AutoReviewConfig,
-    CompactionConfig, CompactionMode, CrossProviderFailoverMode, DiagramDisplayMode,
-    DiagramPanePosition, DiffDisplayMode, DisplayConfig, FeatureConfig, GatewayConfig,
-    HookCommandConfig, HooksConfig, KeybindingsConfig, MarkdownSpacingMode, NamedProviderAuth,
-    NamedProviderConfig, NamedProviderModelConfig, NamedProviderType, NativeScrollbarConfig,
-    PromptConfig, ProviderConfig, ReloadConfig, SafetyConfig, SessionPickerResumeAction,
-    UpdateChannel,
+    BashToolConfig, CompactionConfig, CompactionMode, CrossProviderFailoverMode,
+    DiagramDisplayMode, DiagramPanePosition, DiffDisplayMode, DisplayConfig, FeatureConfig,
+    GatewayConfig, HookCommandConfig, HooksConfig, KeybindingsConfig, MarkdownSpacingMode,
+    NamedProviderAuth, NamedProviderConfig, NamedProviderModelConfig, NamedProviderType,
+    NativeScrollbarConfig, PromptConfig, ProviderConfig, ReloadConfig, SafetyConfig,
+    SessionPickerResumeAction, ToolConfig, UpdateChannel,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -83,6 +83,9 @@ pub struct Config {
 
     /// Hook configuration for tool lifecycle events
     pub hooks: HooksConfig,
+
+    /// Per-tool configuration (M20: bash timeouts, etc.)
+    pub tool: ToolConfig,
 }
 
 /// External dictation / speech-to-text integration.
