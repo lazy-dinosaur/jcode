@@ -476,6 +476,214 @@ fn test_agents_for_working_dir_invalid_project_toml_logs_and_falls_back() {
     assert_eq!(agents.profiles["reviewer"].model.as_deref(), Some("opus"));
 }
 
+fn write_agent_md(project: &std::path::Path, relative_dir: &str, file: &str, content: &str) {
+    let dir = project.join(relative_dir);
+    std::fs::create_dir_all(&dir).expect("create agent dir");
+    std::fs::write(dir.join(file), content).expect("write agent md");
+}
+
+#[test]
+fn test_agents_for_working_dir_loads_jcode_md_agents() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let project = dir.path().join("project");
+    write_agent_md(
+        &project,
+        ".jcode/agents",
+        "reviewer.md",
+        "---\nname: reviewer\nmodel: opus\n---\nReview code.",
+    );
+
+    let cfg = Config::default();
+    let agents = cfg.agents_for_working_dir(Some(&project));
+
+    assert_eq!(agents.profiles["reviewer"].model.as_deref(), Some("opus"));
+}
+
+#[test]
+fn test_agents_for_working_dir_loads_md_agents_from_all_four_ecosystems() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let project = dir.path().join("project");
+    write_agent_md(
+        &project,
+        ".jcode/agents",
+        "jcode.md",
+        "---\nmodel: opus\n---\nJ",
+    );
+    write_agent_md(
+        &project,
+        ".claude/agents",
+        "claude.md",
+        "---\nmodel: sonnet\n---\nC",
+    );
+    write_agent_md(
+        &project,
+        ".agents/agents",
+        "agents.md",
+        "---\nmodel: haiku\n---\nA",
+    );
+    write_agent_md(
+        &project,
+        ".opencode/agents",
+        "opencode.md",
+        "---\nmodel: gpt\n---\nO",
+    );
+
+    let cfg = Config::default();
+    let agents = cfg.agents_for_working_dir(Some(&project));
+
+    assert!(agents.profiles.contains_key("jcode"));
+    assert!(agents.profiles.contains_key("claude"));
+    assert!(agents.profiles.contains_key("agents"));
+    assert!(agents.profiles.contains_key("opencode"));
+}
+
+#[test]
+fn test_agents_for_working_dir_md_overridden_by_project_toml() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let project = dir.path().join("project");
+    write_agent_md(
+        &project,
+        ".jcode/agents",
+        "x.md",
+        "---\nname: x\nmodel: opus\n---\nX",
+    );
+    std::fs::write(
+        project.join(".jcode").join("config.toml"),
+        r#"
+        [agents.profiles.x]
+        model = "haiku"
+        "#,
+    )
+    .expect("write project config");
+
+    let cfg = Config::default();
+    let agents = cfg.agents_for_working_dir(Some(&project));
+
+    assert_eq!(agents.profiles["x"].model.as_deref(), Some("haiku"));
+}
+
+#[test]
+fn test_agents_for_working_dir_md_filename_stem_becomes_name_when_no_frontmatter_name() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let project = dir.path().join("project");
+    write_agent_md(
+        &project,
+        ".jcode/agents",
+        "coder.md",
+        "---\ndescription: Coder\n---\nCode things.",
+    );
+
+    let cfg = Config::default();
+    let agents = cfg.agents_for_working_dir(Some(&project));
+
+    assert!(agents.profiles.contains_key("coder"));
+    assert_eq!(
+        agents.profiles["coder"].description.as_deref(),
+        Some("Coder")
+    );
+}
+
+#[test]
+fn test_agents_for_working_dir_md_no_frontmatter_uses_body_as_prompt() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let project = dir.path().join("project");
+    write_agent_md(&project, ".jcode/agents", "bare.md", "You are a bare agent");
+
+    let cfg = Config::default();
+    let agents = cfg.agents_for_working_dir(Some(&project));
+
+    assert_eq!(
+        agents.profiles["bare"].prompt.as_deref(),
+        Some("You are a bare agent")
+    );
+}
+
+#[test]
+fn test_agents_for_working_dir_md_aliases_resolve() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let project = dir.path().join("project");
+    write_agent_md(
+        &project,
+        ".jcode/agents",
+        "reasoner.md",
+        "---\nreasoning-effort: high\nwhen_to_use: use when needed\ndesc: Reasoner\n---\nThink.",
+    );
+
+    let cfg = Config::default();
+    let agents = cfg.agents_for_working_dir(Some(&project));
+
+    assert_eq!(agents.profiles["reasoner"].effort.as_deref(), Some("high"));
+    assert_eq!(agents.profiles["reasoner"].when, vec!["use when needed"]);
+    assert_eq!(
+        agents.profiles["reasoner"].description.as_deref(),
+        Some("Reasoner")
+    );
+}
+
+#[test]
+fn test_agents_for_working_dir_md_unknown_fields_ignored() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let project = dir.path().join("project");
+    write_agent_md(
+        &project,
+        ".jcode/agents",
+        "tools.md",
+        "---\nmodel: opus\nallowed-tools: [read, bash]\n---\nUse tools.",
+    );
+
+    let cfg = Config::default();
+    let agents = cfg.agents_for_working_dir(Some(&project));
+
+    assert_eq!(agents.profiles["tools"].model.as_deref(), Some("opus"));
+}
+
+#[test]
+fn test_agents_for_working_dir_md_invalid_file_skipped_other_files_loaded() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let project = dir.path().join("project");
+    write_agent_md(
+        &project,
+        ".jcode/agents",
+        "bad.md",
+        "---\nname: bad\nmodel: opus\nBody without closing marker",
+    );
+    write_agent_md(
+        &project,
+        ".jcode/agents",
+        "good.md",
+        "---\nname: good\nmodel: haiku\n---\nGood.",
+    );
+
+    let cfg = Config::default();
+    let agents = cfg.agents_for_working_dir(Some(&project));
+
+    assert!(!agents.profiles.contains_key("bad"));
+    assert_eq!(agents.profiles["good"].model.as_deref(), Some("haiku"));
+}
+
+#[test]
+fn test_agents_for_working_dir_md_within_ecosystem_priority() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let project = dir.path().join("project");
+    write_agent_md(
+        &project,
+        ".jcode/agents",
+        "x.md",
+        "---\nname: x\nmodel: opus\n---\nJ",
+    );
+    write_agent_md(
+        &project,
+        ".opencode/agents",
+        "x.md",
+        "---\nname: x\nmodel: haiku\n---\nO",
+    );
+
+    let cfg = Config::default();
+    let agents = cfg.agents_for_working_dir(Some(&project));
+
+    assert_eq!(agents.profiles["x"].model.as_deref(), Some("opus"));
+}
+
 #[test]
 fn test_env_override_auto_server_reload() {
     let _guard = crate::storage::lock_test_env();
