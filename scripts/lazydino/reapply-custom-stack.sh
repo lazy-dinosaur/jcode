@@ -80,6 +80,7 @@ PATCH_REFS=(
   patch/altb-wake-parent
   patch/journal-stub-recovery
   patch/altb-end-turn
+  patch/anthropic-oauth-tool-schema-align
 )
 
 while [[ $# -gt 0 ]]; do

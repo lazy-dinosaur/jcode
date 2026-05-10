@@ -706,6 +706,25 @@ Track each custom patch as a small commit. Current known customizations:
    - Validation: `cargo check --all-targets`, `cargo test --lib hooks --no-fail-fast`, and `cargo test --lib client_disconnect_cleanup --no-fail-fast`. Broader requested sweeps `cargo test --lib agent::tests --no-fail-fast` and `cargo test --lib server --no-fail-fast` still show pre-existing environment/order-sensitive failures unrelated to this patch (`env_snapshot_detail_is_minimal_for_empty_sessions_and_full_after_history`, spawn working-dir/history busy-agent assertions).
    - Binary reinstall required: yes, because this changes runtime hook behavior.
 
+28. Anthropic OAuth tool advertisement / dispatch alignment (M12, M13)
+   - Commit: `fix(m12,m13): align anthropic OAuth tool advertisements with dispatch handlers`.
+   - Patch branch: `patch/anthropic-oauth-tool-schema-align`.
+   - Purpose: fix two stale OAuth tool advertisements that did not match local dispatch handlers, causing runtime errors whenever the model called the advertised name.
+     - M13 (`schedule` / `ScheduleWakeup`): advertised schema required `delaySeconds`/`reason`/`prompt` for an unimplemented `/loop` dynamic mode, but the real dispatcher (`ScheduleTool` in `src/tool/ambient.rs`) requires `task`. Calls returned `missing field 'task'`.
+     - M12 (`ToolSearch`): advertised name had no incoming mapping in `crates/jcode-provider-core/src/anthropic.rs::anthropic_map_tool_name_from_oauth` (comment claimed no local analogue), so calls returned `Unknown tool: ToolSearch`. The Claude provider already routes `ToolSearch <-> codesearch`; this patch mirrors that mapping for the Anthropic OAuth provider.
+   - Runtime behavior:
+     - `ToolSearch <-> codesearch` mapping added in both directions in the provider-core helper, with a corresponding round-trip case in `oauth_tool_name_mapping_is_reversible_for_known_tools`.
+     - Advertised `ScheduleWakeup` schema now matches `ScheduleTool::parameters_schema` (required `task`, optional `wake_in_minutes`/`wake_at`/`priority`/`relevant_files`/`background_context`/`success_criteria`/`target`).
+     - Advertised `ToolSearch` schema now matches `CodeSearchTool::parameters_schema` (required `query`, optional `max_tokens`).
+     - Wire-side OAuth tool names are unchanged (`ScheduleWakeup`, `ToolSearch`); only schemas and the missing incoming mapping changed, so external prompt-cache breakpoints stay stable.
+   - Background: this is the only provider with this risk. OpenAI/Gemini/Copilot/Cursor/Bedrock/Antigravity all serialize `tool.input_schema` from the `ToolRegistry` directly. Anthropic OAuth alone uses a hand-rolled JSON whitelist in `format_tools` (is_oauth=true branch). The structural fix (advertise from `ToolDefinition`) is tracked separately as milestone M16.
+   - Touched paths:
+     - `crates/jcode-provider-core/src/anthropic.rs`
+     - `src/provider/anthropic.rs`
+     - `src/provider/anthropic_tests.rs`
+   - Validation: `cargo build --release --bin jcode`, focused `cargo test --release --lib provider::anthropic_tests::test_oauth_schedule_tool_advertised_schema_matches_dispatch` and `... ::test_oauth_tool_search_advertised_schema_matches_codesearch_dispatch`, plus `cargo test --release --lib -p jcode-provider-core anthropic`.
+   - Binary reinstall required: yes, because this changes the advertised tool schemas the model sees.
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
