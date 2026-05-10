@@ -20,7 +20,12 @@ use tokio::process::Command as TokioCommand;
 use tokio::time::timeout;
 
 const MAX_OUTPUT_LEN: usize = 30000;
-const DEFAULT_TIMEOUT_MS: u64 = 120000;
+/// Fallback default timeout (5 min) used only if `Config::tool.bash` cannot
+/// be read for some reason. Operational default is `BashToolConfig::default()`
+/// (see [`resolve_timeout_ms`]).
+const FALLBACK_DEFAULT_TIMEOUT_MS: u64 = 5 * 60 * 1000;
+/// Fallback hard cap (20 min). Mirrors `BashToolConfig::HARD_CAP_MS`.
+const FALLBACK_MAX_TIMEOUT_MS: u64 = 20 * 60 * 1000;
 const STDIN_POLL_INTERVAL_MS: u64 = 500;
 const STDIN_INITIAL_DELAY_MS: u64 = 300;
 const PROGRESS_MARKER_PREFIX: &str = "JCODE_PROGRESS ";
@@ -28,6 +33,38 @@ const CHECKPOINT_MARKER_PREFIX: &str = "JCODE_CHECKPOINT ";
 const BACKGROUND_PROGRESS_GUIDANCE: &str = "For long-running background commands, prefer scripts or commands that periodically print progress updates. Best format: print lines starting with `JCODE_PROGRESS ` followed by JSON like {\"percent\":42,\"message\":\"Running\"} or {\"current\":120,\"total\":1000,\"unit\":\"batches\",\"message\":\"Epoch 2/5\",\"eta_seconds\":30}. Supported JSON fields are `percent`, `message`, `current`, `total`, `unit`, `eta_seconds`, and optional `kind`=`indeterminate` or `kind`=`checkpoint`. For milestone-style wakeups, print `JCODE_CHECKPOINT {\"message\":\"Unit tests passed\"}`. Generic fallback output that can be parsed includes `42%`, `3/10 tests`, `3 of 10 steps`, `1.5/3.0 GiB`, or phase lines like `Compiling ...`, `Downloading ...`, `Running ...`, and `Building ...`. If you are writing the script yourself, add these progress/checkpoint lines explicitly.";
 const BASH_TOOL_DESCRIPTION: &str = "Run a bash command. For long-running background commands, prefer scripts that emit progress/checkpoint lines. Print `JCODE_PROGRESS {json}` or `JCODE_CHECKPOINT {json}` lines for reliable reporting, or at least output parseable progress like `42%`, `3/10 tests`, `3 of 10 steps`, `1.5/3.0 GiB`, or `Running ...`.";
 const WINDOWS_SHELL_TOOL_DESCRIPTION: &str = "Run a shell command. For long-running background commands, prefer scripts that emit progress/checkpoint lines. Print `JCODE_PROGRESS {json}` or `JCODE_CHECKPOINT {json}` lines for reliable reporting, or at least output parseable progress like `42%`, `3/10 tests`, `3 of 10 steps`, `1.5/3.0 GiB`, or `Running ...`.";
+
+/// Resolve the effective timeout (ms) for one `bash`/shell invocation (M20).
+///
+/// Precedence:
+/// 1. If the model passed `timeout` in the tool args, use it but clamp to
+///    `Config::tool.bash.effective_max_ms()` (i.e. the configured cap, never
+///    above `BashToolConfig::HARD_CAP_MS = 20min`).
+/// 2. Otherwise use `Config::tool.bash.effective_default_ms()` (5min default).
+///
+/// `Config` is read via `crate::config::config()` so any hot-reload (M19)
+/// applies on the next invocation.
+fn resolve_timeout_ms(requested: Option<u64>) -> u64 {
+    // Read config defensively: if anything goes wrong we fall back to the
+    // hardcoded constants rather than failing the tool call.
+    let bash_cfg = &crate::config::config().tool.bash;
+    let cfg_default = bash_cfg.effective_default_ms();
+    let cfg_max = bash_cfg.effective_max_ms();
+    let default_ms = if cfg_default == 0 {
+        FALLBACK_DEFAULT_TIMEOUT_MS
+    } else {
+        cfg_default
+    };
+    let max_ms = if cfg_max == 0 {
+        FALLBACK_MAX_TIMEOUT_MS
+    } else {
+        cfg_max
+    };
+    match requested {
+        Some(req) => req.clamp(1, max_ms),
+        None => default_ms.min(max_ms),
+    }
+}
 
 fn progress_ratio_regex() -> Result<&'static regex::Regex> {
     static REGEX: LazyLock<Result<regex::Regex, regex::Error>> = LazyLock::new(|| {
@@ -560,7 +597,7 @@ impl Tool for BashTool {
                 },
                 "timeout": {
                     "type": "integer",
-                    "description": "Timeout in ms."
+                    "description": "Timeout in milliseconds. Default 300000 (5 min); maximum 1200000 (20 min). For long-running commands like `cargo build --release`, `cargo test --release`, large stress checks, or full benchmark runs, pass an explicit larger value (e.g. 900000 for 15 min). The configured default and cap can be customised via `[tool.bash]` in `~/.jcode/config.toml`."
                 },
                 "run_in_background": {
                     "type": "boolean",
@@ -622,7 +659,7 @@ impl BashTool {
                 .await;
         }
 
-        let timeout_ms = params.timeout.unwrap_or(DEFAULT_TIMEOUT_MS).min(600000);
+        let timeout_ms = resolve_timeout_ms(params.timeout);
         let timeout_duration = Duration::from_millis(timeout_ms);
 
         let has_stdin_channel = ctx.stdin_request_tx.is_some();
@@ -789,7 +826,7 @@ impl BashTool {
         params: &BashInput,
         ctx: &ToolContext,
     ) -> Result<ToolOutput> {
-        let timeout_ms = params.timeout.unwrap_or(DEFAULT_TIMEOUT_MS).min(600000);
+        let timeout_ms = resolve_timeout_ms(params.timeout);
         let timeout_duration = Duration::from_millis(timeout_ms);
         let started_at = Utc::now().to_rfc3339();
         let started = Instant::now();
@@ -887,7 +924,7 @@ impl BashTool {
         let description = params.intent.clone();
         let display_name = summarize_background_command(description.as_deref(), &command);
         let working_dir = ctx.working_dir.clone();
-        let timeout_ms = params.timeout.unwrap_or(DEFAULT_TIMEOUT_MS).min(600000);
+        let timeout_ms = resolve_timeout_ms(params.timeout);
         let timeout_duration = Duration::from_millis(timeout_ms);
 
         let wake = params.wake;

@@ -772,3 +772,72 @@ impl Default for GatewayConfig {
         }
     }
 }
+
+/// Per-tool configuration (M20).
+///
+/// Lets users override default/cap timeouts for the `bash`/shell tool so
+/// long-running commands like `cargo build`, `cargo test --release`, or
+/// stress checks aren't killed by the historical 2-minute hard timeout.
+///
+/// Both `default_timeout_ms` and `max_timeout_ms` are clamped at runtime by
+/// the absolute upper bound `BashToolConfig::HARD_CAP_MS` (20 minutes) to
+/// avoid pathological values like `u64::MAX`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ToolConfig {
+    /// Bash / shell tool defaults.
+    pub bash: BashToolConfig,
+}
+
+impl Default for ToolConfig {
+    fn default() -> Self {
+        Self {
+            bash: BashToolConfig::default(),
+        }
+    }
+}
+
+/// Bash / shell tool defaults (M20).
+///
+/// Historical jcode behaviour was a hardcoded `DEFAULT_TIMEOUT_MS = 120_000`
+/// (2 min) and a hardcoded cap of 600_000 (10 min). M20 lifts both to
+/// 5 min default / 20 min cap and makes them configurable.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BashToolConfig {
+    /// Default timeout (ms) when the model does not pass `timeout` on a
+    /// `bash`/shell tool call. Clamped to `[1_000, max_timeout_ms]`.
+    pub default_timeout_ms: u64,
+    /// Maximum timeout (ms) the model is allowed to request via the
+    /// `timeout` argument. Clamped to `[default_timeout_ms, HARD_CAP_MS]`.
+    pub max_timeout_ms: u64,
+}
+
+impl BashToolConfig {
+    /// Absolute upper bound (20 minutes). Applied even if config asks for more
+    /// so we never end up with a runaway tool call.
+    pub const HARD_CAP_MS: u64 = 20 * 60 * 1000;
+
+    /// Resolve `default_timeout_ms` clamped into `[1s, HARD_CAP_MS]`.
+    pub fn effective_default_ms(&self) -> u64 {
+        self.default_timeout_ms.clamp(1_000, Self::HARD_CAP_MS)
+    }
+
+    /// Resolve `max_timeout_ms` clamped into `[effective_default_ms, HARD_CAP_MS]`.
+    pub fn effective_max_ms(&self) -> u64 {
+        self.max_timeout_ms
+            .clamp(self.effective_default_ms(), Self::HARD_CAP_MS)
+    }
+}
+
+impl Default for BashToolConfig {
+    fn default() -> Self {
+        Self {
+            // 5 minutes is enough for most cargo test/build runs while still
+            // surfacing genuine hangs early.
+            default_timeout_ms: 5 * 60 * 1000,
+            // 20 minutes covers full release builds, long stress checks, etc.
+            max_timeout_ms: Self::HARD_CAP_MS,
+        }
+    }
+}
