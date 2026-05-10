@@ -15,6 +15,59 @@ use tokio::sync::{Mutex, RwLock};
 type SessionAgents = Arc<RwLock<HashMap<String, Arc<Mutex<Agent>>>>>;
 
 #[derive(Clone)]
+pub(super) struct DebugShutdownContext {
+    pub sessions: SessionAgents,
+    pub server_name: String,
+}
+
+pub(super) async fn maybe_execute_shutdown_command(
+    command: &str,
+    context: DebugShutdownContext,
+) -> Option<Result<String>> {
+    if command.trim() != "shutdown:drain" {
+        return None;
+    }
+
+    let sessions = super::reload::active_session_count(&context.sessions).await;
+    let drain_sessions = Arc::clone(&context.sessions);
+    let server_name = context.server_name.clone();
+
+    tokio::spawn(async move {
+        // Let the debug response flush to the CLI before the process exits.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let started = std::time::Instant::now();
+        crate::logging::info(&format!(
+            "debug shutdown: draining {} sessions before shutdown",
+            sessions
+        ));
+        match tokio::time::timeout(
+            Duration::from_secs(20),
+            super::reload::drain_and_flush_sessions(&drain_sessions, Duration::from_secs(15)),
+        )
+        .await
+        {
+            Ok(drained) => crate::logging::info(&format!(
+                "debug shutdown: drained {}/{} sessions in {} ms",
+                drained,
+                sessions,
+                started.elapsed().as_millis()
+            )),
+            Err(_) => crate::logging::warn(&format!(
+                "debug shutdown: drain timed out after {} ms for {} sessions",
+                started.elapsed().as_millis(),
+                sessions
+            )),
+        }
+        let _ = crate::registry::unregister_server(&server_name).await;
+        std::process::exit(0);
+    });
+
+    Some(Ok(
+        serde_json::json!({ "status": "draining", "sessions": sessions }).to_string(),
+    ))
+}
+
+#[derive(Clone)]
 pub(super) struct DebugInterruptContext {
     pub session_id: String,
     pub shutdown_signals: Arc<RwLock<HashMap<String, InterruptSignal>>>,

@@ -5,7 +5,8 @@
 
 use super::debug_ambient::maybe_handle_ambient_command;
 use super::debug_command_exec::{
-    DebugInterruptContext, execute_debug_command, resolve_debug_session,
+    DebugInterruptContext, DebugShutdownContext, execute_debug_command,
+    maybe_execute_shutdown_command, resolve_debug_session,
 };
 use super::debug_events::{
     maybe_handle_event_query_command, maybe_handle_event_subscription_command,
@@ -519,6 +520,16 @@ pub(super) async fn handle_debug_client(
                             Ok(swarm_debug_help_text())
                         } else if cmd == "help" {
                             Ok(debug_help_text())
+                        } else if let Some(output) = maybe_execute_shutdown_command(
+                            cmd,
+                            DebugShutdownContext {
+                                sessions: Arc::clone(&sessions),
+                                server_name: server_identity.name.clone(),
+                            },
+                        )
+                        .await
+                        {
+                            output
                         } else {
                             match resolve_debug_session(&sessions, &session_id, requested_session)
                                 .await

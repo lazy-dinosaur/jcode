@@ -11,8 +11,9 @@ binary slots under ~/.jcode/builds/.
 
 Options:
   --no-build          reuse target/release/jcode instead of running cargo build --release
-  --restart-server   after installing, terminate running shared jcode server processes so
-                     the next client starts the newly installed binary
+  --restart-server   after installing, ask the running server to cleanly drain sessions,
+                     then terminate shared jcode server processes so the next client
+                     starts the newly installed binary
   -h, --help         show this help
 
 Notes:
@@ -80,6 +81,14 @@ log "installed versions"
 "$HOME/.jcode/builds/stable/jcode" --version
 
 if [[ "$DO_RESTART" == 1 ]]; then
+  log "attempting clean shutdown via debug socket"
+  if "$local_bin" debug shutdown drain >/dev/null 2>&1; then
+    log "clean drain initiated"
+    sleep 2
+  else
+    log "debug drain unavailable, falling back to SIGTERM"
+  fi
+
   mapfile -t server_pids < <(
     ps -eo pid=,args= \
       | awk -v home="$HOME" '$0 ~ home "/.jcode/builds/" && $0 ~ / serve( |$)/ { print $1 }'
@@ -90,7 +99,7 @@ if [[ "$DO_RESTART" == 1 ]]; then
   else
     log "terminating Jcode-managed server process(es): ${server_pids[*]}"
     kill -TERM "${server_pids[@]}" 2>/dev/null || true
-    for _ in {1..30}; do
+    for _ in {1..50}; do
       alive=0
       for pid in "${server_pids[@]}"; do
         if kill -0 "$pid" 2>/dev/null; then

@@ -65,6 +65,7 @@ SERVER COMMANDS (server: prefix or no prefix):
   trigger_extraction       - Force end-of-session memory extraction
   available_models         - List all available models
   reload                   - Trigger server reload with current binary
+  shutdown:drain           - Flush all active sessions, unregister server, then exit
 
 SWARM COMMANDS (swarm: prefix):
   swarm:members            - List all swarm members with details
