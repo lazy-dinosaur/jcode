@@ -81,6 +81,7 @@ PATCH_REFS=(
   patch/journal-stub-recovery
   patch/altb-end-turn
   patch/anthropic-oauth-tool-schema-align
+  patch/compaction-failure-cooldown
 )
 
 while [[ $# -gt 0 ]]; do

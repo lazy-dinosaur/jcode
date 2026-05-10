@@ -725,6 +725,32 @@ Track each custom patch as a small commit. Current known customizations:
    - Validation: `cargo build --release --bin jcode`, focused `cargo test --release --lib provider::anthropic_tests::test_oauth_schedule_tool_advertised_schema_matches_dispatch` and `... ::test_oauth_tool_search_advertised_schema_matches_codesearch_dispatch`, plus `cargo test --release --lib -p jcode-provider-core anthropic`.
    - Binary reinstall required: yes, because this changes the advertised tool schemas the model sees.
 
+29. Compaction failure cooldown + streak gate (M14, M14a)
+   - Commit: `e71713ba` `fix(compaction): cooldown + failure-streak gate to stop runaway loops (M14/M14a)`.
+   - Patch branch: `patch/compaction-failure-cooldown`.
+   - Purpose: stop two related runaway loops the user observed in production.
+     - M14 ("`/compact` 동작 안 함"): proactive/semantic auto-compaction kept firing on every new turn after the background summarizer errored once. Root cause: the failure paths in `CompactionManager::check_and_apply_compaction_with` did not reset `turns_since_last_compact`, so the cooldown anti-signal (`min_turns_between_compactions`) was effectively only enforced when the previous compaction succeeded. Once any failure happened the counter monotonically grew and re-triggered on every new turn forever.
+     - M14a ("emergency compaction 22회 연속"): the per-turn `MAX_CONTEXT_LIMIT_RETRIES` retry budget cannot see session-wide repetition, so the same wedged turn fired emergency hard-compactions over and over.
+   - Runtime behavior:
+     - New session-wide counter `consecutive_compaction_failures` (saturating, 0..N) on `CompactionManager`.
+     - New constant `jcode_compaction_core::MAX_CONSECUTIVE_COMPACTION_FAILURES = 3` (small enough to stop billing the user fast, large enough to recover from a transient error).
+     - New helpers `note_compaction_success()` / `note_compaction_failure()` / `consecutive_compaction_failures()` so all paths use one place to bookkeep both the cooldown counter and the failure streak.
+     - Three short-circuit points read the streak and refuse further attempts once the cap is hit:
+       1. `should_compact_with` (proactive/semantic/reactive auto-trigger) returns `false`.
+       2. `Agent::try_auto_compact_after_context_limit` returns `false` so the per-turn retry budget rejects further attempts and the context-limit error propagates to the model normally.
+       3. `ensure_context_fits` synchronous critical-threshold hard-compact records success/failure into the same counter.
+     - All failure paths now also zero `turns_since_last_compact` so the cooldown anti-signal stays effective even when the previous attempt errored out.
+   - Side change: `tool::codesearch` is now `pub(crate)` so the M12 OAuth tool-schema regression test added in #28 can reach `CodeSearchTool::parameters_schema`. Without this `cargo test --lib` on this branch fails to compile.
+   - Touched paths:
+     - `crates/jcode-compaction-core/src/lib.rs`
+     - `src/compaction.rs`
+     - `src/agent/compaction.rs`
+     - `src/compaction_tests.rs`
+     - `src/tool/mod.rs`
+   - Validation: `cargo build --release --bin jcode` (1m 33s, ok), focused `cargo test --release --lib compaction::tests::` (30 tests, all passed including 4 new ones: `test_note_compaction_success_resets_cooldown_and_streak`, `test_note_compaction_failure_zeros_cooldown_counter`, `test_should_compact_with_short_circuits_after_failure_streak`, `test_note_compaction_failure_saturates`), and re-ran #28 OAuth tests for regression (4/4 passed).
+   - Binary reinstall required: yes (changes runtime compaction trigger gating and emergency recovery behaviour).
+   - Deployment note (2026-05-10): the previous deployment pattern of overwriting only `~/.local/bin/jcode` left the active TUI server (`~/.jcode/builds/stable/jcode`) on an old binary. Going forward, every fix that changes runtime behaviour should also re-link `~/.jcode/builds/stable/jcode` and `~/.jcode/builds/current/jcode` to a new `versions/lazydino-<sha>/jcode` directory so the next `/restart` actually loads the patched build. Consider folding this into a deploy helper script.
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
