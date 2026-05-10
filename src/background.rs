@@ -433,7 +433,7 @@ impl BackgroundTaskManager {
         session_id: &str,
         handle: JoinHandle<Result<crate::tool::ToolOutput>>,
     ) -> BackgroundTaskInfo {
-        self.adopt_with_delivery(tool_name, session_id, session_id, handle)
+        self.adopt_with_delivery(tool_name, session_id, session_id, false, handle)
             .await
     }
 
@@ -442,6 +442,7 @@ impl BackgroundTaskManager {
         tool_name: &str,
         session_id: &str,
         delivery_session_id: &str,
+        wake_on_completion: bool,
         handle: JoinHandle<Result<crate::tool::ToolOutput>>,
     ) -> BackgroundTaskInfo {
         let task_id = Self::generate_task_id();
@@ -463,7 +464,7 @@ impl BackgroundTaskManager {
             pid: None,
             detached: false,
             notify: true,
-            wake: false,
+            wake: wake_on_completion,
             progress: None,
             event_history: Vec::new(),
         };
@@ -480,7 +481,7 @@ impl BackgroundTaskManager {
         let started_at = Instant::now();
         let started_at_rfc3339 = initial_status.started_at.clone();
         let display_name_owned = initial_status.display_name.clone();
-        let (delivery_flags_tx, delivery_flags_rx) = watch::channel((true, false));
+        let (delivery_flags_tx, delivery_flags_rx) = watch::channel((true, wake_on_completion));
 
         let wrapper_handle = tokio::spawn(async move {
             let tool_result = handle.await;

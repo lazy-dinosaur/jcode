@@ -1014,6 +1014,7 @@ impl Agent {
                             &tc.name,
                             &self.session.id,
                             &delivery_session_id,
+                            true,
                             tool_handle,
                         )
                         .await;
