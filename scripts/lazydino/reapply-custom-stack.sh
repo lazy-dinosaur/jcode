@@ -71,6 +71,7 @@ PATCH_REFS=(
   patch/project-slash-commands
   patch/global-jcode-md-resources
   patch/jcode-doctor
+  patch/swarm-stability-core
 )
 
 while [[ $# -gt 0 ]]; do
