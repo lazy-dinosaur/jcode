@@ -92,3 +92,12 @@ pub(super) fn metadata_requires_snapshot(
         || prev.saved != current.saved
         || prev.save_label != current.save_label
 }
+
+pub(super) fn metadata_requires_journal_append(
+    prev: &SessionJournalMeta,
+    current: &SessionJournalMeta,
+) -> bool {
+    let mut current_without_updated_at = current.clone();
+    current_without_updated_at.updated_at = prev.updated_at;
+    prev != &current_without_updated_at
+}

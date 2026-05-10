@@ -661,6 +661,164 @@ fn test_save_persists_reasoning_effort() -> Result<()> {
     Ok(())
 }
 
+fn read_journal_entries(path: &std::path::Path) -> Result<Vec<serde_json::Value>> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    std::fs::read_to_string(path)?
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).map_err(Into::into))
+        .collect()
+}
+
+#[test]
+fn test_append_stored_message_writes_immediate_journal_entry() -> Result<()> {
+    let _env_lock = lock_env();
+    let temp_home = tempfile::Builder::new()
+        .prefix("jcode-session-immediate-journal-test-")
+        .tempdir()
+        .map_err(|e| anyhow!(e))?;
+    let _home = EnvVarGuard::set("JCODE_HOME", temp_home.path().as_os_str());
+
+    let mut session = Session::create_with_id(
+        "session_immediate_journal_test".to_string(),
+        None,
+        Some("immediate journal test".to_string()),
+    );
+    session.save()?;
+
+    let snapshot_path = session_path("session_immediate_journal_test")?;
+    let journal_path = session_journal_path("session_immediate_journal_test")?;
+    assert!(snapshot_path.exists());
+    assert!(!journal_path.exists());
+
+    session.add_message(
+        Role::User,
+        vec![ContentBlock::Text {
+            text: "immediate".to_string(),
+            cache_control: None,
+        }],
+    );
+
+    let entries = read_journal_entries(&journal_path)?;
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["append_messages"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        entries[0]["append_messages"][0]["content"][0]["text"],
+        "immediate"
+    );
+    assert_eq!(
+        session.persisted_messages_len_for_test(),
+        session.messages.len()
+    );
+    Ok(())
+}
+
+#[test]
+fn test_immediate_journal_does_not_duplicate_on_next_save() -> Result<()> {
+    let _env_lock = lock_env();
+    let temp_home = tempfile::Builder::new()
+        .prefix("jcode-session-immediate-journal-dedupe-test-")
+        .tempdir()
+        .map_err(|e| anyhow!(e))?;
+    let _home = EnvVarGuard::set("JCODE_HOME", temp_home.path().as_os_str());
+
+    let mut session = Session::create_with_id(
+        "session_immediate_journal_dedupe_test".to_string(),
+        None,
+        Some("immediate journal dedupe test".to_string()),
+    );
+    session.save()?;
+    session.add_message(
+        Role::User,
+        vec![ContentBlock::Text {
+            text: "dedupe".to_string(),
+            cache_control: None,
+        }],
+    );
+
+    let journal_path = session_journal_path("session_immediate_journal_dedupe_test")?;
+    assert_eq!(read_journal_entries(&journal_path)?.len(), 1);
+
+    session.save()?;
+
+    let entries = read_journal_entries(&journal_path)?;
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0]["append_messages"][0]["content"][0]["text"],
+        "dedupe"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_immediate_journal_skipped_before_first_snapshot() -> Result<()> {
+    let _env_lock = lock_env();
+    let temp_home = tempfile::Builder::new()
+        .prefix("jcode-session-immediate-journal-no-snapshot-test-")
+        .tempdir()
+        .map_err(|e| anyhow!(e))?;
+    let _home = EnvVarGuard::set("JCODE_HOME", temp_home.path().as_os_str());
+
+    let mut session = Session::create_with_id(
+        "session_immediate_journal_no_snapshot_test".to_string(),
+        None,
+        Some("immediate journal no snapshot test".to_string()),
+    );
+    session.add_message(
+        Role::User,
+        vec![ContentBlock::Text {
+            text: "before snapshot".to_string(),
+            cache_control: None,
+        }],
+    );
+
+    let snapshot_path = session_path("session_immediate_journal_no_snapshot_test")?;
+    let journal_path = session_journal_path("session_immediate_journal_no_snapshot_test")?;
+    assert!(!snapshot_path.exists());
+    assert!(!journal_path.exists());
+
+    session.save()?;
+
+    assert!(snapshot_path.exists());
+    assert!(!journal_path.exists());
+    let loaded = Session::load("session_immediate_journal_no_snapshot_test")?;
+    assert_eq!(loaded.messages.len(), 1);
+    assert_eq!(loaded.messages[0].content_preview(), "before snapshot");
+    Ok(())
+}
+
+#[test]
+fn test_immediate_journal_recovered_on_load() -> Result<()> {
+    let _env_lock = lock_env();
+    let temp_home = tempfile::Builder::new()
+        .prefix("jcode-session-immediate-journal-recover-test-")
+        .tempdir()
+        .map_err(|e| anyhow!(e))?;
+    let _home = EnvVarGuard::set("JCODE_HOME", temp_home.path().as_os_str());
+
+    let mut session = Session::create_with_id(
+        "session_immediate_journal_recover_test".to_string(),
+        None,
+        Some("immediate journal recover test".to_string()),
+    );
+    session.save()?;
+    session.add_message(
+        Role::User,
+        vec![ContentBlock::Text {
+            text: "recovered".to_string(),
+            cache_control: None,
+        }],
+    );
+
+    let loaded = Session::load_from_path(&session_path("session_immediate_journal_recover_test")?)?;
+    assert_eq!(loaded.messages.len(), 1);
+    assert_eq!(loaded.messages[0].content_preview(), "recovered");
+    Ok(())
+}
+
 #[test]
 fn test_save_appends_journal_and_load_replays_it() -> Result<()> {
     let _env_lock = lock_env();

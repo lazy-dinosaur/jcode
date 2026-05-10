@@ -4,7 +4,10 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::time::Instant;
 
-use super::journal::{PersistVectorMode, SessionJournalEntry, metadata_requires_snapshot};
+use super::journal::{
+    PersistVectorMode, SessionJournalEntry, metadata_requires_journal_append,
+    metadata_requires_snapshot,
+};
 use super::storage_paths::{file_len_or_zero, session_journal_path_from_snapshot, session_path};
 use super::{MAX_SESSION_JOURNAL_BYTES, RemoteStartupSessionSnapshot, Session, SessionStartupStub};
 use crate::storage;
@@ -27,6 +30,61 @@ impl Session {
         }
         self.reset_persist_state(true);
         Ok(())
+    }
+
+    /// Append a single new message to the session journal immediately.
+    ///
+    /// Best-effort: failure must not break the in-memory session, only logged.
+    /// Caller must have already pushed `message` into `self.messages`.
+    /// On success, advances `persist_state.messages_len` so the next `save()`
+    /// does not duplicate this message in the save-time journal delta.
+    pub(crate) fn append_journal_entry_for_new_message(
+        &mut self,
+        message: &super::StoredMessage,
+    ) -> std::io::Result<()> {
+        if self.persist_state.messages_mode == PersistVectorMode::Full {
+            return Ok(());
+        }
+
+        let snapshot_path =
+            session_path(&self.id).map_err(|err| std::io::Error::other(err.to_string()))?;
+        if !snapshot_path.exists() {
+            return Ok(());
+        }
+
+        let current_meta = self.journal_meta();
+        if self
+            .persist_state
+            .last_meta
+            .as_ref()
+            .is_some_and(|prev| metadata_requires_snapshot(prev, &current_meta))
+        {
+            return Ok(());
+        }
+
+        let journal_path = session_journal_path_from_snapshot(&snapshot_path);
+        let entry = SessionJournalEntry {
+            meta: current_meta,
+            append_messages: vec![message.clone()],
+            append_env_snapshots: Vec::new(),
+            append_memory_injections: Vec::new(),
+            append_replay_events: Vec::new(),
+        };
+
+        match storage::append_json_line_fast(&journal_path, &entry) {
+            Ok(()) => {
+                self.persist_state.messages_len += 1;
+                Ok(())
+            }
+            Err(err) => {
+                let io_err = std::io::Error::other(err.to_string());
+                crate::logging::warn(&format!(
+                    "Immediate session journal append failed for {}: {}",
+                    self.id, io_err
+                ));
+                Err(io_err)
+            }
+        }
     }
 
     pub fn load_from_path(path: &Path) -> Result<Self> {
@@ -206,6 +264,24 @@ impl Session {
             .replay_events
             .len()
             .saturating_sub(self.persist_state.replay_events_len);
+
+        let metadata_needs_journal_append = self
+            .persist_state
+            .last_meta
+            .as_ref()
+            .is_some_and(|prev| metadata_requires_journal_append(prev, &current_meta));
+        if !metadata_needs_snapshot
+            && !vectors_need_snapshot
+            && !metadata_needs_journal_append
+            && delta_messages == 0
+            && delta_env_snapshots == 0
+            && delta_memory_injections == 0
+            && delta_replay_events == 0
+        {
+            self.reset_persist_state(true);
+            return Ok(());
+        }
+
         let (
             result,
             save_mode,
