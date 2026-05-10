@@ -66,6 +66,7 @@ PATCH_REFS=(
   patch/reload-handoff-hard-timeout
   patch/mermaid-input-non-blocking
   patch/ecosystem-paths-policy
+  patch/agent-profiles-project-merge
 )
 
 while [[ $# -gt 0 ]]; do
