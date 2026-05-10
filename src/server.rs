@@ -48,7 +48,7 @@ use self::background_tasks::{
 use self::debug::{ClientConnectionInfo, ClientDebugState};
 use self::debug_jobs::DebugJob;
 use self::headless::create_headless_session;
-use self::reload::await_reload_signal;
+use self::reload::{active_session_count, await_reload_signal, drain_and_flush_sessions};
 use self::runtime::ServerRuntime;
 use self::swarm::{
     broadcast_swarm_plan, broadcast_swarm_plan_with_previous, broadcast_swarm_status,
@@ -913,18 +913,64 @@ impl Server {
             .await;
         });
 
-        // Log when we receive SIGTERM for debugging
+        // Log when we receive SIGTERM/SIGINT for debugging and flush in-memory
+        // sessions before exiting. Reload has its own graceful checkpoint path;
+        // skip this drain while a reload marker is active to avoid racing it.
         #[cfg(unix)]
         {
             let sigterm_server_name = self.identity.name.clone();
+            let signal_sessions = Arc::clone(&self.sessions);
             tokio::spawn(async move {
                 use tokio::signal::unix::{SignalKind, signal};
-                if let Ok(mut sigterm) = signal(SignalKind::terminate()) {
-                    sigterm.recv().await;
-                    crate::logging::info("Server received SIGTERM, shutting down gracefully");
-                    let _ = crate::registry::unregister_server(&sigterm_server_name).await;
-                    std::process::exit(0);
+                let Ok(mut sigterm) = signal(SignalKind::terminate()) else {
+                    crate::logging::warn("Failed to install SIGTERM handler");
+                    return;
+                };
+                let Ok(mut sigint) = signal(SignalKind::interrupt()) else {
+                    crate::logging::warn("Failed to install SIGINT handler");
+                    return;
+                };
+
+                let signal_name = tokio::select! {
+                    _ = sigterm.recv() => "SIGTERM",
+                    _ = sigint.recv() => "SIGINT",
+                };
+
+                crate::logging::info(&format!(
+                    "Server received {}, shutting down gracefully",
+                    signal_name
+                ));
+
+                if crate::server::reload_marker_active(Duration::from_secs(60)) {
+                    crate::logging::info(
+                        "Server shutdown drain skipped because reload is already in progress",
+                    );
+                } else {
+                    let total = active_session_count(&signal_sessions).await;
+                    let started = Instant::now();
+                    crate::logging::info(&format!("draining {} sessions before shutdown", total));
+                    match tokio::time::timeout(
+                        Duration::from_secs(10),
+                        drain_and_flush_sessions(&signal_sessions, Duration::from_secs(8)),
+                    )
+                    .await
+                    {
+                        Ok(drained) => crate::logging::info(&format!(
+                            "drained {}/{} sessions in {} ms",
+                            drained,
+                            total,
+                            started.elapsed().as_millis()
+                        )),
+                        Err(_) => crate::logging::warn(&format!(
+                            "shutdown drain timed out after {} ms for {} sessions",
+                            started.elapsed().as_millis(),
+                            total
+                        )),
+                    }
                 }
+
+                let _ = crate::registry::unregister_server(&sigterm_server_name).await;
+                std::process::exit(0);
             });
         }
 

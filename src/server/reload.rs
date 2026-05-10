@@ -13,6 +13,101 @@ type SessionAgents = Arc<RwLock<HashMap<String, Arc<Mutex<Agent>>>>>;
 
 const RELOAD_GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 
+pub(super) async fn active_session_count(sessions: &SessionAgents) -> usize {
+    sessions.read().await.len()
+}
+
+/// Persist every active session and mark it Closed so the next picker load sees
+/// them as orphaned from clean shutdown rather than active ghosts.
+///
+/// Best-effort: per-session failures are logged but do not block other sessions.
+/// Returns the number of sessions successfully drained.
+pub(crate) async fn drain_and_flush_sessions(sessions: &SessionAgents, timeout: Duration) -> usize {
+    let snapshot: Vec<(String, Arc<Mutex<Agent>>)> = {
+        let guard = sessions.read().await;
+        guard
+            .iter()
+            .map(|(session_id, agent)| (session_id.clone(), Arc::clone(agent)))
+            .collect()
+    };
+
+    let session_count = snapshot.len();
+    if session_count == 0 {
+        return 0;
+    }
+
+    let divisor = u32::try_from(session_count).unwrap_or(u32::MAX).max(1);
+    let mut per_session_timeout = timeout / divisor;
+    if per_session_timeout.is_zero() {
+        per_session_timeout = Duration::from_millis(1);
+    }
+    per_session_timeout = per_session_timeout.min(Duration::from_secs(2));
+
+    let mut handles = Vec::with_capacity(session_count);
+    for (session_id, agent) in snapshot {
+        handles.push(tokio::spawn(async move {
+            let drain_one = async {
+                let mut agent = match agent.try_lock() {
+                    Ok(agent) => agent,
+                    Err(_) => agent.lock().await,
+                };
+
+                let should_mark_crashed = match agent.drain_flush_for_shutdown() {
+                    Ok(should_mark_crashed) => should_mark_crashed,
+                    Err(err) => {
+                        crate::logging::warn(&format!(
+                            "shutdown drain: failed to save session {} before close marker: {}",
+                            session_id, err
+                        ));
+                        return false;
+                    }
+                };
+
+                if should_mark_crashed {
+                    crate::logging::info(&format!(
+                        "shutdown drain: marked in-flight session {} crashed",
+                        session_id
+                    ));
+                } else {
+                    crate::logging::info(&format!(
+                        "shutdown drain: marked session {} closed",
+                        session_id
+                    ));
+                }
+
+                true
+            };
+
+            match tokio::time::timeout(per_session_timeout, drain_one).await {
+                Ok(true) => true,
+                Ok(false) => false,
+                Err(_) => {
+                    crate::logging::warn(&format!(
+                        "shutdown drain: timed out draining session {} after {}ms",
+                        session_id,
+                        per_session_timeout.as_millis()
+                    ));
+                    false
+                }
+            }
+        }));
+    }
+
+    let mut drained = 0usize;
+    for handle in handles {
+        match handle.await {
+            Ok(true) => drained += 1,
+            Ok(false) => {}
+            Err(err) => crate::logging::warn(&format!(
+                "shutdown drain: session task failed before completion: {}",
+                err
+            )),
+        }
+    }
+
+    drained
+}
+
 fn prepare_server_exec(cmd: &mut std::process::Command, socket_path: &std::path::Path) {
     // The replacement daemon must own the published socket paths. Unlink them
     // before exec so we never inherit a stale on-disk endpoint through reload.
@@ -392,6 +487,10 @@ async fn graceful_shutdown_sessions_with_timeout(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "drain_tests.rs"]
+mod drain_tests;
 
 #[cfg(test)]
 #[path = "reload_tests.rs"]

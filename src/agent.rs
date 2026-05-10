@@ -679,6 +679,28 @@ impl Agent {
         &self.session.id
     }
 
+    #[cfg(test)]
+    pub(crate) fn session_mut_for_test(&mut self) -> &mut Session {
+        &mut self.session
+    }
+
+    pub(crate) fn drain_flush_for_shutdown(&mut self) -> Result<bool> {
+        let should_mark_crashed = matches!(self.session.status, SessionStatus::Active)
+            && self
+                .session
+                .visible_conversation_messages()
+                .last()
+                .is_some_and(|message| message.role == Role::User);
+
+        self.session.save()?;
+        if should_mark_crashed {
+            self.mark_crashed(Some("server shutdown drain".to_string()));
+        } else {
+            self.mark_closed();
+        }
+        Ok(should_mark_crashed)
+    }
+
     /// Mark this agent session as closed and persist it.
     pub fn mark_closed(&mut self) {
         crate::telemetry::end_session_with_reason(
