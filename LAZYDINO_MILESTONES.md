@@ -21,7 +21,7 @@
 | M3  | Hook 시스템 확장 (`session.stop`, `response.completed`) | ✅ **DONE** (commit `003fcf65` + `1c97ef70`, binary `1c97ef70`) | — |
 | M4  | TUI interleave 가 tool 완료 후에야 흡수됨 (jcode 원설계) | 🟡 BY-DESIGN with caveats — UX 개선 가치 | Medium |
 | M5  | Alt+B early race — `background_tool_signal.reset()` 이 너무 늦음 | ✅ **DONE** (commit `52375aac` + `f76dfdda`, binary `f76dfdda`) | — |
-| M6  | Alt+B 후 부모 turn idle 화 (upstream 동작 변경) | 🔵 DEFERRED — upstream 의도 변경이라 기본 버그/문제 정리 후 진행 | Low (deferred) |
+| M6  | Alt+B 후 부모 turn 이 idle 빠져도 background task 완료 시 자동 wake | ✅ **DONE** (commit `f2c8430f` + `074dcbef`, binary `074dcbef`) — 라이브 30s idle wake 검증 완료 (T-PLAN 2026-05-10 12:36 UTC) | — |
 
 ⚠️ **운영 노트** (2026-05-10): 모든 fix 가 binary 까지 깔려도 **이미 띄워진 jcode server process 는 옛 binary 를 메모리에 들고 있음**. 새 patch 효과를 보려면 사용자가 `/reload` 또는 `/restart` 로 server 재시작 필요. 이걸 안 해서 M5/M1 효과가 안 보이는 것처럼 느껴진 적이 있음 (현재 PID 479123 = 18:12 시작 server, M5 빌드 이전).
 

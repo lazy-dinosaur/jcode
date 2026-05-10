@@ -197,4 +197,21 @@ EOF
 
 ## 테스트 결과 (누적 기록)
 
-(여기에 실제 테스트 후 결과 추가)
+### 2026-05-10 12:34 UTC — `074dcbef` (lazydino-074dcbef binary)
+
+세션: `session_cat_1778384288669_f04d75242acf9edd` (현재 메인 세션, claude-opus 모델)
+서버 PID 153400, exe=`/home/lazydino/.jcode/builds/versions/lazydino-074dcbef/jcode`, elapsed≈4h12m.
+
+| 테스트 | 결과 | 증거 |
+|--------|------|------|
+| **T-M5 시나리오 1** (ToolStart 직후 Alt+B) | ✅ PASS | 메인 turn 내에서 `bash ps -ef \| grep jcode` 실행을 ToolStart 직후 Alt+B → `Tool 'bash' was moved to background by the user (task_id: 480092t2km)` 메시지가 즉시 history 에 추가됨. status notice 가 Alt+B 를 wipe 하지 않고 정상 detach. |
+| **T-M1** (BG task → parent delivery) | ✅ PASS | task_id `480092t2km` 가 0.1s 후 완료되었을 때 부모 turn 으로 `Background task 480092t2km · bash · ✓ completed · 0.1s · exit 0` 카드와 full output 이 자동 도달. "No output captured" 아님. |
+| **altb-wake-parent** (074dcbef) | ✅ PASS | T-M1 결과가 idle 상태이던 부모 turn 으로 user message 형태로 푸시되어 다음 assistant turn 을 깨움. 사용자가 추가 입력 안 해도 conversation 이 자연스럽게 이어짐. |
+| **altb-wake-parent — 30s idle wake** (강한 검증) | ✅ PASS | task_id `536580q6gu` 로 `sleep 30` 도구를 ToolStart 직후 Alt+B → 부모 turn 이 어시스턴트 응답을 끝내고 idle 로 빠진 상태에서 28.8s 후 task 가 완료됨. 사용자 추가 입력 없이 부모 turn 이 자동 wake 되어 `Background task 536580q6gu · bash · ✓ completed · 28.8s · exit 0` 카드 + full output 도달. 이게 패치의 핵심 동작 (idle parent wake) 의 직접 증거. |
+| T-M5 시나리오 2 (연속 Alt+B, 2번째 tool 만 detach) | (미테스트) | 별도 prompt 필요 |
+| T-M3 시나리오 1 (`response.completed` hook fire) | (미테스트) | hook 설정 추가 + 짧은 prompt 필요 |
+| T-M3 시나리오 3 (`session.stop` hook fire) | (미테스트) | 위 + `/exit` |
+| T-M3 시나리오 4 (`/reload` 가 session.stop 발행 안 함) | (미테스트) | M7 위험 때문에 신중 |
+| T-Smoke | (미테스트) | |
+
+**한 줄 요약**: M5, M1, altb-wake-parent 세 패치 모두 라이브 환경에서 실제 동작 확인.
