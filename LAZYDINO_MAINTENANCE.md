@@ -915,6 +915,7 @@ Suspected real upstream bugs (do not adopt blindly; investigate before fixing):
 - `server::client_session::tests::resume_tests::handle_resume_session_allows_live_attach_when_existing_agent_is_busy` — live attach to busy agent returns 0 instead of 1.
 - `tui::app::helpers::helpers_tests::gather_ambient_info_filters_to_session_reminders_when_ambient_disabled` — panics with "ambient info" message.
 - `agent::tests::env_snapshot_detail_is_minimal_for_empty_sessions_and_full_after_history` — expects `Minimal`, returns `Full`.
+- `tool::mcp::tests::test_tool_description` — assertion expects `"Model Context Protocol"` substring; current code returns `"Manage MCP servers."` (verified failing on baseline `61028b2d` 2026-05-10).
 
 Policy:
 - Do NOT block Lazydino patches on these.
