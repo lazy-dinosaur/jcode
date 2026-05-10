@@ -491,6 +491,28 @@ Track each custom patch as a small commit. Current known customizations:
    - Validation: `cargo check`, `cargo test agents_for_working_dir --lib --no-fail-fast`, `cargo test config_tests --lib --no-fail-fast`, `cargo test task --lib --no-fail-fast`, `cargo test --lib --no-run`, and the 13-test known-failure smoke.
    - Binary reinstall required: yes, because this changes runtime subagent routing/config behavior.
 
+17. Project-local markdown agent profiles
+   - Commit: `feat: load agent profiles from project-local markdown files`.
+   - Patch branch: `patch/agent-profiles-md-files`.
+   - Purpose: let project harnesses ship callable agent profiles as Claude-style markdown files instead of requiring users to edit `[agents.profiles]` TOML.
+   - Agent profile directories:
+     - `<project>/.jcode/agents/*.md`
+     - `<project>/.claude/agents/*.md`
+     - `<project>/.agents/agents/*.md`
+     - `<project>/.opencode/agents/*.md`
+   - Frontmatter behavior:
+     - `name` is optional; if absent, the filename stem becomes the profile key.
+     - Accepted aliases include `model`, `effort` / `reasoning-effort` / `reasoning_effort`, `description` / `desc`, `when` / `when_to_use`, and `system-prompt` / `system_prompt`.
+     - `allowed-tools` / `allowed_tools` / `tools` are tolerated for ecosystem compatibility but currently ignored because jcode does not enforce per-profile tool gates.
+     - Files with no frontmatter still load, using the entire markdown body as the profile prompt.
+   - Merge behavior:
+     - global `~/.jcode/config.toml` agents first
+     - project markdown agents second, with markdown source precedence `.jcode > .claude > .agents > .opencode`
+     - project `.jcode/config.toml` and `.jcode/config.local.toml` agents last so users can override framework-shipped markdown profiles with TOML
+   - Runtime behavior: `agents_for_working_dir(Some(project))` includes project-local markdown profiles in the effective `AgentsConfig`; `agents_for_working_dir(None)` remains global-only.
+   - Validation: `cargo check`, `cargo test agents_for_working_dir --lib --no-fail-fast`, `cargo test agent_profiles_md --lib --no-fail-fast`, `cargo test config_tests --lib --no-fail-fast`, `cargo test task --lib --no-fail-fast` (known baseline `spawn_target_creates_one_child_session_and_runs_task` failure remains), `cargo test --lib --no-run`, and the 13-test known-failure smoke.
+   - Binary reinstall required: yes, because this changes runtime subagent profile discovery behavior.
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.

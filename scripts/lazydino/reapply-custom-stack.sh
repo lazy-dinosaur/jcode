@@ -67,6 +67,7 @@ PATCH_REFS=(
   patch/mermaid-input-non-blocking
   patch/ecosystem-paths-policy
   patch/agent-profiles-project-merge
+  patch/agent-profiles-md-files
 )
 
 while [[ $# -gt 0 ]]; do
