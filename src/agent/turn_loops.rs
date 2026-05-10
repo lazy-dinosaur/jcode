@@ -1,6 +1,13 @@
 use super::*;
 
 impl Agent {
+    /// M11 stage 3: max consecutive lifecycle hook denies before the loop guard
+    /// suppresses further reminder injection. Threshold chosen empirically:
+    /// 1-2 denies are normal (user-facing safety guard like `forgot to commit`),
+    /// 3+ in a row indicates the hook is in a runaway state and the session
+    /// must be allowed to stop.
+    pub(super) const LIFECYCLE_HOOK_DENY_STREAK_LIMIT: u32 = 3;
+
     fn lifecycle_hook_reminder(reason: &str) -> String {
         format!(
             "A lifecycle hook denied completion of the previous turn. Follow this instruction before stopping again:\n\n{}",
@@ -8,16 +15,61 @@ impl Agent {
         )
     }
 
+    /// M11 stage 3: notice emitted exactly once when the loop guard fires.
+    /// Replaces the user-supplied deny reason for one turn so the model is
+    /// told the hook is being suppressed and the session may now stop.
+    fn lifecycle_hook_loop_guard_notice(reason: &str, streak: u32) -> String {
+        format!(
+            "A lifecycle hook has denied turn completion {streak} times in a row \
+             with the same reminder. The hook loop guard is now suppressing \
+             further denials so this session can stop. Last deny reason:\n\n{}\n\n\
+             Please acknowledge briefly and stop.",
+            reason.trim()
+        )
+    }
+
     pub(super) fn set_pending_lifecycle_system_reminder(&mut self, reason: String) {
         let reason = reason.trim();
         if reason.is_empty() {
+            // Empty/whitespace reason still counts as a passed turn for streak
+            // bookkeeping; the hook fired but didn't actually deny.
             return;
         }
-        self.pending_lifecycle_system_reminder = Some(Self::lifecycle_hook_reminder(reason));
+
+        // M11 stage 3: bump consecutive deny streak before deciding what
+        // (if anything) to inject. The streak is reset by callers of
+        // `take_pending_lifecycle_system_reminder` only when a turn finishes
+        // *without* a new deny being queued (see `note_turn_completed_without_lifecycle_deny`).
+        self.lifecycle_deny_streak = self.lifecycle_deny_streak.saturating_add(1);
+
+        let reminder = if self.lifecycle_deny_streak >= Self::LIFECYCLE_HOOK_DENY_STREAK_LIMIT {
+            // Loop guard tripped: surface a single notice that tells the model
+            // to stop, then clear the streak so the very next deny (after the
+            // session actually rests) starts fresh.
+            let notice =
+                Self::lifecycle_hook_loop_guard_notice(reason, self.lifecycle_deny_streak);
+            self.lifecycle_deny_streak = 0;
+            notice
+        } else {
+            Self::lifecycle_hook_reminder(reason)
+        };
+        self.pending_lifecycle_system_reminder = Some(reminder);
     }
 
     pub(super) fn take_pending_lifecycle_system_reminder(&mut self) -> Option<String> {
         self.pending_lifecycle_system_reminder.take()
+    }
+
+    /// M11 stage 3: called by callers that observe a turn finishing without a
+    /// pending lifecycle deny. Resets the consecutive deny streak so a
+    /// subsequent deny starts counting from one again.
+    pub(super) fn note_turn_completed_without_lifecycle_deny(&mut self) {
+        self.lifecycle_deny_streak = 0;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn lifecycle_deny_streak_for_tests(&self) -> u32 {
+        self.lifecycle_deny_streak
     }
 
     pub(super) fn merge_current_and_pending_system_reminders(
@@ -67,7 +119,7 @@ impl Agent {
         };
         match crate::hooks::run_response_hooks(payload).await {
             Ok(Some(reason)) => self.set_pending_lifecycle_system_reminder(reason),
-            Ok(None) => {}
+            Ok(None) => self.note_turn_completed_without_lifecycle_deny(),
             Err(err) => logging::warn(&format!("response.completed hook failed: {err:#}")),
         }
     }

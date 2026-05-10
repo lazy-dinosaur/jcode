@@ -1076,6 +1076,95 @@ fn lifecycle_hook_reminder_merges_with_existing_turn_reminder() {
     assert_eq!(merged, "existing reminder\n\nlifecycle reminder");
 }
 
+// --- M11 stage 3: loop guard regression tests --------------------------------
+
+#[tokio::test]
+async fn lifecycle_deny_streak_starts_zero_and_increments_per_deny() {
+    let _guard = crate::storage::lock_test_env();
+    let provider: Arc<dyn Provider> = Arc::new(NativeAutoCompactionProvider);
+    let registry = Registry::new(provider.clone()).await;
+    let mut agent = Agent::new(provider, registry);
+
+    assert_eq!(agent.lifecycle_deny_streak_for_tests(), 0);
+
+    agent.set_pending_lifecycle_system_reminder("forgot to commit".to_string());
+    assert_eq!(agent.lifecycle_deny_streak_for_tests(), 1);
+    let _ = agent.take_pending_lifecycle_system_reminder();
+
+    agent.set_pending_lifecycle_system_reminder("forgot to commit".to_string());
+    assert_eq!(agent.lifecycle_deny_streak_for_tests(), 2);
+}
+
+#[tokio::test]
+async fn lifecycle_deny_streak_resets_after_passing_turn() {
+    let _guard = crate::storage::lock_test_env();
+    let provider: Arc<dyn Provider> = Arc::new(NativeAutoCompactionProvider);
+    let registry = Registry::new(provider.clone()).await;
+    let mut agent = Agent::new(provider, registry);
+
+    agent.set_pending_lifecycle_system_reminder("first deny".to_string());
+    agent.set_pending_lifecycle_system_reminder("second deny".to_string());
+    assert_eq!(agent.lifecycle_deny_streak_for_tests(), 2);
+
+    // Turn finishes without the hook denying -> caller resets streak.
+    agent.note_turn_completed_without_lifecycle_deny();
+    assert_eq!(agent.lifecycle_deny_streak_for_tests(), 0);
+
+    // Next deny starts counting from one again.
+    agent.set_pending_lifecycle_system_reminder("post-reset deny".to_string());
+    assert_eq!(agent.lifecycle_deny_streak_for_tests(), 1);
+}
+
+#[tokio::test]
+async fn lifecycle_deny_streak_triggers_loop_guard_notice_at_limit() {
+    let _guard = crate::storage::lock_test_env();
+    let provider: Arc<dyn Provider> = Arc::new(NativeAutoCompactionProvider);
+    let registry = Registry::new(provider.clone()).await;
+    let mut agent = Agent::new(provider, registry);
+
+    // Denies 1 and 2 are still normal reminders.
+    agent.set_pending_lifecycle_system_reminder("still denying".to_string());
+    let r1 = agent.take_pending_lifecycle_system_reminder().unwrap();
+    assert!(r1.contains("lifecycle hook denied completion"));
+    assert!(!r1.contains("loop guard"));
+
+    agent.set_pending_lifecycle_system_reminder("still denying".to_string());
+    let r2 = agent.take_pending_lifecycle_system_reminder().unwrap();
+    assert!(r2.contains("lifecycle hook denied completion"));
+    assert!(!r2.contains("loop guard"));
+
+    // Deny 3 hits LIFECYCLE_HOOK_DENY_STREAK_LIMIT and trips the loop guard.
+    agent.set_pending_lifecycle_system_reminder("still denying".to_string());
+    let guard = agent.take_pending_lifecycle_system_reminder().unwrap();
+    assert!(
+        guard.contains("loop guard is now suppressing"),
+        "expected loop guard notice, got: {guard}"
+    );
+    assert!(guard.contains("still denying"));
+    assert!(guard.contains("3 times in a row"));
+
+    // After the notice fires the streak is cleared so the very next deny
+    // (after the user resets the hook script) starts from one again.
+    assert_eq!(agent.lifecycle_deny_streak_for_tests(), 0);
+}
+
+#[tokio::test]
+async fn lifecycle_deny_streak_empty_reason_does_not_count() {
+    let _guard = crate::storage::lock_test_env();
+    let provider: Arc<dyn Provider> = Arc::new(NativeAutoCompactionProvider);
+    let registry = Registry::new(provider.clone()).await;
+    let mut agent = Agent::new(provider, registry);
+
+    agent.set_pending_lifecycle_system_reminder("real deny".to_string());
+    agent.set_pending_lifecycle_system_reminder("   ".to_string()); // whitespace only
+    agent.set_pending_lifecycle_system_reminder("".to_string()); // empty
+
+    // Only the first deny incremented the streak; the whitespace/empty
+    // entries are treated as "hook fired but didn't actually deny" so they
+    // must not bump the counter toward the loop guard trigger.
+    assert_eq!(agent.lifecycle_deny_streak_for_tests(), 1);
+}
+
 #[tokio::test]
 async fn restore_session_rehydrates_injected_memory_ids() {
     let _guard = crate::storage::lock_test_env();
