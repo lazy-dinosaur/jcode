@@ -6,12 +6,15 @@ use crate::message::{
     format_background_task_notification_markdown, format_background_task_progress_markdown,
 };
 use crate::protocol::{NotificationType, ServerEvent};
+use crate::session::Session;
 use jcode_agent_runtime::SoftInterruptSource;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-async fn run_background_task_message_in_live_session_if_idle(
+const MAX_DELIVERY_PARENT_DEPTH: usize = 10;
+
+pub(super) async fn run_background_task_message_in_live_session_if_idle(
     session_id: &str,
     message: &str,
     sessions: &SessionAgents,
@@ -29,7 +32,7 @@ async fn run_background_task_message_in_live_session_if_idle(
         let members = swarm_members.read().await;
         members
             .get(session_id)
-            .map(|member| !member.event_txs.is_empty() || !member.event_tx.is_closed())
+            .map(|member| member.event_txs.values().any(|tx| !tx.is_closed()))
             .unwrap_or(false)
     };
     if !has_live_attachments {
@@ -74,6 +77,65 @@ async fn run_background_task_message_in_live_session_if_idle(
     true
 }
 
+/// Walk report-back / parent_id chains from `start_session_id` upward and return
+/// the first session that has a live attached client. Falls back to the start id
+/// when no live ancestor is found or a loop/depth limit is encountered.
+pub(super) async fn resolve_background_delivery_target(
+    swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,
+    start_session_id: &str,
+) -> String {
+    let mut current = next_delivery_ancestor(swarm_members, start_session_id)
+        .await
+        .unwrap_or_else(|| start_session_id.to_string());
+    let mut visited = HashSet::new();
+
+    for _ in 0..MAX_DELIVERY_PARENT_DEPTH {
+        if !visited.insert(current.clone()) {
+            break;
+        }
+
+        let has_live_attachment = {
+            let members = swarm_members.read().await;
+            members
+                .get(&current)
+                .map(|member| member.event_txs.values().any(|tx| !tx.is_closed()))
+                .unwrap_or(false)
+        };
+
+        if has_live_attachment {
+            return current;
+        }
+
+        let next = next_delivery_ancestor(swarm_members, &current).await;
+
+        let Some(next) = next else {
+            break;
+        };
+        current = next;
+    }
+
+    start_session_id.to_string()
+}
+
+async fn next_delivery_ancestor(
+    swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,
+    session_id: &str,
+) -> Option<String> {
+    if let Some(parent_id) = Session::load_startup_stub(session_id)
+        .ok()
+        .and_then(|session| session.parent_id)
+        .filter(|parent_id| parent_id != session_id)
+    {
+        return Some(parent_id);
+    }
+
+    let members = swarm_members.read().await;
+    members
+        .get(session_id)
+        .and_then(|member| member.report_back_to_session_id.clone())
+        .filter(|report_back_id| report_back_id != session_id)
+}
+
 pub(super) async fn dispatch_background_task_completion(
     task: &crate::bus::BackgroundTaskCompleted,
     sessions: &SessionAgents,
@@ -81,11 +143,14 @@ pub(super) async fn dispatch_background_task_completion(
     swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,
 ) {
     let notification = format_background_task_notification_markdown(task);
+    let delivery_session_id =
+        resolve_background_delivery_target(swarm_members, task.delivery_session_id_or_owner())
+            .await;
 
     if task.notify
         && fanout_session_event(
             swarm_members,
-            &task.session_id,
+            &delivery_session_id,
             ServerEvent::Notification {
                 from_session: "background_task".to_string(),
                 from_name: Some("background task".to_string()),
@@ -100,21 +165,21 @@ pub(super) async fn dispatch_background_task_completion(
             == 0
     {
         crate::logging::warn(&format!(
-            "Failed to notify attached clients for background task completion on session {}",
-            task.session_id
+            "Failed to notify attached clients for background task completion on session {} (owner {})",
+            delivery_session_id, task.session_id
         ));
     }
 
     if task.wake
         && !run_background_task_message_in_live_session_if_idle(
-            &task.session_id,
+            &delivery_session_id,
             &notification,
             sessions,
             swarm_members,
         )
         .await
         && !queue_soft_interrupt_for_session(
-            &task.session_id,
+            &delivery_session_id,
             notification.clone(),
             false,
             SoftInterruptSource::BackgroundTask,
@@ -124,8 +189,8 @@ pub(super) async fn dispatch_background_task_completion(
         .await
     {
         crate::logging::warn(&format!(
-            "Failed to deliver background task completion to session {}",
-            task.session_id
+            "Failed to deliver background task completion to session {} (owner {})",
+            delivery_session_id, task.session_id
         ));
     }
 }
@@ -135,9 +200,12 @@ pub(super) async fn dispatch_background_task_progress(
     swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,
 ) {
     let notification = format_background_task_progress_markdown(task);
+    let delivery_session_id =
+        resolve_background_delivery_target(swarm_members, task.delivery_session_id_or_owner())
+            .await;
     if fanout_session_event(
         swarm_members,
-        &task.session_id,
+        &delivery_session_id,
         ServerEvent::Notification {
             from_session: "background_task".to_string(),
             from_name: Some("background task".to_string()),
@@ -152,8 +220,8 @@ pub(super) async fn dispatch_background_task_progress(
         == 0
     {
         crate::logging::warn(&format!(
-            "Failed to notify attached clients for background task progress on session {}",
-            task.session_id
+            "Failed to notify attached clients for background task progress on session {} (owner {})",
+            delivery_session_id, task.session_id
         ));
     }
 }

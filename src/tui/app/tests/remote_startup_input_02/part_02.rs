@@ -6,6 +6,7 @@ fn test_handle_background_task_completed_renders_markdown_preview() {
         tool_name: "bash".to_string(),
         display_name: None,
         session_id: app.session.id.clone(),
+        delivery_session_id: app.session.id.clone(),
         status: BackgroundTaskStatus::Completed,
         exit_code: Some(0),
         output_preview: "[stderr] one\n[stdout] two\n".to_string(),
@@ -48,6 +49,7 @@ fn test_handle_background_task_completed_with_wake_starts_pending_turn() {
         tool_name: "selfdev-build".to_string(),
         display_name: None,
         session_id: app.session.id.clone(),
+        delivery_session_id: app.session.id.clone(),
         status: BackgroundTaskStatus::Completed,
         exit_code: Some(0),
         output_preview: "done\n".to_string(),
@@ -75,6 +77,7 @@ fn test_handle_background_task_progress_updates_status_notice() {
         tool_name: "bash".to_string(),
         display_name: None,
         session_id: app.session.id.clone(),
+        delivery_session_id: app.session.id.clone(),
         progress: BackgroundTaskProgress {
             kind: BackgroundTaskProgressKind::Determinate,
             percent: Some(42.0),
@@ -115,6 +118,7 @@ fn test_handle_background_task_progress_debounces_identical_notice_updates() {
         tool_name: "bash".to_string(),
         display_name: None,
         session_id: app.session.id.clone(),
+        delivery_session_id: app.session.id.clone(),
         progress: BackgroundTaskProgress {
             kind: BackgroundTaskProgressKind::Determinate,
             percent: Some(42.0),
@@ -135,6 +139,7 @@ fn test_handle_background_task_progress_debounces_identical_notice_updates() {
         tool_name: "bash".to_string(),
         display_name: None,
         session_id: app.session.id.clone(),
+        delivery_session_id: app.session.id.clone(),
         progress: BackgroundTaskProgress {
             kind: BackgroundTaskProgressKind::Determinate,
             percent: Some(42.0),
@@ -170,6 +175,7 @@ fn test_handle_background_task_progress_updates_existing_card() {
                     tool_name: "bash".to_string(),
                     display_name: None,
                     session_id: session_id.clone(),
+                    delivery_session_id: session_id.clone(),
                     progress: BackgroundTaskProgress {
                         kind: BackgroundTaskProgressKind::Determinate,
                         percent: Some(percent),

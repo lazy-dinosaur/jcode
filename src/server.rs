@@ -45,6 +45,10 @@ pub(super) use self::await_members_state::AwaitMembersRuntime;
 use self::background_tasks::{
     dispatch_background_task_completion, dispatch_background_task_progress,
 };
+#[cfg(test)]
+use self::background_tasks::{
+    resolve_background_delivery_target, run_background_task_message_in_live_session_if_idle,
+};
 use self::debug::{ClientConnectionInfo, ClientDebugState};
 use self::debug_jobs::DebugJob;
 use self::headless::create_headless_session;

@@ -116,7 +116,13 @@ pub struct BackgroundTaskCompleted {
     pub task_id: String,
     pub tool_name: String,
     pub display_name: Option<String>,
+    /// Session id where the task was owned/executed.
     pub session_id: String,
+    /// Session id where completion should be delivered (notification + wake).
+    /// Defaults to `session_id` at construction sites. May differ for headless
+    /// workers and detached subagent tools where the user-attached parent
+    /// session needs to receive the notification.
+    pub delivery_session_id: String,
     pub status: BackgroundTaskStatus,
     pub exit_code: Option<i32>,
     pub output_preview: String,
@@ -124,6 +130,16 @@ pub struct BackgroundTaskCompleted {
     pub duration_secs: f64,
     pub notify: bool,
     pub wake: bool,
+}
+
+impl BackgroundTaskCompleted {
+    pub fn delivery_session_id_or_owner(&self) -> &str {
+        if self.delivery_session_id.is_empty() {
+            &self.session_id
+        } else {
+            &self.delivery_session_id
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

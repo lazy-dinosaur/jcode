@@ -172,6 +172,7 @@ impl BackgroundTaskManager {
             tool_name: status.tool_name.clone(),
             display_name: status.display_name.clone(),
             session_id: status.session_id.clone(),
+            delivery_session_id: status.delivery_session_id_or_owner().to_string(),
             status: final_status,
             exit_code,
             output_preview,
@@ -216,6 +217,7 @@ impl BackgroundTaskManager {
             tool_name: tool_name.to_string(),
             display_name,
             session_id: session_id.to_string(),
+            delivery_session_id: session_id.to_string(),
             status: BackgroundTaskStatus::Running,
             exit_code: None,
             error: None,
@@ -276,6 +278,7 @@ impl BackgroundTaskManager {
             tool_name: tool_name.to_string(),
             display_name: display_name.clone(),
             session_id: session_id.to_string(),
+            delivery_session_id: session_id.to_string(),
             status: BackgroundTaskStatus::Running,
             exit_code: None,
             error: None,
@@ -299,6 +302,7 @@ impl BackgroundTaskManager {
         let tool_name_owned = tool_name.to_string();
         let display_name_owned = display_name.clone();
         let session_id_owned = session_id.to_string();
+        let delivery_session_id_owned = session_id.to_string();
         let started_at = Instant::now();
         let started_at_rfc3339_for_task = started_at_rfc3339.clone();
         let (delivery_flags_tx, delivery_flags_rx) = watch::channel((notify, wake));
@@ -340,6 +344,7 @@ impl BackgroundTaskManager {
                 tool_name: tool_name_owned.clone(),
                 display_name: display_name_owned.clone(),
                 session_id: session_id_owned.clone(),
+                delivery_session_id: delivery_session_id_owned.clone(),
                 status: status.clone(),
                 exit_code,
                 error: error.clone(),
@@ -379,6 +384,7 @@ impl BackgroundTaskManager {
                 tool_name: tool_name_owned,
                 display_name: display_name_owned,
                 session_id: session_id_owned,
+                delivery_session_id: delivery_session_id_owned,
                 status,
                 exit_code,
                 output_preview,
@@ -397,6 +403,7 @@ impl BackgroundTaskManager {
             tool_name: tool_name.to_string(),
             display_name,
             session_id: session_id.to_string(),
+            delivery_session_id: session_id.to_string(),
             status_path: status_path.clone(),
             started_at,
             started_at_rfc3339,
@@ -426,6 +433,17 @@ impl BackgroundTaskManager {
         session_id: &str,
         handle: JoinHandle<Result<crate::tool::ToolOutput>>,
     ) -> BackgroundTaskInfo {
+        self.adopt_with_delivery(tool_name, session_id, session_id, handle)
+            .await
+    }
+
+    pub async fn adopt_with_delivery(
+        &self,
+        tool_name: &str,
+        session_id: &str,
+        delivery_session_id: &str,
+        handle: JoinHandle<Result<crate::tool::ToolOutput>>,
+    ) -> BackgroundTaskInfo {
         let task_id = Self::generate_task_id();
         let output_path = self.output_dir.join(format!("{}.output", task_id));
         let status_path = self.output_dir.join(format!("{}.status.json", task_id));
@@ -435,6 +453,7 @@ impl BackgroundTaskManager {
             tool_name: tool_name.to_string(),
             display_name: None,
             session_id: session_id.to_string(),
+            delivery_session_id: delivery_session_id.to_string(),
             status: BackgroundTaskStatus::Running,
             exit_code: None,
             error: None,
@@ -457,6 +476,7 @@ impl BackgroundTaskManager {
         let task_id_clone = task_id.clone();
         let tool_name_owned = tool_name.to_string();
         let session_id_owned = session_id.to_string();
+        let delivery_session_id_owned = delivery_session_id.to_string();
         let started_at = Instant::now();
         let started_at_rfc3339 = initial_status.started_at.clone();
         let display_name_owned = initial_status.display_name.clone();
@@ -508,6 +528,7 @@ impl BackgroundTaskManager {
                 tool_name: tool_name_owned.clone(),
                 display_name: display_name_owned.clone(),
                 session_id: session_id_owned.clone(),
+                delivery_session_id: delivery_session_id_owned.clone(),
                 status: status.clone(),
                 exit_code,
                 error: error.clone(),
@@ -540,6 +561,7 @@ impl BackgroundTaskManager {
                 tool_name: tool_name_owned,
                 display_name: display_name_owned,
                 session_id: session_id_owned,
+                delivery_session_id: delivery_session_id_owned,
                 status: status.clone(),
                 exit_code,
                 output_preview,
@@ -561,6 +583,7 @@ impl BackgroundTaskManager {
             tool_name: tool_name.to_string(),
             display_name: None,
             session_id: session_id.to_string(),
+            delivery_session_id: delivery_session_id.to_string(),
             status_path: status_path.clone(),
             started_at,
             started_at_rfc3339: initial_status.started_at.clone(),
@@ -827,6 +850,7 @@ impl BackgroundTaskManager {
                 tool_name: status.tool_name.clone(),
                 display_name: status.display_name.clone(),
                 session_id: status.session_id.clone(),
+                delivery_session_id: status.delivery_session_id_or_owner().to_string(),
                 progress,
             },
         ));
@@ -897,6 +921,7 @@ impl BackgroundTaskManager {
                 tool_name: task.tool_name,
                 display_name: task.display_name,
                 session_id: task.session_id,
+                delivery_session_id: task.delivery_session_id,
                 status: BackgroundTaskStatus::Failed,
                 exit_code: None,
                 error: Some("Cancelled by user".to_string()),

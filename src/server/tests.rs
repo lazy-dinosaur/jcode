@@ -1,6 +1,7 @@
 use super::{
     FileAccess, Server, SessionInterruptQueues, SwarmMember, dispatch_background_task_completion,
-    file_activity_scope_label, persist_swarm_state_snapshot,
+    file_activity_scope_label, persist_swarm_state_snapshot, resolve_background_delivery_target,
+    run_background_task_message_in_live_session_if_idle,
 };
 use crate::agent::Agent;
 use crate::bus::{
@@ -178,10 +179,12 @@ fn attached_swarm_member(
     session_id: &str,
     event_tx: mpsc::UnboundedSender<ServerEvent>,
 ) -> SwarmMember {
+    let mut event_txs = HashMap::new();
+    event_txs.insert("test-connection".to_string(), event_tx.clone());
     SwarmMember {
         session_id: session_id.to_string(),
         event_tx,
-        event_txs: HashMap::new(),
+        event_txs,
         working_dir: None,
         swarm_id: None,
         swarm_enabled: false,
@@ -250,6 +253,7 @@ async fn background_task_wake_runs_live_session_immediately_when_idle() {
         tool_name: "selfdev-build".to_string(),
         display_name: None,
         session_id: session_id.clone(),
+        delivery_session_id: session_id.clone(),
         status: BackgroundTaskStatus::Completed,
         exit_code: Some(0),
         output_preview: "done\n".to_string(),
@@ -337,6 +341,7 @@ async fn background_task_notify_without_wake_does_not_queue_soft_interrupt() {
         tool_name: "bash".to_string(),
         display_name: None,
         session_id: session_id.clone(),
+        delivery_session_id: session_id.clone(),
         status: BackgroundTaskStatus::Completed,
         exit_code: Some(0),
         output_preview: "ok\n".to_string(),
@@ -382,6 +387,7 @@ async fn background_task_progress_notifies_attached_clients() {
         tool_name: "bash".to_string(),
         display_name: None,
         session_id: session_id.clone(),
+        delivery_session_id: session_id.clone(),
         progress: BackgroundTaskProgress {
             kind: BackgroundTaskProgressKind::Determinate,
             percent: Some(42.0),
@@ -419,6 +425,127 @@ async fn background_task_progress_notifies_attached_clients() {
         }
         other => panic!("expected notification, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn background_task_completion_delivers_headless_worker_to_report_back_parent() {
+    let provider: Arc<dyn Provider> = Arc::new(StreamingMockProvider::default());
+    let parent_agent = test_agent(provider).await;
+    let parent_session_id = parent_agent.lock().await.session_id().to_string();
+    let child_session_id = "headless-child-session".to_string();
+    let sessions = Arc::new(RwLock::new(HashMap::new()));
+    let soft_interrupt_queues: SessionInterruptQueues = Arc::new(RwLock::new(HashMap::new()));
+    let (parent_event_tx, mut parent_event_rx) = mpsc::unbounded_channel();
+    let (child_event_tx, _child_event_rx) = mpsc::unbounded_channel();
+    let mut child = attached_swarm_member(&child_session_id, child_event_tx);
+    child.event_txs.clear();
+    child.is_headless = true;
+    child.report_back_to_session_id = Some(parent_session_id.clone());
+    let swarm_members = Arc::new(RwLock::new(HashMap::from([
+        (
+            parent_session_id.clone(),
+            attached_swarm_member(&parent_session_id, parent_event_tx),
+        ),
+        (child_session_id.clone(), child),
+    ])));
+    let task = BackgroundTaskCompleted {
+        task_id: "headless-report-back".to_string(),
+        tool_name: "bash".to_string(),
+        display_name: None,
+        session_id: child_session_id.clone(),
+        delivery_session_id: child_session_id,
+        status: BackgroundTaskStatus::Completed,
+        exit_code: Some(0),
+        output_preview: "ok\n".to_string(),
+        output_file: std::env::temp_dir().join("headless-report-back.output"),
+        duration_secs: 0.1,
+        notify: true,
+        wake: false,
+    };
+
+    dispatch_background_task_completion(&task, &sessions, &soft_interrupt_queues, &swarm_members)
+        .await;
+
+    let notification = timeout(Duration::from_secs(2), parent_event_rx.recv())
+        .await
+        .expect("parent should receive report-back notification")
+        .expect("parent stream should stay open");
+    match notification {
+        ServerEvent::Notification { message, .. } => {
+            assert!(message.contains("**Background task** `headless-report-back`"));
+        }
+        other => panic!("expected notification, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn background_task_wake_ignores_headless_drain_channel_as_live_attachment() {
+    let provider: Arc<dyn Provider> = Arc::new(StreamingMockProvider::default());
+    let agent = test_agent(provider).await;
+    let session_id = agent.lock().await.session_id().to_string();
+    let sessions = Arc::new(RwLock::new(HashMap::from([(
+        session_id.clone(),
+        agent.clone(),
+    )])));
+    let (drain_tx, _drain_rx) = mpsc::unbounded_channel();
+    let mut member = attached_swarm_member(&session_id, drain_tx);
+    member.event_txs.clear();
+    member.is_headless = true;
+    let swarm_members = Arc::new(RwLock::new(HashMap::from([(session_id.clone(), member)])));
+
+    let ran = run_background_task_message_in_live_session_if_idle(
+        &session_id,
+        "background finished",
+        &sessions,
+        &swarm_members,
+    )
+    .await;
+
+    assert!(!ran, "headless drain-only event_tx must not count as live");
+}
+
+#[tokio::test]
+async fn background_delivery_target_walks_parent_chain_to_attached_ancestor() -> Result<()> {
+    let _storage_guard = crate::storage::lock_test_env();
+    let temp = tempfile::TempDir::new()?;
+    let _env = configure_test_env(&temp);
+    let mut parent = crate::session::Session::create(None, Some("parent".to_string()));
+    parent.save()?;
+    let mut child =
+        crate::session::Session::create(Some(parent.id.clone()), Some("child".to_string()));
+    child.save()?;
+    let mut grandchild =
+        crate::session::Session::create(Some(child.id.clone()), Some("grandchild".to_string()));
+    grandchild.save()?;
+    let (parent_event_tx, _parent_event_rx) = mpsc::unbounded_channel();
+    let swarm_members = Arc::new(RwLock::new(HashMap::from([(
+        parent.id.clone(),
+        attached_swarm_member(&parent.id, parent_event_tx),
+    )])));
+
+    let resolved = resolve_background_delivery_target(&swarm_members, &grandchild.id).await;
+
+    assert_eq!(resolved, parent.id);
+    Ok(())
+}
+
+#[tokio::test]
+async fn background_delivery_target_falls_back_on_parent_loop() -> Result<()> {
+    let _storage_guard = crate::storage::lock_test_env();
+    let temp = tempfile::TempDir::new()?;
+    let _env = configure_test_env(&temp);
+    let mut first = crate::session::Session::create(None, Some("first".to_string()));
+    let mut second =
+        crate::session::Session::create(Some(first.id.clone()), Some("second".to_string()));
+    first.parent_id = Some(second.id.clone());
+    first.save()?;
+    second.save()?;
+    let swarm_members = Arc::new(RwLock::new(HashMap::new()));
+
+    let resolved = resolve_background_delivery_target(&swarm_members, &first.id).await;
+
+    assert_eq!(resolved, first.id);
+    Ok(())
 }
 
 #[tokio::test]

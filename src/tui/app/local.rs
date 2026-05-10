@@ -321,7 +321,7 @@ fn apply_terminal_event(
 }
 
 fn handle_background_task_completed(app: &mut App, task: BackgroundTaskCompleted) {
-    if !task.notify || task.session_id != app.session.id {
+    if !task.notify || task.delivery_session_id_or_owner() != app.session.id {
         return;
     }
 
@@ -362,7 +362,7 @@ fn handle_background_task_completed(app: &mut App, task: BackgroundTaskCompleted
 }
 
 fn handle_background_task_progress(app: &mut App, event: BackgroundTaskProgressEvent) {
-    if event.session_id != app.session.id {
+    if event.delivery_session_id_or_owner() != app.session.id {
         return;
     }
 

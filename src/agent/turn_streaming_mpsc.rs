@@ -987,8 +987,18 @@ impl Agent {
                         tool_elapsed.as_secs_f64()
                     ));
 
+                    let delivery_session_id = self
+                        .session
+                        .parent_id
+                        .clone()
+                        .unwrap_or_else(|| self.session.id.clone());
                     let bg_info = crate::background::global()
-                        .adopt(&tc.name, &self.session.id, tool_handle)
+                        .adopt_with_delivery(
+                            &tc.name,
+                            &self.session.id,
+                            &delivery_session_id,
+                            tool_handle,
+                        )
                         .await;
 
                     let bg_msg = format!(
