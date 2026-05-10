@@ -61,6 +61,7 @@ PATCH_REFS=(
   patch/custom-install-server-paths
   patch/pr151-slice-analysis
   patch/openai-usage-percent-normalization
+  patch/journal-on-message
 )
 
 while [[ $# -gt 0 ]]; do

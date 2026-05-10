@@ -372,6 +372,23 @@ Track each custom patch as a small commit. Current known customizations:
    - Validation: `cargo test usage::tests --lib` and `cargo check`.
    - Binary reinstall required: yes, because this changes usage/quota runtime behavior.
 
+11. Immediate session message journaling
+   - Commit: `feat: journal new session messages immediately`.
+   - Patch branch: `patch/journal-on-message`.
+   - Purpose: append each newly stored session message to `<session>.journal.jsonl` immediately after it enters `Session.messages`, so daemon crashes, SIGTERM/SIGKILL, or install-helper restarts cannot lose messages that were already accepted in memory.
+   - Runtime behavior:
+     - New messages are journaled only after a snapshot baseline exists.
+     - Immediate journal success advances `persist_state.messages_len`, so the next `Session::save()` does not duplicate the message delta.
+     - Forced full snapshots or metadata changes that require checkpointing skip immediate journaling and let the next save write the snapshot.
+     - Immediate journal failures are logged as best-effort warnings and do not break the in-memory session.
+   - Touched paths:
+     - `src/session.rs`
+     - `src/session/journal.rs`
+     - `src/session/persistence.rs`
+     - `src/session_tests/cases.rs`
+   - Validation: `cargo check`, `cargo test session::tests::cases --lib`, `cargo test immediate_journal --lib`, and `cargo test --lib --no-run`.
+   - Binary reinstall required: yes, because this changes session persistence runtime behavior.
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
