@@ -12,6 +12,7 @@ use crate::mcp::McpManager;
 use crate::message::{
     ContentBlock, Message, Role, StreamEvent, TOOL_OUTPUT_MISSING_TEXT, ToolCall, ToolDefinition,
 };
+use crate::project_commands::ProjectCommandRegistry;
 use crate::provider::Provider;
 use crate::runtime_memory_log::RuntimeMemoryLogController;
 use crate::session::{Session, StoredMessage};
@@ -529,6 +530,7 @@ pub struct App {
     provider: Arc<dyn Provider>,
     registry: Registry,
     skills: Arc<SkillRegistry>,
+    project_commands: Arc<ProjectCommandRegistry>,
     mcp_manager: Arc<RwLock<McpManager>>,
     messages: Vec<Message>,
     session: Session,
