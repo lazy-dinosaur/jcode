@@ -16,16 +16,19 @@
 
 | ID  | 제목                                               | 상태   | 우선순위    |
 |-----|----------------------------------------------------|--------|-------------|
-| M1  | Background task delivery 가 parent/report-back chain 을 안 따라감 | 🔴 OPEN — 이중 검증 완료, 수정 미착수 | High |
+| M1  | Background task delivery 가 parent/report-back chain 을 안 따라감 | ✅ **DONE** (commit `1387e77e` + `b9085898`, binary `b9085898`) | — |
 | M2  | Swarm 버그 (phase C diagnostics + upstream #76)    | 🔴 OPEN — 증상 미확정             | Medium-High |
 | M3  | Hook 시스템 확장 (`session.stop`, `response.completed`) | 🟡 PARTIAL — 명세만 존재          | Medium      |
 | M4  | TUI interleave 가 tool 완료 후에야 흡수됨 (jcode 원설계) | 🟡 BY-DESIGN with caveats — UX 개선 가치 | Medium |
 | M5  | Alt+B early race — `background_tool_signal.reset()` 이 너무 늦음 | ✅ **DONE** (commit `52375aac` + `f76dfdda`, binary `f76dfdda`) | — |
+| M6  | Alt+B 후 부모 turn idle 화 (upstream 동작 변경) | 🔵 DEFERRED — upstream 의도 변경이라 기본 버그/문제 정리 후 진행 | Low (deferred) |
 
 핵심 인과 관계:
-- ✅ M5 (완료): Alt+B race fix. reset 위치 이동 + ack 분리 + 8 개 신규 테스트 모두 PASS, 새 회귀 0.
-- M1 은 Alt+B 가 성공한 뒤 parent 로 알림/회수가 안 가는 라우팅 버그. M5 와 별개. 다음 작업.
-- M4 는 jcode 원설계지만 M5/M1 이 깨져 있어서 사용자 입장에선 "전부 막힘" 으로 보임. M5 는 끝났으니 M1 만 끝내면 자연 완화. UX 문구/옵션은 별도 작은 patch 로.
+- ✅ M5 (완료): Alt+B race fix.
+- ✅ M1 (완료): Background task delivery 가 parent/report-back chain 을 따라가도록 라우팅 수정. parent chain resolver + headless drain false-live check + delivery_session_id field 도입.
+- M4 는 upstream 원설계. M5+M1 완료로 사용자 입장에서 "Alt+B 동작 + 결과 회수" 정상 동작 회복. interleave 자체의 latency 는 여전히 by-design.
+- M6 는 upstream 의도 변경이라 보류.
+- 다음 작업: **M2 (swarm)** 또는 **M3 (hook)** 중 선택.
 
 ---
 
@@ -367,15 +370,122 @@ ToolStart 노출 이전에 reset 을 옮기고, 기존 spawn 직후의 reset 은
 
 ---
 
+## 📍 Milestone M6 — Alt+B 후 부모 turn 즉시 다음 응답 → "잠잠 (idle)" 으로 변경
+
+상태: **🔵 DEFERRED** — upstream 의도된 설계를 변경하는 작업이므로 기본 버그/문제 (M1, M2, M3) 정리 후 진행
+우선순위: Low (deferred)
+사용자 결정 (2026-05-10): "이건 우선 이대로 놔봐. 기본적인 에러들이랑 문제들 먼저 잡고 가자."
+
+### 증상 (사용자 보고, 2026-05-10)
+- Alt+B 로 tool 을 background 로 옮기면 **부모 turn loop 가 즉시 다음 모델 호출로 진행** 해서 모델이 ack/요약을 응답함.
+- 사용자 기대: "background 로 치워뒀으니 결과 나올 때까지 잠잠해야 한다." 새 prompt 가 들어오기 전에는 모델이 떠들면 안 됨.
+- 결과: 사용자가 입력 시도해도 (M4 영향) "Interleave sent" 만 뜨고 묶임 → 답답한 UX.
+
+### 원본 jcode upstream 동작 확인 (2026-05-10)
+`origin/master:src/agent/turn_streaming_mpsc.rs:971~1007` — 우리 fork 와 동일.
+
+```rust
+// User pressed Alt+B — move tool to background
+let bg_info = crate::background::global()
+    .adopt(&tc.name, &self.session.id, tool_handle).await;
+
+let bg_msg = format!(
+    "Tool '{}' was moved to background by the user (task_id: {}). \
+     Use the `bg` tool with action 'wait' to wait for completion/checkpoints, \
+     or action 'status'/'output' to inspect it.",
+    tc.name, bg_info.task_id
+);
+
+let _ = event_tx.send(ServerEvent::ToolDone { ... output: bg_msg.clone(), ... });
+self.add_message_with_duration(Role::User, vec![ContentBlock::ToolResult { ... }], ...);
+self.session.save()?;
+self.background_tool_signal.reset();
+// ← return 안 함, fall through 해서 다음 turn iteration 으로 진입.
+// 다음 iteration 에서 모델 API 호출이 다시 발생.
+```
+
+즉 **upstream 의 의도된 설계**: ToolResult 합성 → conversation 구조 보존 → 다음 모델 호출 → 모델이 알아서 `bg wait` 로 폴링하길 기대.
+
+문제: 현실에서 모델이 `bg wait` 를 항상 호출하지는 않음. 짧은 ack 로 끝나거나 아무 동작 안 하기도 함. 그래서 사용자 입장에선 "옮겼는데 왜 모델이 떠드나" 가 됨.
+
+### Claude Code 와의 비교 (참고)
+- Claude Code 의 일반적 background 동작: `run_in_background: true` 로 bash 실행 시 즉시 task_id 만 반환하고 turn 종료. 사용자 prompt / 명시적 회수 시점까지 silent.
+- 즉 Claude Code 는 "치워두면 잠잠" 을 선택. 사용자 멘탈 모델에 부합.
+
+### 결정: 기본을 idle 로 변경 (옵션 1) + config 토글 (안전 장치)
+
+**기본 동작 (`altb_yields_turn = true`)**:
+1. Alt+B 분기에서 ToolResult 합성 + history 추가까지는 그대로.
+2. 그 다음 **`return Ok(())` 로 turn 즉시 종료**.
+3. 사용자 새 prompt 또는 background completion wake 시 새 turn 시작.
+
+**Config 토글 (`altb_yields_turn = false`)**:
+- upstream 호환 동작 (turn 계속 진행, 모델이 ack 응답).
+- backward-compatibility 안전 장치.
+
+### 구현 계획
+
+#### 변경 1 — `src/config/default_file.rs` 에 옵션 추가
+`[display]` 섹션에 (또는 더 적합한 곳에):
+```toml
+# When true, pressing Alt+B yields the current turn immediately after detaching
+# the tool to background. The model stays silent until the user sends a new
+# prompt or the background task completes. When false, the legacy upstream
+# behavior continues the turn so the model can acknowledge the detach.
+altb_yields_turn = true
+```
+
+config struct 에 필드 추가, default = true.
+
+#### 변경 2 — `src/agent/turn_streaming_mpsc.rs` Alt+B 분기 수정
+현재의 line 1007 `self.background_tool_signal.reset()` 다음에:
+```rust
+if config().display.altb_yields_turn {
+    return Ok(());
+}
+// else: fall through (upstream 호환)
+```
+
+#### 변경 3 — `src/agent/turn_streaming_broadcast.rs` 에도 같은 분기 적용
+
+#### 변경 4 — TUI 측 status notice
+- Alt+B 직후 `"Moving tool to background..."` 가 `"Detached. Idle."` 또는 비슷한 명시적 표현으로 전환.
+- 이미 M5 에서 ack 분리 했으니 Ack 받으면 적절한 상태로.
+
+#### 변경 5 — Wake 정책 (M1 종속)
+- M1 에서 background completion 이 부모 turn 으로 자동 wake 되게 만들 때, **idle 상태에서만 wake** 하면 자연스러움.
+- 사용자가 새 prompt 보내서 turn 도는 중이면 wake 가 큐에 쌓이고 (현재 `queue_soft_interrupt_for_session` 경로) 다음 inject point 에서 흡수.
+
+### 검증 시나리오
+1. Alt+B 후 모델이 추가 응답 안 함 (idle 진입). status notice 가 idle 임을 알림.
+2. background task 완료 시 (M1 wake 정책) 모델이 자동으로 결과 회수 turn 시작.
+3. 사용자가 idle 중 새 prompt 보내면 정상 turn 시작 + ToolResult 가 history 에 있어서 모델이 컨텍스트 인지.
+4. `altb_yields_turn = false` 로 토글 시 upstream 동작 회복.
+5. 다단계 subagent 에서 Alt+B 도 동일하게 idle.
+
+### 회귀 위험
+- ToolResult 가 채워졌는데 turn 이 종료되면, 다음 user prompt 시점에 conversation 구조가 valid 해야 함. 일반적으로 user_message 가 합쳐지면 OK.
+- background completion wake 가 사용자 입력과 race 시 inject point 처리 (M1 영역).
+- `bg wait` 를 명시적으로 prompt 한 흐름이 있다면 (예: subagent 내부) 그건 별개로 동작 — turn 종료가 그 동작에 영향 안 줘야 함.
+
+### 관련 파일
+- `src/agent/turn_streaming_mpsc.rs:980~1010` Alt+B 분기 (return 추가)
+- `src/agent/turn_streaming_broadcast.rs` 동일 패턴
+- `src/config.rs`, `src/config/default_file.rs` (`DisplayConfig`)
+- `src/tui/app/remote/key_handling.rs:333~339` (status notice 텍스트)
+
+---
+
 ## 우선순위와 작업 순서 (2026-05-10 갱신)
 
 oracle 이중 검증 결과를 반영한 우선순위:
 
 1. ✅ **M5 완료** — Alt+B race fix. commit `52375aac`/`f76dfdda`, binary `f76dfdda` 설치 완료.
-2. **M1 다음** (현재 작업 대상) — background task delivery target. M5 가 끝나서 Alt+B 로 옮기는 건 되지만, parent 회수가 안 되면 여전히 답답함. 큰 변경 (BackgroundTaskCompleted/Progress 에 delivery_session_id 추가, dispatch 라우팅 변경, headless live check 보정).
-3. **M4 옵션 1 만 빠르게** — 상태 메시지 문구 개선 (`"⏭ Will be processed after current tool"`). 옵션 2~4 는 후순위. 한 줄짜리 patch.
-4. **M3** — hook event 두 개 추가. M1 끝낸 뒤 작업.
-5. **M2** — phase C swarm-diagnostics stash 회수 → upstream #76 시나리오 재현 → 추가 패치.
+2. ✅ **M1 완료** — Background task delivery target routing. commit `1387e77e`/`b9085898`, binary `b9085898` 설치 완료. delivery_session_id 필드 + parent chain resolver + headless drain false-live check 도입.
+3. **M3 다음** — hook event 두 개 추가 (`session.stop`, `response.completed`). 작은 변경, 자동 review/메모리 추출 가치 큼.
+4. **M2** — phase C swarm-diagnostics stash 회수 → upstream #76 시나리오 재현 → 추가 패치.
+5. **M4 옵션 1 만 빠르게** — 상태 메시지 문구 개선 (`"⏭ Will be processed after current tool"`). 한 줄짜리 patch. 후순위.
+6. **M6 deferred** — upstream 의도 변경이라 기본 버그 다 끝낸 뒤.
 
 ### 마일스톤 완료 시 표준 절차
 - 패치 브랜치 생성 (`patch/<short-name>`).
