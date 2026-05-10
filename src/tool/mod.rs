@@ -5,7 +5,8 @@ mod bash;
 mod batch;
 mod bg;
 mod browser;
-mod codesearch;
+#[cfg_attr(test, allow(unused_imports))]
+pub(crate) mod codesearch;
 mod communicate;
 mod conversation_search;
 mod debug_socket;
