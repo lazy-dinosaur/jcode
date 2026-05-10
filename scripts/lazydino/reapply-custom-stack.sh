@@ -42,8 +42,11 @@ DO_LIST=0
 PATCH_REFS=(
   patch/mermaid-label-rendering
   patch/tool-lifecycle-hooks
+  patch/lifecycle-hooks
+  patch/lifecycle-hook-cli-flush
   patch/custom-maintenance-docs
   patch/project-local-hook-config
+  patch/hook-config-dedupe
   patch/subagent-model-routing
   patch/private-jcode-harness
   patch/opencode-category-routing-docs
@@ -54,6 +57,33 @@ PATCH_REFS=(
   patch/tmux-jcode-passthrough-docs
   patch/jcode-init-skill-docs
   patch/reapply-custom-stack
+  patch/native-project-init
+  patch/ambient-serde-args
+  patch/upstream-pr-triage-docs
+  patch/project-skill-sync
+  patch/custom-install-server-paths
+  patch/pr151-slice-analysis
+  patch/openai-usage-percent-normalization
+  patch/journal-on-message
+  patch/safe-server-restart
+  patch/reload-handoff-hard-timeout
+  patch/mermaid-input-non-blocking
+  patch/ecosystem-paths-policy
+  patch/agent-profiles-project-merge
+  patch/agent-profiles-md-files
+  patch/project-slash-commands
+  patch/global-jcode-md-resources
+  patch/jcode-doctor
+  patch/swarm-stability-core
+  patch/swarm-run-id
+  patch/empty-response-retry
+  patch/altb-early-race
+  patch/bg-delivery-target
+  patch/altb-wake-parent
+  patch/journal-stub-recovery
+  patch/altb-end-turn
+  patch/anthropic-oauth-tool-schema-align
+  patch/compaction-failure-cooldown
 )
 
 while [[ $# -gt 0 ]]; do
