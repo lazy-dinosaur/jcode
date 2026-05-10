@@ -3,6 +3,8 @@ use super::{
     default_await_target_statuses, default_cleanup_target_statuses, format_awaited_members,
     format_awaited_members_with_reports, format_members, format_plan_status,
     latest_assistant_report, resolve_optional_target_session,
+    send_spawn_request_with_coordinator_retry, spawn_requires_coordinator,
+    spawn_self_promote_failure_message,
 };
 use crate::message::{Message, StreamEvent, ToolDefinition};
 use crate::protocol::{
@@ -121,6 +123,31 @@ fn resolve_optional_target_session_defaults_to_current() {
         resolve_optional_target_session(Some("session_other".to_string()), "session_current"),
         "session_other"
     );
+}
+
+#[test]
+fn spawn_requires_coordinator_detects_spawn_denials_only() {
+    let denial = ServerEvent::Error {
+        id: 1,
+        message: "Only the coordinator can spawn new agents. Assign the current session as coordinator first.".to_string(),
+        retry_after_secs: None,
+    };
+    assert!(spawn_requires_coordinator(&denial));
+
+    let unrelated = ServerEvent::Error {
+        id: 2,
+        message: "Only the coordinator can assign tasks.".to_string(),
+        retry_after_secs: None,
+    };
+    assert!(!spawn_requires_coordinator(&unrelated));
+}
+
+#[test]
+fn spawn_self_promote_failure_message_includes_actionable_retry() {
+    let message = spawn_self_promote_failure_message("Only the coordinator can assign roles.");
+    assert!(message.contains("automatic self-promotion failed"));
+    assert!(message.contains("swarm assign_role target_session=current role=coordinator"));
+    assert!(message.contains("retry spawn"));
 }
 
 #[test]
