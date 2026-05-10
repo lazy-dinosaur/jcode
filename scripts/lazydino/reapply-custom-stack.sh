@@ -64,6 +64,7 @@ PATCH_REFS=(
   patch/journal-on-message
   patch/safe-server-restart
   patch/reload-handoff-hard-timeout
+  patch/mermaid-input-non-blocking
 )
 
 while [[ $# -gt 0 ]]; do

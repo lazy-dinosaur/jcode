@@ -436,6 +436,27 @@ Track each custom patch as a small commit. Current known customizations:
    - Validation: `cargo fmt --check`, `cargo check`, `cargo test awaiting_history --lib --no-fail-fast`, `cargo test reload --lib --no-fail-fast -- --test-threads=1`, and `cargo test remote --lib --no-fail-fast` (known unrelated remote-filter failures remain).
    - Binary reinstall required: yes, because this changes TUI reload recovery behavior and config surface.
 
+14. Mermaid input non-blocking render queue
+   - Commit: `feat: render mermaid diagrams off the TUI render thread`.
+   - Patch branch: `patch/mermaid-input-non-blocking`.
+   - Purpose: keep keyboard input responsive while Mermaid diagrams are first rendered or re-rendered at a new size.
+   - Root cause found: the full markdown path already had a deferred Mermaid worker under the TUI draw context, but the lazy markdown path still called synchronous Mermaid rendering on cache miss. The deferred path also had rare fallback branches that could run the synchronous render if the queue/pending state failed.
+   - Runtime behavior:
+     - Mermaid cache hits still return the cached image immediately.
+     - Deferred cache misses enqueue the existing background worker and return a placeholder instead of running parse/layout/SVG/PNG/font work on the render frame.
+     - Lazy markdown rendering now honors the same deferred Mermaid context as the full renderer.
+     - If the deferred pending map or worker channel is unavailable, the UI keeps the placeholder and logs a warning instead of freezing the input loop with a synchronous fallback render.
+     - Background completion still populates the existing cache, bumps the deferred render epoch, and requests redraw through the installed render-completed hook.
+   - User-visible placeholder: `↻ rendering mermaid diagram...` inline, or `↻ mermaid diagram rendering in sidebar...` when the diagram is side-panel only.
+   - Touched paths:
+     - `crates/jcode-tui-mermaid/src/mermaid_cache_render.rs`
+     - `crates/jcode-tui-mermaid/src/mermaid_tests/part_01.rs`
+     - `crates/jcode-tui-mermaid/src/mermaid_tests/part_02.rs`
+     - `crates/jcode-tui-markdown/src/markdown_render_lazy.rs`
+     - `crates/jcode-tui-markdown/src/markdown_tests/cases/wrapping_currency.rs`
+   - Validation: `cargo check -p jcode-tui-mermaid`, `cargo check`, `cargo test -p jcode-tui-mermaid --no-fail-fast`, `cargo test -p jcode-tui-markdown test_lazy_renderer_deferred_mermaid_returns_placeholder_on_cache_miss --no-fail-fast`, and `cargo test mermaid --lib --no-fail-fast` (known unrelated filtered failure: `side_panel_mermaid_probe_reports_viewport_fill_for_underutilized_fit` expected `127%` but got `129%`).
+   - Binary reinstall required: yes, because this changes TUI rendering/runtime behavior.
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
