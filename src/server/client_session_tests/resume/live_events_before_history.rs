@@ -63,6 +63,9 @@ async fn handle_resume_session_registers_live_events_before_history_replay() -> 
             role: "agent".to_string(),
             joined_at: now,
             last_status_change: now,
+            last_heartbeat_at: Some(now),
+            last_tool: None,
+            last_checkpoint: None,
             is_headless: false,
         },
     )])));

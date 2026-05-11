@@ -1125,6 +1125,9 @@ fn test_redacted_for_export_redacts_replay_events() -> Result<()> {
         is_headless: None,
         live_attachments: None,
         status_age_secs: None,
+        last_heartbeat_secs_ago: None,
+        last_tool: None,
+        last_checkpoint: None,
     }]);
     session.record_swarm_plan_event(
         "swarm_test".to_string(),

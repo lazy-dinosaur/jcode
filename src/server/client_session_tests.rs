@@ -42,6 +42,9 @@ fn test_swarm_member(session_id: &str, status: &str) -> SwarmMember {
         role: "agent".to_string(),
         joined_at: Instant::now(),
         last_status_change: Instant::now(),
+        last_heartbeat_at: Some(Instant::now()),
+        last_tool: None,
+        last_checkpoint: None,
         is_headless: false,
     }
 }

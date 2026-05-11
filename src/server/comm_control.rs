@@ -1,7 +1,10 @@
 #![cfg_attr(test, allow(clippy::items_after_test_module))]
 
 use super::append_swarm_completion_report_instructions;
-use super::swarm::{now_unix_ms, swarm_task_heartbeat_interval, touch_swarm_task_progress};
+use super::swarm::{
+    HeartbeatEvent, now_unix_ms, resolve_default_task_timeout_minutes,
+    swarm_task_heartbeat_interval, touch_member_heartbeat, touch_swarm_task_progress,
+};
 use super::swarm_mutation_state::{
     PersistedSwarmMutationResponse, begin_or_replay as begin_swarm_mutation_or_replay,
     finish_request as finish_swarm_mutation_request, request_key as swarm_mutation_request_key,
@@ -24,6 +27,7 @@ use crate::protocol::{NotificationType, PlanGraphStatus, ServerEvent};
 use jcode_agent_runtime::SoftInterruptSource;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{Mutex, RwLock, broadcast, mpsc, watch};
 
 type SessionAgents = Arc<RwLock<HashMap<String, Arc<Mutex<Agent>>>>>;
@@ -306,6 +310,7 @@ fn spawn_assigned_task_run(
     event_history: Arc<RwLock<std::collections::VecDeque<SwarmEvent>>>,
     event_counter: Arc<std::sync::atomic::AtomicU64>,
     swarm_event_tx: broadcast::Sender<SwarmEvent>,
+    task_timeout_minutes: Option<u32>,
 ) {
     let assignment_text = append_swarm_completion_report_instructions(&assignment_text);
     tokio::spawn(async move {
@@ -423,14 +428,32 @@ fn spawn_assigned_task_run(
             let agent = agent_arc.lock().await;
             agent.message_count()
         };
-        let result = super::client_lifecycle::process_message_streaming_mpsc(
+        let configured_timeout_minutes = if task_timeout_minutes.is_some() {
+            task_timeout_minutes
+        } else {
+            let working_dir = {
+                let agent = agent_arc.lock().await;
+                agent.working_dir().map(std::path::PathBuf::from)
+            };
+            resolve_default_task_timeout_minutes(working_dir.as_deref())
+        };
+        let processing = super::client_lifecycle::process_message_streaming_mpsc(
             Arc::clone(&agent_arc),
             &assignment_text,
             vec![],
             None,
             event_tx,
-        )
-        .await;
+        );
+        let result = if let Some(minutes) = configured_timeout_minutes {
+            match tokio::time::timeout(Duration::from_secs(minutes as u64 * 60), processing).await {
+                Ok(result) => result,
+                Err(_) => Err(anyhow::anyhow!(
+                    "exceeded task_timeout_minutes={minutes}; member marked failed. Suggested: swarm cleanup or swarm replace/salvage this worker."
+                )),
+            }
+        } else {
+            processing.await
+        };
         let completion_report = if result.is_ok() {
             let agent = agent_arc.lock().await;
             agent.latest_assistant_text_after(start_message_index)
@@ -601,6 +624,27 @@ fn task_progress_event_sender(
     let (tx, mut rx) = mpsc::unbounded_channel::<ServerEvent>();
     tokio::spawn(async move {
         while let Some(event) = rx.recv().await {
+            let heartbeat_event = match &event {
+                ServerEvent::TextDelta { .. } | ServerEvent::TextReplace { .. } => {
+                    Some(HeartbeatEvent::Chunk)
+                }
+                ServerEvent::ToolStart { name, .. } => {
+                    Some(HeartbeatEvent::ToolStart { name: name.clone() })
+                }
+                ServerEvent::ToolDone { name, .. } => {
+                    Some(HeartbeatEvent::ToolDone { name: name.clone() })
+                }
+                ServerEvent::StatusDetail { detail } => Some(HeartbeatEvent::Checkpoint {
+                    summary: detail.clone(),
+                }),
+                _ => None,
+            };
+            if let Some(event) = heartbeat_event {
+                let revived = touch_member_heartbeat(&session_id, event, &swarm_members).await;
+                if revived {
+                    broadcast_swarm_status(&swarm_id, &swarm_members, &swarms_by_id).await;
+                }
+            }
             let (detail, checkpoint_summary) = match &event {
                 ServerEvent::StatusDetail { detail } => (Some(detail.clone()), None),
                 ServerEvent::ToolStart { name, .. } => {
@@ -810,6 +854,7 @@ pub(super) async fn handle_comm_assign_task(
     target_session: Option<String>,
     task_id: Option<String>,
     message: Option<String>,
+    task_timeout_minutes: Option<u32>,
     client_event_tx: &mpsc::UnboundedSender<ServerEvent>,
     sessions: &SessionAgents,
     soft_interrupt_queues: &super::SessionInterruptQueues,
@@ -1085,6 +1130,7 @@ pub(super) async fn handle_comm_assign_task(
             event_history_for_run,
             event_counter_for_run,
             swarm_event_tx_for_run,
+            task_timeout_minutes,
         );
     }
 
@@ -1216,6 +1262,7 @@ pub(super) async fn handle_comm_assign_next(
                         Some(spawned.new_session_id),
                         Some(selected_task_id),
                         message,
+                        None,
                         client_event_tx,
                         sessions,
                         soft_interrupt_queues,
@@ -1251,6 +1298,7 @@ pub(super) async fn handle_comm_assign_next(
                     Some(target_session),
                     Some(selected_task_id),
                     message,
+                    None,
                     client_event_tx,
                     sessions,
                     soft_interrupt_queues,
@@ -1283,6 +1331,7 @@ pub(super) async fn handle_comm_assign_next(
         target_session,
         None,
         message,
+        None,
         client_event_tx,
         sessions,
         soft_interrupt_queues,
@@ -1310,6 +1359,7 @@ pub(super) async fn handle_comm_task_control(
     task_id: String,
     target_session: Option<String>,
     message: Option<String>,
+    task_timeout_minutes: Option<u32>,
     client_event_tx: &mpsc::UnboundedSender<ServerEvent>,
     sessions: &SessionAgents,
     soft_interrupt_queues: &super::SessionInterruptQueues,
@@ -1517,6 +1567,7 @@ pub(super) async fn handle_comm_task_control(
                     Arc::clone(event_history),
                     Arc::clone(event_counter),
                     swarm_event_tx.clone(),
+                    task_timeout_minutes,
                 );
                 let summary = plan_graph_status_for(&swarm_id, swarm_plans).await;
                 let _ = client_event_tx.send(ServerEvent::CommTaskControlResponse {
@@ -1592,6 +1643,7 @@ pub(super) async fn handle_comm_task_control(
                 Some(assignee),
                 Some(task_id),
                 Some(retry_note),
+                task_timeout_minutes,
                 client_event_tx,
                 sessions,
                 soft_interrupt_queues,
@@ -1715,6 +1767,7 @@ pub(super) async fn handle_comm_task_control(
                 Some(new_target),
                 Some(task_id),
                 forwarded_message,
+                None,
                 client_event_tx,
                 sessions,
                 soft_interrupt_queues,

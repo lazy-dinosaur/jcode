@@ -410,6 +410,11 @@ pub struct SwarmConfig {
     /// Maximum non-terminal workers one orchestration run may own concurrently.
     /// `None` uses the built-in default; `Some(0)` disables the limit.
     pub max_active_spawns_per_run: Option<u32>,
+    /// Seconds without member heartbeat before a running worker is surfaced as running_stale.
+    /// `None` uses the built-in default of 180 seconds.
+    pub heartbeat_stale_secs: Option<u32>,
+    /// Optional hard timeout for assigned task execution. `None` means unlimited.
+    pub default_task_timeout_minutes: Option<u32>,
 }
 
 /// Rich subagent routing configuration.

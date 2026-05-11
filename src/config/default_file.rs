@@ -235,6 +235,19 @@ memory_sidecar_enabled = false
 # max_active_spawns_per_coordinator = 6
 # max_active_spawns_per_run = 4
 #
+# Lazydino M2 stage 4 — worker heartbeat stale surfacing. A running worker
+# that emits no text/tool/status heartbeat for this many seconds is marked
+# running_stale on status/await reads. This is reversible; a later heartbeat
+# restores running. Env override: JCODE_WORKER_HEARTBEAT_STALE_SECS.
+# Default when unset: 180 seconds.
+# heartbeat_stale_secs = 180
+#
+# Optional hard timeout for assigned task execution. Default is unlimited for
+# safety; set this only when you explicitly want long-silent workers failed.
+# Per-request task_timeout_minutes on assign_task/start_task overrides this.
+# Env override: JCODE_DEFAULT_TASK_TIMEOUT_MINUTES.
+# default_task_timeout_minutes = 30
+#
 # Spawned worker cwd is pinned under the coordinator's cwd after canonicalizing
 # symlinks. To intentionally bypass for a one-off run, set env var only:
 #   JCODE_SWARM_ALLOW_ANY_CWD=1

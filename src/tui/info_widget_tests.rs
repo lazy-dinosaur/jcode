@@ -674,6 +674,9 @@ fn swarm_widget_renders_member_roles_and_details() {
                     is_headless: None,
                     live_attachments: None,
                     status_age_secs: None,
+                    last_heartbeat_secs_ago: None,
+                    last_tool: None,
+                    last_checkpoint: None,
                 },
                 SwarmMemberStatus {
                     session_id: "tree-12345678".to_string(),
@@ -684,6 +687,9 @@ fn swarm_widget_renders_member_roles_and_details() {
                     is_headless: None,
                     live_attachments: None,
                     status_age_secs: None,
+                    last_heartbeat_secs_ago: None,
+                    last_tool: None,
+                    last_checkpoint: None,
                 },
             ],
             ..Default::default()

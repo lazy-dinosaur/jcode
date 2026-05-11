@@ -538,6 +538,7 @@ async fn handle_lightweight_control_request(
             target_session,
             task_id,
             message,
+            task_timeout_minutes,
         } => {
             handle_comm_assign_task(
                 id,
@@ -545,6 +546,7 @@ async fn handle_lightweight_control_request(
                 target_session,
                 task_id,
                 message,
+                task_timeout_minutes,
                 &client_event_tx,
                 sessions,
                 soft_interrupt_queues,
@@ -604,6 +606,7 @@ async fn handle_lightweight_control_request(
             task_id,
             target_session,
             message,
+            task_timeout_minutes,
         } => {
             handle_comm_task_control(
                 id,
@@ -612,6 +615,7 @@ async fn handle_lightweight_control_request(
                 task_id,
                 target_session,
                 message,
+                task_timeout_minutes,
                 &client_event_tx,
                 sessions,
                 soft_interrupt_queues,
@@ -2399,6 +2403,7 @@ pub(super) async fn handle_client(
                 target_session,
                 task_id,
                 message,
+                task_timeout_minutes,
             } => {
                 handle_comm_assign_task(
                     id,
@@ -2406,6 +2411,7 @@ pub(super) async fn handle_client(
                     target_session,
                     task_id,
                     message,
+                    task_timeout_minutes,
                     &client_event_tx,
                     &sessions,
                     &soft_interrupt_queues,
@@ -2467,6 +2473,7 @@ pub(super) async fn handle_client(
                 task_id,
                 target_session,
                 message,
+                task_timeout_minutes,
             } => {
                 handle_comm_task_control(
                     id,
@@ -2475,6 +2482,7 @@ pub(super) async fn handle_client(
                     task_id,
                     target_session,
                     message,
+                    task_timeout_minutes,
                     &client_event_tx,
                     &sessions,
                     &soft_interrupt_queues,
