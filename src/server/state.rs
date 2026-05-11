@@ -332,6 +332,26 @@ pub(super) async fn fanout_session_event(
     session_id: &str,
     event: ServerEvent,
 ) -> usize {
+    fanout_session_event_except(swarm_members, session_id, None, event).await
+}
+
+/// Like `fanout_session_event` but skips the given `excluded_connection_id`.
+///
+/// Lazydino M15 (candidate C): used when the server wants to echo a message
+/// to all sibling client connections of a session *except* the origin that
+/// just submitted it (which already rendered the message locally via TUI echo
+/// or via its own request/response pairing).
+///
+/// If `excluded_connection_id` is `None` this behaves identically to
+/// `fanout_session_event`. When the only connection in the member's
+/// `event_txs` map matches the exclusion, the fallback `event_tx` is also
+/// suppressed so we do not double-deliver.
+pub(super) async fn fanout_session_event_except(
+    swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,
+    session_id: &str,
+    excluded_connection_id: Option<&str>,
+    event: ServerEvent,
+) -> usize {
     let targets = {
         let mut members = swarm_members.write().await;
         let Some(member) = members.get_mut(session_id) else {
@@ -341,12 +361,29 @@ pub(super) async fn fanout_session_event(
         member.event_txs.retain(|_, tx| !tx.is_closed());
 
         if member.event_txs.is_empty() {
-            vec![member.event_tx.clone()]
+            // No live connections registered: the fallback `event_tx` is the
+            // only path back to whoever owns this session. If it's the same
+            // connection we're trying to exclude (origin-only attach) the
+            // M15 echo would loop right back to the sender, so just bail.
+            if excluded_connection_id.is_some() {
+                vec![]
+            } else {
+                vec![member.event_tx.clone()]
+            }
         } else {
             if let Some((_, tx)) = member.event_txs.iter().next() {
                 member.event_tx = tx.clone();
             }
-            member.event_txs.values().cloned().collect::<Vec<_>>()
+            member
+                .event_txs
+                .iter()
+                .filter(|(conn_id, _)| {
+                    excluded_connection_id
+                        .map(|excluded| conn_id.as_str() != excluded)
+                        .unwrap_or(true)
+                })
+                .map(|(_, tx)| tx.clone())
+                .collect::<Vec<_>>()
         }
     };
 

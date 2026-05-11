@@ -172,6 +172,7 @@ fn reload_starting_rejects_new_turn_without_spawning_processing_task() {
                 system_reminder: None,
             },
             "session_guard",
+            "conn_test_guard",
             &mut ProcessingState {
                 client_is_processing: &mut client_is_processing,
                 message_id: &mut processing_message_id,
@@ -266,6 +267,7 @@ fn reload_starting_rejects_new_turns_for_multiple_sessions() {
                     system_reminder: None,
                 },
                 session_id,
+                "conn_test_burst",
                 &mut ProcessingState {
                     client_is_processing: &mut client_is_processing,
                     message_id: &mut processing_message_id,

@@ -37,8 +37,9 @@ use super::provider_control::{
 use super::{
     AwaitMembersRuntime, ClientConnectionInfo, ClientDebugState, FileAccess, SessionControlHandle,
     SessionInterruptQueues, SharedContext, SwarmEvent, SwarmMember, SwarmMutationRuntime,
-    VersionedPlan, format_structured_completion_report, register_session_interrupt_queue,
-    truncate_detail, update_member_status, update_member_status_with_report,
+    VersionedPlan, fanout_session_event_except, format_structured_completion_report,
+    register_session_interrupt_queue, truncate_detail, update_member_status,
+    update_member_status_with_report,
 };
 use crate::agent::Agent;
 use crate::bus::{Bus, BusEvent};
@@ -1263,6 +1264,7 @@ pub(super) async fn handle_client(
                         system_reminder,
                     },
                     &client_session_id,
+                    &client_connection_id,
                     &mut ProcessingState {
                         client_is_processing: &mut client_is_processing,
                         message_id: &mut processing_message_id,
@@ -2611,6 +2613,7 @@ pub(super) async fn handle_client(
 async fn start_processing_message(
     message: ProcessingMessage,
     client_session_id: &str,
+    client_connection_id: &str,
     state: &mut ProcessingState<'_>,
     agent: &Arc<Mutex<Agent>>,
     client_event_tx: &mpsc::UnboundedSender<ServerEvent>,
@@ -2644,6 +2647,35 @@ async fn start_processing_message(
     *state.client_is_processing = true;
     *state.message_id = Some(id);
     *state.session_id = Some(client_session_id.to_string());
+
+    // Lazydino M15 (candidate C): echo the user message to sibling client
+    // connections attached to the same session so external `jcode` clients
+    // (e.g. another TUI or SDK consumer attached alongside the origin TUI)
+    // can render the freshly submitted text *and* any attached image bytes
+    // immediately. The origin connection is excluded because it already
+    // rendered its own local echo before sending `Request::Message`.
+    let sibling_images: Vec<jcode_session_types::RenderedImage> = images
+        .iter()
+        .enumerate()
+        .map(|(idx, (media_type, data))| jcode_session_types::RenderedImage {
+            media_type: media_type.clone(),
+            data: data.clone(),
+            label: Some(format!("image {}", idx + 1)),
+            source: jcode_session_types::RenderedImageSource::UserInput,
+        })
+        .collect();
+    let _delivered_to_siblings = fanout_session_event_except(
+        swarm.members,
+        client_session_id,
+        Some(client_connection_id),
+        ServerEvent::UserMessage {
+            id,
+            session_id: client_session_id.to_string(),
+            content: content.clone(),
+            images: sibling_images,
+        },
+    )
+    .await;
 
     update_member_status(
         client_session_id,

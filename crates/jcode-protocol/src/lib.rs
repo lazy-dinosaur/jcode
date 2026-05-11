@@ -882,6 +882,30 @@ pub enum ServerEvent {
         display_title: String,
     },
 
+    /// Incremental echo of a user message just submitted to this session.
+    ///
+    /// Lazydino M15 (candidate C): emitted to sibling client connections of the
+    /// same session_id (e.g. a remote `jcode` SDK client attached alongside the
+    /// origin TUI) so they can render the user's freshly submitted message and
+    /// any attached images without having to re-fetch the full history. The
+    /// origin client connection (the one that actually sent `Request::Message`)
+    /// is excluded from the fanout to avoid double-rendering its local echo.
+    #[serde(rename = "user_message")]
+    UserMessage {
+        /// The message id of the corresponding `Request::Message`.
+        id: u64,
+        /// The session that received the user message.
+        session_id: String,
+        /// Raw textual content of the user message (may contain placeholders
+        /// like `[image 1]` if the origin TUI condensed paste data).
+        content: String,
+        /// Image bytes (mime + base64) attached to the user message. Empty
+        /// when no images were attached. Carried as `RenderedImage` so wire
+        /// shape stays aligned with `ServerEvent::History.images`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<jcode_session_types::RenderedImage>,
+    },
+
     /// Full conversation history (response to GetHistory)
     #[serde(rename = "history")]
     History {

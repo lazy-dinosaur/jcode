@@ -321,7 +321,7 @@ pub use self::state::{
 };
 use self::state::{
     SessionInterruptQueues, fanout_live_client_event, fanout_session_event,
-    queue_soft_interrupt_for_session, register_session_event_sender,
+    fanout_session_event_except, queue_soft_interrupt_for_session, register_session_event_sender,
     register_session_interrupt_queue, remove_session_interrupt_queue,
     rename_session_interrupt_queue, session_event_fanout_sender, unregister_session_event_sender,
 };

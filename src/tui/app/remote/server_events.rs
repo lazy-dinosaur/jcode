@@ -511,6 +511,35 @@ pub(in crate::tui::app) fn handle_server_event(
             app.status_notice = Some((format!("Reload: {}", message), std::time::Instant::now()));
             false
         }
+        ServerEvent::UserMessage {
+            id: _,
+            session_id,
+            content,
+            images,
+        } => {
+            // Lazydino M15 (candidate C): incremental echo of a user message
+            // submitted on a *sibling* client connection of the same session.
+            // The origin connection that sent `Request::Message` is excluded
+            // server-side, so reaching here means another attached client
+            // (e.g. another TUI window, an SDK consumer) just sent input
+            // and we want to render it in this view too.
+            if app.active_client_session_id() != Some(session_id.as_str()) {
+                return false;
+            }
+            app.commit_pending_streaming_assistant_message();
+            app.push_display_message(DisplayMessage {
+                role: "user".to_string(),
+                content,
+                tool_calls: vec![],
+                duration_secs: None,
+                title: None,
+                tool_data: None,
+            });
+            if !images.is_empty() {
+                app.remote_side_pane_images.extend(images);
+            }
+            false
+        }
         ServerEvent::History {
             messages,
             images,

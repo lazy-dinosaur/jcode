@@ -438,3 +438,62 @@ fn test_error_event_retry_after_back_compat_default() -> Result<()> {
     assert_eq!(retry_after_secs, None);
     Ok(())
 }
+
+#[test]
+fn test_user_message_event_roundtrip() -> Result<()> {
+    // Lazydino M15 (candidate C): sibling-fanout user message event with images.
+    let img = jcode_session_types::RenderedImage {
+        media_type: "image/png".to_string(),
+        data: "ZmFrZS1pbWctYnl0ZXM=".to_string(),
+        label: Some("image 1".to_string()),
+        source: jcode_session_types::RenderedImageSource::UserInput,
+    };
+    let event = ServerEvent::UserMessage {
+        id: 42,
+        session_id: "sess_abc".to_string(),
+        content: "hello sibling".to_string(),
+        images: vec![img],
+    };
+    let json = encode_event(&event);
+    assert!(json.contains("\"type\":\"user_message\""), "json={json}");
+    assert!(json.contains("\"session_id\":\"sess_abc\""));
+    let decoded = parse_event_json(json.trim())?;
+    let ServerEvent::UserMessage {
+        id,
+        session_id,
+        content,
+        images,
+    } = decoded
+    else {
+        return Err(anyhow!("wrong event type"));
+    };
+    assert_eq!(id, 42);
+    assert_eq!(session_id, "sess_abc");
+    assert_eq!(content, "hello sibling");
+    assert_eq!(images.len(), 1);
+    assert_eq!(images[0].media_type, "image/png");
+    assert_eq!(images[0].label.as_deref(), Some("image 1"));
+    assert!(matches!(
+        images[0].source,
+        jcode_session_types::RenderedImageSource::UserInput
+    ));
+    Ok(())
+}
+
+#[test]
+fn test_user_message_event_roundtrip_no_images() -> Result<()> {
+    let event = ServerEvent::UserMessage {
+        id: 1,
+        session_id: "s".to_string(),
+        content: "plain text".to_string(),
+        images: vec![],
+    };
+    let json = encode_event(&event);
+    let decoded = parse_event_json(json.trim())?;
+    let ServerEvent::UserMessage { images, content, .. } = decoded else {
+        return Err(anyhow!("wrong event type"));
+    };
+    assert_eq!(content, "plain text");
+    assert!(images.is_empty());
+    Ok(())
+}
