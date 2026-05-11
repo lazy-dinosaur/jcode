@@ -10,7 +10,7 @@ use crate::protocol::{
     format_comm_awaited_members_with_reports, format_comm_channels, format_comm_context_entries,
     format_comm_context_history, format_comm_members, format_comm_plan_followup,
     format_comm_plan_status, format_comm_status_snapshot, format_comm_tool_summary,
-    latest_assistant_comm_report, resolve_optional_comm_target_session,
+    fresh_swarm_run_id, latest_assistant_comm_report, resolve_optional_comm_target_session,
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -19,6 +19,7 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 
 const REQUEST_ID: u64 = 1;
+const SPAWN_COORDINATOR_DENIAL: &str = "Only the coordinator can spawn new agents";
 
 mod transport;
 use transport::{send_request, send_request_with_timeout};
@@ -45,6 +46,112 @@ fn ensure_success(response: &ServerEvent) -> Result<()> {
     } else {
         Ok(())
     }
+}
+
+fn spawn_requires_coordinator(response: &ServerEvent) -> bool {
+    check_error(response).is_some_and(|message| message.contains(SPAWN_COORDINATOR_DENIAL))
+}
+
+fn spawn_self_promote_failure_message(error: impl std::fmt::Display) -> String {
+    format!(
+        "Spawn requires coordinator role, and automatic self-promotion failed: {error}. Try `swarm assign_role target_session=current role=coordinator`, then retry spawn."
+    )
+}
+
+async fn ensure_spawn_coordinator(ctx: &ToolContext) -> Result<()> {
+    let request = Request::CommAssignRole {
+        id: REQUEST_ID,
+        session_id: ctx.session_id.clone(),
+        target_session: ctx.session_id.clone(),
+        role: "coordinator".to_string(),
+    };
+
+    match send_request(request).await {
+        Ok(response) => ensure_success(&response)
+            .map_err(|error| anyhow::anyhow!(spawn_self_promote_failure_message(error))),
+        Err(error) => Err(anyhow::anyhow!(spawn_self_promote_failure_message(error))),
+    }
+}
+
+async fn send_spawn_request_with_coordinator_retry(
+    ctx: &ToolContext,
+    request: Request,
+    operation: &str,
+) -> Result<ServerEvent> {
+    let first_response = send_request(request.clone())
+        .await
+        .map_err(|error| anyhow::anyhow!("Failed to {operation}: {error}"))?;
+
+    if !spawn_requires_coordinator(&first_response) {
+        return Ok(first_response);
+    }
+
+    ensure_spawn_coordinator(ctx).await?;
+
+    let retry_response = send_request(request)
+        .await
+        .map_err(|error| anyhow::anyhow!("Failed to {operation} after self-promoting: {error}"))?;
+    if spawn_requires_coordinator(&retry_response)
+        && let Some(message) = check_error(&retry_response)
+    {
+        return Err(anyhow::anyhow!(
+            "Spawn still requires coordinator role after automatic self-promotion: {message}. Try `swarm assign_role target_session=current role=coordinator`, then retry spawn."
+        ));
+    }
+
+    Ok(retry_response)
+}
+
+/// Lazydino M2 stage 2 — render a spawn-result message with the requested
+/// `working_dir`, optional `run_id`, and the active swarm-spawn mode
+/// (`headless-only` when forced, `visible-first` otherwise). The coordinator
+/// model sees this string verbatim, so changes here flow directly into the
+/// next agent turn. Keep the format compact and grep-friendly.
+pub(crate) fn format_spawn_telemetry(
+    new_session_id: &str,
+    requested_working_dir: Option<&str>,
+    run_id: Option<&str>,
+    active_count: Option<u32>,
+    active_cap: Option<u32>,
+) -> String {
+    let mode = if swarm_spawn_telemetry_force_headless() {
+        "headless-only"
+    } else {
+        "visible-first"
+    };
+    let cwd = requested_working_dir
+        .map(|dir| dir.to_string())
+        .unwrap_or_else(|| "(inherit coordinator cwd)".to_string());
+    let run_id_part = match run_id {
+        Some(id) if !id.is_empty() => format!(" run_id={id}"),
+        _ => String::new(),
+    };
+    let active_part = match (active_count, active_cap) {
+        (Some(active), Some(0) | None) => format!(" active={active}"),
+        (Some(active), Some(cap)) => format!(" active={active}/{cap}"),
+        _ => String::new(),
+    };
+    format!(
+        "Spawned new agent: {new_session_id} (cwd={cwd}, mode={mode}{run_id_part}{active_part})"
+    )
+}
+
+/// Mirror of `server::comm_session::swarm_force_headless_spawn` for the tool
+/// side. We re-read the same env var + config so the rendered telemetry
+/// matches whatever the server will actually do. Keeping the two helpers
+/// independent avoids leaking server internals into the tool layer.
+fn swarm_spawn_telemetry_force_headless() -> bool {
+    if let Ok(raw) = std::env::var("JCODE_SWARM_NO_TERMINAL") {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => return true,
+            "0" | "false" | "no" | "off" | "" => return false,
+            _ => {}
+        }
+    }
+    matches!(
+        crate::config::config().agents.swarm_spawn_visible,
+        Some(false)
+    )
 }
 
 async fn fetch_plan_status(session_id: &str) -> Result<PlanGraphStatus> {
@@ -80,14 +187,45 @@ fn cleanup_candidate_session_ids(
     target_status: &[String],
     requested_session_ids: &[String],
     force: bool,
+    run_id: Option<&str>,
 ) -> Vec<String> {
-    comm_cleanup_candidate_session_ids(
+    let mut ids = comm_cleanup_candidate_session_ids(
         owner_session_id,
         members,
         target_status,
         requested_session_ids,
         force,
-    )
+    );
+    if let Some(run_id) = run_id {
+        ids.retain(|candidate_id| {
+            members.iter().any(|member| {
+                member.session_id == *candidate_id && member.run_id.as_deref() == Some(run_id)
+            })
+        });
+    }
+    ids
+}
+
+async fn ensure_cleanup_coordinator(ctx: &ToolContext) -> Result<()> {
+    let request = Request::CommAssignRole {
+        id: REQUEST_ID,
+        session_id: ctx.session_id.clone(),
+        target_session: ctx.session_id.clone(),
+        role: "coordinator".to_string(),
+    };
+
+    match send_request(request).await {
+        Ok(response) => ensure_success(&response).map_err(|error| {
+            anyhow::anyhow!(
+                "Cleanup needs coordinator role before stopping workers: {}. Try `swarm assign_role target_session=current role=coordinator`, then retry cleanup.",
+                error
+            )
+        }),
+        Err(error) => Err(anyhow::anyhow!(
+            "Failed to verify cleanup coordinator role: {}",
+            error
+        )),
+    }
 }
 
 fn auto_assignment_needs_spawn(response: &ServerEvent) -> bool {
@@ -113,7 +251,11 @@ async fn fetch_swarm_members(session_id: &str) -> Result<Vec<AgentInfo>> {
     }
 }
 
-async fn cleanup_swarm_workers(ctx: &ToolContext, params: &CommunicateInput) -> Result<String> {
+async fn cleanup_swarm_workers_with_run_id(
+    ctx: &ToolContext,
+    params: &CommunicateInput,
+    run_id_scope: Option<&str>,
+) -> Result<String> {
     let members = fetch_swarm_members(&ctx.session_id).await?;
     let target_status = params
         .target_status
@@ -121,20 +263,27 @@ async fn cleanup_swarm_workers(ctx: &ToolContext, params: &CommunicateInput) -> 
         .unwrap_or_else(default_cleanup_target_statuses);
     let session_ids = params.session_ids.clone().unwrap_or_default();
     let force = params.force.unwrap_or(false);
+    let run_id_scope = run_id_scope.or(params.run_id.as_deref());
     let candidates = cleanup_candidate_session_ids(
         &ctx.session_id,
         &members,
         &target_status,
         &session_ids,
         force,
+        run_id_scope,
     );
 
     if candidates.is_empty() {
+        let scope_suffix = run_id_scope
+            .map(|run_id| format!(" for run_id={run_id}"))
+            .unwrap_or_default();
         return Ok(format!(
-            "No cleanup candidates found. Default cleanup only stops sessions spawned by this coordinator with status in [{}].",
+            "No cleanup candidates found{scope_suffix}. Default cleanup only stops terminal/stale sessions spawned by this coordinator with status in [{}].",
             target_status.join(", ")
         ));
     }
+
+    ensure_cleanup_coordinator(ctx).await?;
 
     let mut stopped = Vec::new();
     let mut failed = Vec::new();
@@ -174,17 +323,24 @@ async fn cleanup_swarm_workers(ctx: &ToolContext, params: &CommunicateInput) -> 
     Ok(output)
 }
 
+async fn cleanup_swarm_workers(ctx: &ToolContext, params: &CommunicateInput) -> Result<String> {
+    cleanup_swarm_workers_with_run_id(ctx, params, params.run_id.as_deref()).await
+}
+
 async fn await_swarm_progress(
     ctx: &ToolContext,
     session_ids: Vec<String>,
     timeout_minutes: u64,
+    run_id: Option<&str>,
 ) -> Result<()> {
     let request = Request::CommAwaitMembers {
         id: REQUEST_ID,
         session_id: ctx.session_id.clone(),
         target_status: default_run_await_statuses(),
         session_ids,
+        owned_only: None,
         mode: Some("any".to_string()),
+        run_id: run_id.map(str::to_string),
         timeout_secs: Some(timeout_minutes.max(1) * 60),
     };
     let socket_timeout = std::time::Duration::from_secs(timeout_minutes.max(1) * 60 + 30);
@@ -205,6 +361,7 @@ async fn run_swarm_plan_to_terminal(
     let timeout_minutes = params.timeout_minutes.unwrap_or(60).max(1);
     let retain_agents = params.retain_agents.unwrap_or(false);
     let spawn_if_needed = params.spawn_if_needed.or(Some(true));
+    let run_id = params.run_id.clone().unwrap_or_else(fresh_swarm_run_id);
     let mut assignment_count = 0usize;
     let mut loop_count = 0usize;
     let max_loops = 200usize;
@@ -239,7 +396,8 @@ async fn run_swarm_plan_to_terminal(
             if retain_agents {
                 output.push_str("\nRetained spawned workers because retain_agents=true.");
             } else {
-                let cleanup = cleanup_swarm_workers(ctx, params).await?;
+                let cleanup =
+                    cleanup_swarm_workers_with_run_id(ctx, params, Some(run_id.as_str())).await?;
                 output.push_str(&format!("\n{}", cleanup));
             }
             return Ok(ToolOutput::new(output));
@@ -257,6 +415,7 @@ async fn run_swarm_plan_to_terminal(
                 prefer_spawn: params.prefer_spawn,
                 spawn_if_needed,
                 message: params.message.clone(),
+                run_id: Some(run_id.clone()),
             };
             match send_request(request).await {
                 Ok(ServerEvent::CommAssignTaskResponse { target_session, .. }) => {
@@ -279,6 +438,10 @@ async fn run_swarm_plan_to_terminal(
             members
                 .into_iter()
                 .filter(|member| member.session_id != ctx.session_id)
+                .filter(|member| {
+                    member.report_back_to_session_id.as_deref() == Some(ctx.session_id.as_str())
+                })
+                .filter(|member| member.run_id.as_deref() == Some(run_id.as_str()))
                 .filter(|member| member.status.as_deref() == Some("running"))
                 .map(|member| member.session_id)
                 .collect::<Vec<_>>()
@@ -295,20 +458,31 @@ async fn run_swarm_plan_to_terminal(
             }
             continue;
         }
-        await_swarm_progress(ctx, await_sessions, timeout_minutes).await?;
+        await_swarm_progress(ctx, await_sessions, timeout_minutes, Some(run_id.as_str())).await?;
     }
 }
 
-async fn spawn_assignment_session(ctx: &ToolContext, params: &CommunicateInput) -> Result<String> {
+async fn spawn_assignment_session(
+    ctx: &ToolContext,
+    params: &CommunicateInput,
+    run_id: Option<String>,
+) -> Result<String> {
     let spawn_request = Request::CommSpawn {
         id: REQUEST_ID,
         session_id: ctx.session_id.clone(),
         working_dir: params.working_dir.clone(),
         initial_message: None,
         request_nonce: Some(fresh_spawn_request_nonce(ctx)),
+        run_id,
     };
 
-    match send_request(spawn_request).await {
+    match send_spawn_request_with_coordinator_retry(
+        ctx,
+        spawn_request,
+        "spawn agent for task assignment",
+    )
+    .await
+    {
         Ok(ServerEvent::CommSpawnResponse { new_session_id, .. }) if !new_session_id.is_empty() => {
             Ok(new_session_id)
         }
@@ -318,10 +492,7 @@ async fn spawn_assignment_session(ctx: &ToolContext, params: &CommunicateInput) 
                 "Spawn succeeded but new session ID was not returned."
             ))
         }
-        Err(e) => Err(anyhow::anyhow!(
-            "Failed to spawn agent for task assignment: {}",
-            e
-        )),
+        Err(e) => Err(e),
     }
 }
 
@@ -337,6 +508,7 @@ async fn assign_task_to_session(
         target_session: Some(target_session.clone()),
         task_id: params.task_id.clone(),
         message: params.message.clone(),
+        task_timeout_minutes: params.task_timeout_minutes,
     };
 
     match send_request(retry_request).await {
@@ -363,8 +535,45 @@ fn format_context_entries(entries: &[ContextEntry]) -> ToolOutput {
     ToolOutput::new(format_comm_context_entries(entries))
 }
 
+fn run_scoped_members(members: &[AgentInfo], run_id: Option<&str>) -> Vec<AgentInfo> {
+    match run_id {
+        Some(run_id) => members
+            .iter()
+            .filter(|member| member.run_id.as_deref() == Some(run_id))
+            .cloned()
+            .collect(),
+        None => members.to_vec(),
+    }
+}
+
 fn format_members(ctx: &ToolContext, members: &[AgentInfo]) -> ToolOutput {
-    ToolOutput::new(format_comm_members(&ctx.session_id, members))
+    format_members_for_run(ctx, members, None)
+}
+
+fn format_members_for_run(
+    ctx: &ToolContext,
+    members: &[AgentInfo],
+    run_id: Option<&str>,
+) -> ToolOutput {
+    let scoped = run_scoped_members(members, run_id);
+    let mut output = String::new();
+    if let Some(run_id) = run_id {
+        if scoped.is_empty() {
+            return ToolOutput::new(format!(
+                "No agents found for run_id={run_id} (0/{} in current swarm).",
+                members.len()
+            ));
+        }
+        output.push_str(&format!(
+            "Run scope: run_id={run_id} (showing {}/{})
+
+",
+            scoped.len(),
+            members.len()
+        ));
+    }
+    output.push_str(&format_comm_members(&ctx.session_id, &scoped));
+    ToolOutput::new(output)
 }
 
 fn format_tool_summary(target: &str, calls: &[ToolCallSummary]) -> ToolOutput {
@@ -497,9 +706,13 @@ struct CommunicateInput {
     #[serde(default)]
     session_ids: Option<Vec<String>>,
     #[serde(default)]
+    owned_only: Option<bool>,
+    #[serde(default)]
     mode: Option<String>,
     #[serde(default)]
     timeout_minutes: Option<u64>,
+    #[serde(default)]
+    task_timeout_minutes: Option<u32>,
     #[serde(default)]
     wake: Option<bool>,
     #[serde(default)]
@@ -510,6 +723,8 @@ struct CommunicateInput {
     force: Option<bool>,
     #[serde(default)]
     retain_agents: Option<bool>,
+    #[serde(default)]
+    run_id: Option<String>,
     #[serde(default)]
     status: Option<String>,
     #[serde(default)]
@@ -614,7 +829,12 @@ impl Tool for CommunicateTool {
                 },
                 "session_ids": {
                     "type": "array",
-                    "items": {"type": "string"}
+                    "items": {"type": "string"},
+                    "description": "Optional session IDs for await_members. When omitted, await_members defaults to owned_only scope and waits only for non-terminal workers spawned by this coordinator."
+                },
+                "owned_only": {
+                    "type": "boolean",
+                    "description": "For await_members: when true, wait only for non-terminal workers spawned by this coordinator. If omitted, this is enabled when session_ids/target_session are omitted, and disabled when explicit session_ids are provided."
                 },
                 "mode": {
                     "type": "string",
@@ -631,6 +851,11 @@ impl Tool for CommunicateTool {
                     "minimum": 1,
                     "description": "Optional timeout for await_members."
                 },
+                "task_timeout_minutes": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Optional hard timeout in minutes for assign_task/start_task execution. Defaults to unlimited unless swarm.default_task_timeout_minutes is configured."
+                },
                 "concurrency_limit": {
                     "type": "integer",
                     "minimum": 1,
@@ -643,6 +868,10 @@ impl Tool for CommunicateTool {
                 "retain_agents": {
                     "type": "boolean",
                     "description": "For run_plan: keep spawned workers after the plan reaches a terminal state. Defaults to false, so owned workers are cleaned up."
+                },
+                "run_id": {
+                    "type": "string",
+                    "description": "Optional run/generation id for spawned workers and list/await/cleanup scoping. run_plan and fill_slots generate one when omitted so workers from the same orchestration run can be diagnosed together."
                 },
                 "wake": {
                     "type": "boolean",
@@ -812,7 +1041,12 @@ impl Tool for CommunicateTool {
 
                 match send_request(request).await {
                     Ok(ServerEvent::CommMembers { members, .. }) => {
-                        Ok(format_members(&ctx, &members))
+                        match params.run_id.as_deref() {
+                            Some(run_id) => {
+                                Ok(format_members_for_run(&ctx, &members, Some(run_id)))
+                            }
+                            None => Ok(format_members(&ctx, &members)),
+                        }
                     }
                     Ok(response) => {
                         ensure_success(&response)?;
@@ -960,15 +1194,23 @@ impl Tool for CommunicateTool {
                     working_dir: params.working_dir.clone(),
                     initial_message: params.spawn_initial_message(),
                     request_nonce: None,
+                    run_id: params.run_id.clone(),
                 };
 
-                match send_request(request).await {
-                    Ok(ServerEvent::CommSpawnResponse { new_session_id, .. })
-                        if !new_session_id.is_empty() =>
-                    {
-                        Ok(ToolOutput::new(format!(
-                            "Spawned new agent: {}",
-                            new_session_id
+                match send_spawn_request_with_coordinator_retry(&ctx, request, "spawn agent").await
+                {
+                    Ok(ServerEvent::CommSpawnResponse {
+                        new_session_id,
+                        active_count,
+                        active_cap,
+                        ..
+                    }) if !new_session_id.is_empty() => {
+                        Ok(ToolOutput::new(format_spawn_telemetry(
+                            &new_session_id,
+                            params.working_dir.as_deref(),
+                            params.run_id.as_deref(),
+                            active_count,
+                            active_cap,
                         )))
                     }
                     Ok(response) => {
@@ -1164,7 +1406,8 @@ impl Tool for CommunicateTool {
                 let prefer_spawn = params.prefer_spawn.unwrap_or(false);
 
                 if prefer_spawn && params.target_session.is_none() {
-                    let spawned_session = spawn_assignment_session(&ctx, &params).await?;
+                    let spawned_session =
+                        spawn_assignment_session(&ctx, &params, params.run_id.clone()).await?;
                     return assign_task_to_session(
                         &ctx,
                         &params,
@@ -1180,6 +1423,7 @@ impl Tool for CommunicateTool {
                     target_session: params.target_session.clone(),
                     task_id: params.task_id.clone(),
                     message: params.message.clone(),
+                    task_timeout_minutes: params.task_timeout_minutes,
                 };
 
                 match send_request(request).await {
@@ -1200,7 +1444,8 @@ impl Tool for CommunicateTool {
                             && params.target_session.is_none()
                             && auto_assignment_needs_spawn(&response) =>
                     {
-                        let spawned_session = spawn_assignment_session(&ctx, &params).await?;
+                        let spawned_session =
+                            spawn_assignment_session(&ctx, &params, params.run_id.clone()).await?;
                         assign_task_to_session(
                             &ctx,
                             &params,
@@ -1235,6 +1480,7 @@ impl Tool for CommunicateTool {
                     prefer_spawn: params.prefer_spawn,
                     spawn_if_needed: params.spawn_if_needed,
                     message: params.message.clone(),
+                    run_id: params.run_id.clone(),
                 };
 
                 match send_request(request).await {
@@ -1274,6 +1520,7 @@ impl Tool for CommunicateTool {
 
                 let mut assignments = Vec::new();
                 let available_slots = concurrency_limit.saturating_sub(active_count);
+                let run_id = params.run_id.clone().or_else(|| Some(fresh_swarm_run_id()));
                 for _ in 0..available_slots {
                     let request = Request::CommAssignNext {
                         id: REQUEST_ID,
@@ -1283,6 +1530,7 @@ impl Tool for CommunicateTool {
                         prefer_spawn: params.prefer_spawn,
                         spawn_if_needed: params.spawn_if_needed,
                         message: params.message.clone(),
+                        run_id: run_id.clone(),
                     };
 
                     match send_request(request).await {
@@ -1364,6 +1612,7 @@ impl Tool for CommunicateTool {
                     task_id: task_id.clone(),
                     target_session: params.target_session.clone(),
                     message: params.message.clone(),
+                    task_timeout_minutes: params.task_timeout_minutes,
                 };
 
                 match send_request(request).await {
@@ -1468,7 +1717,9 @@ impl Tool for CommunicateTool {
                     session_id: ctx.session_id.clone(),
                     target_status,
                     session_ids,
+                    owned_only: params.owned_only,
                     mode: params.mode.clone(),
+                    run_id: params.run_id.clone(),
                     timeout_secs: Some(timeout_secs),
                 };
 

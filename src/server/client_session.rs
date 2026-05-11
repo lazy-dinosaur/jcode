@@ -314,10 +314,14 @@ async fn ensure_client_swarm_member(
                     detail: None,
                     friendly_name: member_name.clone(),
                     report_back_to_session_id: None,
+                    run_id: None,
                     latest_completion_report: None,
                     role: "agent".to_string(),
                     joined_at: now,
                     last_status_change: now,
+                    last_heartbeat_at: Some(now),
+                    last_tool: None,
+                    last_checkpoint: None,
                     is_headless: false,
                 },
             );
@@ -393,6 +397,12 @@ pub(super) async fn handle_subscribe(
     if let Some(ref dir) = subscribe_working_dir {
         let mut agent_guard = agent.lock().await;
         agent_guard.set_working_dir(dir);
+        if let Err(error) = agent_guard.refresh_skills_for_working_dir() {
+            crate::logging::warn(&format!(
+                "Failed to reload project skills for working dir '{}': {}",
+                dir, error
+            ));
+        }
         drop(agent_guard);
 
         let new_path = PathBuf::from(dir);

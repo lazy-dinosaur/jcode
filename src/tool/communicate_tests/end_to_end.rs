@@ -357,3 +357,89 @@ async fn communicate_spawn_with_prompt_and_summary_work_end_to_end() {
 
     server_task.abort();
 }
+
+#[tokio::test]
+async fn communicate_spawn_self_promotes_and_retries_after_coordinator_drift() {
+    let _env_lock = crate::storage::lock_test_env();
+    let runtime_dir = tempfile::TempDir::new().expect("runtime tempdir");
+    let repo_dir = std::env::current_dir().expect("repo cwd");
+    let socket_path = runtime_dir.path().join("jcode.sock");
+    let _runtime = EnvGuard::set("JCODE_RUNTIME_DIR", runtime_dir.path());
+    let _socket = EnvGuard::set("JCODE_SOCKET", &socket_path);
+    let _debug = EnvGuard::set("JCODE_DEBUG_CONTROL", "1");
+
+    let provider: Arc<dyn Provider> = Arc::new(DelayedTestProvider {
+        delay: Duration::from_millis(100),
+    });
+    let server = Arc::new(Server::new(provider));
+    let mut server_task = {
+        let server = Arc::clone(&server);
+        tokio::spawn(async move { server.run().await })
+    };
+
+    wait_for_server_socket(&socket_path, &mut server_task)
+        .await
+        .expect("server socket should be ready");
+
+    let mut watcher = RawClient::connect(&socket_path)
+        .await
+        .expect("watcher should connect");
+    watcher
+        .subscribe(&repo_dir)
+        .await
+        .expect("watcher subscribe");
+
+    let watcher_session = watcher.session_id().await.expect("watcher session id");
+    let tool = CommunicateTool::new();
+    let ctx = test_ctx(&watcher_session, &repo_dir);
+
+    let first_spawn_output = tool
+        .execute(json!({ "action": "spawn" }), ctx.clone())
+        .await
+        .expect("initial worker spawn should succeed");
+    let drifted_coordinator = first_spawn_output
+        .output
+        .strip_prefix("Spawned new agent: ")
+        .expect("spawn output should include session id")
+        .trim()
+        .to_string();
+    wait_for_member_presence(&mut watcher, &watcher_session, &drifted_coordinator)
+        .await
+        .expect("drifted coordinator should appear in swarm");
+
+    tool.execute(
+        json!({
+            "action": "assign_role",
+            "target_session": drifted_coordinator,
+            "role": "coordinator"
+        }),
+        ctx.clone(),
+    )
+    .await
+    .expect("coordinator handoff should succeed");
+
+    let retry_response = send_spawn_request_with_coordinator_retry(
+        &ctx,
+        Request::CommSpawn {
+            id: 1,
+            session_id: watcher_session.clone(),
+            working_dir: None,
+            initial_message: None,
+            request_nonce: Some("spawn-retry-after-drift".to_string()),
+            run_id: None,
+        },
+        "spawn agent",
+    )
+    .await
+    .expect("spawn should self-promote and retry after coordinator drift");
+    let recovered_spawn = match retry_response {
+        ServerEvent::CommSpawnResponse { new_session_id, .. } => new_session_id,
+        other => panic!("expected CommSpawnResponse after retry, got {other:?}"),
+    };
+    assert_ne!(recovered_spawn, drifted_coordinator);
+    wait_for_member_presence(&mut watcher, &watcher_session, &recovered_spawn)
+        .await
+        .expect("retry-spawned worker should appear in swarm");
+
+    server_task.abort();
+}

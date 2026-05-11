@@ -1,10 +1,304 @@
 use super::*;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LifecycleHookOutcome {
+    Stop,
+    ContinueImmediate,
+}
+
 impl Agent {
+    pub(super) const DEFAULT_MAX_LIFECYCLE_DENY_STREAK: u8 = 3;
+
+    fn lifecycle_hook_reminder(reason: &str) -> String {
+        format!(
+            "A lifecycle hook denied completion of the previous turn. Follow this instruction before stopping again:\n\n{}",
+            reason.trim()
+        )
+    }
+
+    pub(super) fn resolve_max_lifecycle_deny_streak_for_current_session(&self) -> u8 {
+        let configured = crate::config::config()
+            .agents_for_working_dir(
+                self.session
+                    .working_dir
+                    .as_deref()
+                    .map(std::path::Path::new),
+            )
+            .max_lifecycle_deny_streak;
+        Self::resolve_max_lifecycle_deny_streak_with_config(configured)
+    }
+
+    pub(crate) fn resolve_max_lifecycle_deny_streak_with_config(configured: Option<u8>) -> u8 {
+        if let Ok(value) = std::env::var("JCODE_MAX_LIFECYCLE_DENY_STREAK")
+            && let Ok(parsed) = value.trim().parse::<u8>()
+        {
+            return parsed;
+        }
+        configured.unwrap_or(Self::DEFAULT_MAX_LIFECYCLE_DENY_STREAK)
+    }
+
+    pub(super) fn set_pending_lifecycle_system_reminder(&mut self, reason: String) {
+        let reason = reason.trim();
+        if reason.is_empty() {
+            return;
+        }
+        self.pending_lifecycle_system_reminder = Some(Self::lifecycle_hook_reminder(reason));
+    }
+
+    pub(super) fn take_pending_lifecycle_system_reminder(&mut self) -> Option<String> {
+        self.pending_lifecycle_system_reminder.take()
+    }
+
+    /// M11 stage 6: a new user turn starts a fresh self-correction chain.
+    pub(super) fn reset_lifecycle_deny_streak_for_user_turn(&mut self) {
+        self.lifecycle_deny_streak = 0;
+    }
+
+    /// M11 stage 6 fix: continuation requires the conversation to end with a
+    /// `Role::User` message. The previous turn's last message is the assistant
+    /// response that just got denied, so a bare `continue` would leave the
+    /// conversation ending with assistant and Anthropic (and other providers)
+    /// will reject the next call with "must end with user message".
+    ///
+    /// We inject the lifecycle reminder as a user-authored `<system-reminder>`
+    /// block. This matches the claude-code stop-hook pattern: reminders live
+    /// inline inside the conversation (not in the system prompt) so the model
+    /// sees them as part of the dialogue. The system-prompt-area
+    /// `current_turn_system_reminder` is intentionally left alone — that
+    /// channel is for the "next user turn" pathway (Stage 1+2 fallback when
+    /// the deny streak cap is hit), not for in-place continuations.
+    pub(super) fn inject_lifecycle_reminder_for_continuation(&mut self) {
+        let Some(reminder) = self.take_pending_lifecycle_system_reminder() else {
+            return;
+        };
+        let trimmed = reminder.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        self.add_message(
+            Role::User,
+            vec![ContentBlock::Text {
+                text: format!("<system-reminder>\n{trimmed}\n</system-reminder>"),
+                cache_control: None,
+            }],
+        );
+        if let Err(err) = self.session.save() {
+            logging::warn(&format!(
+                "[m11-stage6] failed to save session after continuation reminder inject: {err:#}"
+            ));
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn inject_lifecycle_reminder_for_continuation_for_tests(&mut self) {
+        self.inject_lifecycle_reminder_for_continuation();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn lifecycle_deny_streak_for_tests(&self) -> u8 {
+        self.lifecycle_deny_streak
+    }
+
+    #[cfg(test)]
+    pub(crate) fn handle_lifecycle_hook_deny_with_cap_for_tests(
+        &mut self,
+        reason: String,
+        cap: u8,
+    ) -> LifecycleHookOutcome {
+        self.handle_lifecycle_hook_deny(reason, cap)
+    }
+
+    fn handle_lifecycle_hook_deny(&mut self, reason: String, cap: u8) -> LifecycleHookOutcome {
+        self.set_pending_lifecycle_system_reminder(reason);
+        if cap == 0 || self.lifecycle_deny_streak < cap {
+            self.lifecycle_deny_streak = self.lifecycle_deny_streak.saturating_add(1);
+            logging::info(&format!(
+                "[m11-stage6] lifecycle deny #{} (cap={}), continuing turn",
+                self.lifecycle_deny_streak,
+                if cap == 0 {
+                    "unlimited".to_string()
+                } else {
+                    cap.to_string()
+                }
+            ));
+            LifecycleHookOutcome::ContinueImmediate
+        } else {
+            logging::warn(&format!(
+                "[m11-stage6] lifecycle deny streak cap ({cap}) reached, falling back to next-prompt reminder"
+            ));
+            LifecycleHookOutcome::Stop
+        }
+    }
+
+    /// M11 stage 5: extract the most recent user-authored message text from
+    /// the session transcript. Internal `<system-reminder>` injections are
+    /// skipped so the hook sees what the real human typed last.
+    /// Returned string is truncated to `LIFECYCLE_HOOK_LAST_USER_MESSAGE_MAX`
+    /// chars (with a `…` suffix on overflow). Returns None for empty
+    /// transcripts or when no user-authored message is found.
+    pub(crate) fn lifecycle_hook_last_user_message(&self) -> Option<String> {
+        for stored in self.session.messages.iter().rev() {
+            if !matches!(stored.role, Role::User) {
+                continue;
+            }
+            // Find first plain text block; skip tool results, images, etc.
+            let text = stored.content.iter().find_map(|block| match block {
+                ContentBlock::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })?;
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            // Skip injected system reminders (these aren't real user input).
+            if trimmed.starts_with("<system-reminder>") {
+                continue;
+            }
+            return Some(truncate_with_ellipsis(
+                trimmed,
+                crate::hooks::LIFECYCLE_HOOK_LAST_USER_MESSAGE_MAX,
+            ));
+        }
+        None
+    }
+
+    /// M11 stage 5: build the last-N tool-call previews from the session
+    /// transcript (oldest of the kept window first, newest last) so hook
+    /// scripts can match on the tail of agent activity. Each entry's
+    /// `args_preview` is a one-line, truncated rendering of the tool input.
+    pub(crate) fn lifecycle_hook_recent_tool_calls(
+        &self,
+    ) -> Vec<crate::hooks::LifecycleHookToolCallPreview> {
+        let mut collected: Vec<crate::hooks::LifecycleHookToolCallPreview> = Vec::new();
+        for stored in self.session.messages.iter().rev() {
+            for block in stored.content.iter().rev() {
+                if let ContentBlock::ToolUse { name, input, .. } = block {
+                    collected.push(crate::hooks::LifecycleHookToolCallPreview {
+                        name: name.clone(),
+                        args_preview: build_tool_args_preview(input),
+                    });
+                    if collected.len() >= crate::hooks::LIFECYCLE_HOOK_RECENT_TOOL_CALLS_MAX {
+                        break;
+                    }
+                }
+            }
+            if collected.len() >= crate::hooks::LIFECYCLE_HOOK_RECENT_TOOL_CALLS_MAX {
+                break;
+            }
+        }
+        collected.reverse();
+        collected
+    }
+
+    /// M11 stage 5: session_age_seconds derived from Session::created_at.
+    /// Clamped to 0 if the system clock moved backwards.
+    pub(crate) fn lifecycle_hook_session_age_seconds(&self) -> u64 {
+        let now = chrono::Utc::now();
+        let elapsed = now.signed_duration_since(self.session.created_at);
+        elapsed.num_seconds().max(0) as u64
+    }
+
+    /// M11 stage 5: count user-authored turns observed so far. Each contiguous
+    /// run of user messages (ignoring system reminders) counts as one turn.
+    pub(crate) fn lifecycle_hook_turn_count(&self) -> usize {
+        let mut count = 0usize;
+        let mut last_was_user = false;
+        for stored in &self.session.messages {
+            if matches!(stored.role, Role::User) {
+                let is_reminder = stored.content.iter().any(|block| match block {
+                    ContentBlock::Text { text, .. } => {
+                        text.trim_start().starts_with("<system-reminder>")
+                    }
+                    _ => false,
+                });
+                let is_tool_result_only = stored
+                    .content
+                    .iter()
+                    .all(|block| matches!(block, ContentBlock::ToolResult { .. }));
+                if is_reminder || is_tool_result_only {
+                    continue;
+                }
+                if !last_was_user {
+                    count += 1;
+                }
+                last_was_user = true;
+            } else {
+                last_was_user = false;
+            }
+        }
+        count
+    }
+
+    pub(super) fn merge_current_and_pending_system_reminders(
+        current: Option<String>,
+        pending: Option<String>,
+    ) -> Option<String> {
+        let current = current.and_then(|value| {
+            let trimmed = value.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        });
+        let pending = pending.and_then(|value| {
+            let trimmed = value.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        });
+
+        match (current, pending) {
+            (Some(current), Some(pending)) => Some(format!("{current}\n\n{pending}")),
+            (Some(current), None) => Some(current),
+            (None, Some(pending)) => Some(pending),
+            (None, None) => None,
+        }
+    }
+
     /// Run turns until no more tool calls
     /// Maximum number of context-limit compaction retries before giving up.
     pub(super) const MAX_CONTEXT_LIMIT_RETRIES: u32 = 5;
     pub(super) const MAX_INCOMPLETE_CONTINUATION_ATTEMPTS: u32 = 3;
+
+    pub(super) async fn fire_response_completed_hook(
+        &mut self,
+        message_id: Option<&str>,
+        stop_reason: Option<&str>,
+        tool_calls_count: usize,
+        output_chars: usize,
+    ) -> LifecycleHookOutcome {
+        let Some(message_id) = message_id else {
+            return LifecycleHookOutcome::Stop;
+        };
+        // M11 stage 5: enrich payload with last user message, recent tool
+        // calls, turn count, and session age so hook scripts can write
+        // meaningful policies. All fields are optional / omitted-when-empty
+        // so existing stage 1-4 hook scripts keep working unchanged.
+        let last_user_message = self.lifecycle_hook_last_user_message();
+        let recent_tool_calls = self.lifecycle_hook_recent_tool_calls();
+        let turn_count = Some(self.lifecycle_hook_turn_count());
+        let session_age_seconds = Some(self.lifecycle_hook_session_age_seconds());
+        let payload = crate::hooks::ResponseCompletedHookPayload {
+            event: crate::hooks::RESPONSE_COMPLETED,
+            session_id: &self.session.id,
+            message_id,
+            working_dir: self.session.working_dir.clone(),
+            stop_reason,
+            tool_calls_count,
+            output_chars,
+            stop_hook_active: self.lifecycle_deny_streak > 0,
+            last_user_message,
+            recent_tool_calls,
+            turn_count,
+            session_age_seconds,
+        };
+        match crate::hooks::run_response_hooks(payload).await {
+            Ok(Some(reason)) => {
+                let cap = self.resolve_max_lifecycle_deny_streak_for_current_session();
+                self.handle_lifecycle_hook_deny(reason, cap)
+            }
+            Ok(None) => LifecycleHookOutcome::Stop,
+            Err(err) => {
+                logging::warn(&format!("response.completed hook failed: {err:#}"));
+                LifecycleHookOutcome::Stop
+            }
+        }
+    }
 
     pub(super) async fn run_turn(&mut self, print_output: bool) -> Result<String> {
         self.set_log_context();
@@ -12,6 +306,7 @@ impl Agent {
         let trace = trace_enabled();
         let mut context_limit_retries = 0u32;
         let mut incomplete_continuations = 0u32;
+        let mut empty_after_tool_continuations = 0u32;
 
         loop {
             let repaired = self.repair_missing_tool_outputs();
@@ -590,6 +885,7 @@ impl Agent {
                 &mut tool_calls,
                 assistant_message_id.as_ref(),
             );
+            let assistant_tool_calls_count = tool_calls.len();
 
             if tool_calls.is_empty() && !generated_image_contexts.is_empty() {
                 for blocks in generated_image_contexts.drain(..) {
@@ -599,6 +895,15 @@ impl Agent {
                 logging::info(
                     "Continuing turn so model can inspect generated image visual context",
                 );
+                continue;
+            }
+
+            if tool_calls.is_empty()
+                && assistant_message_id.is_none()
+                && text_content.trim().is_empty()
+                && self
+                    .maybe_continue_empty_after_tool_result(&mut empty_after_tool_continuations)?
+            {
                 continue;
             }
 
@@ -614,8 +919,24 @@ impl Agent {
                 if print_output {
                     println!();
                 }
-                final_text = text_content;
-                break;
+                match self
+                    .fire_response_completed_hook(
+                        assistant_message_id.as_deref(),
+                        stop_reason.as_deref(),
+                        assistant_tool_calls_count,
+                        text_content.chars().count(),
+                    )
+                    .await
+                {
+                    LifecycleHookOutcome::Stop => {
+                        final_text = text_content;
+                        break;
+                    }
+                    LifecycleHookOutcome::ContinueImmediate => {
+                        self.inject_lifecycle_reminder_for_continuation();
+                        continue;
+                    }
+                }
             }
 
             logging::info(&format!(
@@ -638,7 +959,21 @@ impl Agent {
                         continue;
                     }
                     logging::info("Provider handles tools internally - task complete");
-                    break;
+                    match self
+                        .fire_response_completed_hook(
+                            assistant_message_id.as_deref(),
+                            stop_reason.as_deref(),
+                            assistant_tool_calls_count,
+                            text_content.chars().count(),
+                        )
+                        .await
+                    {
+                        LifecycleHookOutcome::Stop => break,
+                        LifecycleHookOutcome::ContinueImmediate => {
+                            self.inject_lifecycle_reminder_for_continuation();
+                            continue;
+                        }
+                    }
                 }
                 logging::info("Provider handles tools internally - executing native tools locally");
             }
@@ -879,4 +1214,35 @@ impl Agent {
 
         Ok(final_text)
     }
+}
+
+/// M11 stage 5: truncate a string to `max_chars` Unicode chars and append
+/// `…` if truncation occurred. Operates on char boundaries (NOT bytes) so
+/// non-ASCII text such as Korean is never split mid-codepoint.
+fn truncate_with_ellipsis(input: &str, max_chars: usize) -> String {
+    let trimmed = input.trim();
+    if trimmed.chars().count() <= max_chars {
+        return trimmed.to_string();
+    }
+    let mut out: String = trimmed.chars().take(max_chars).collect();
+    out.push('…');
+    out
+}
+
+/// M11 stage 5: render a tool-input JSON value as a compact, single-line
+/// preview suitable for `args_preview`. Newlines collapse to spaces and the
+/// string is truncated to `LIFECYCLE_HOOK_TOOL_ARGS_PREVIEW_MAX` chars.
+fn build_tool_args_preview(input: &serde_json::Value) -> String {
+    let raw = if input.is_null() {
+        String::new()
+    } else {
+        serde_json::to_string(input).unwrap_or_default()
+    };
+    // Collapse all whitespace runs (including newlines) into a single space
+    // so the preview reads as one line.
+    let collapsed: String = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    truncate_with_ellipsis(
+        &collapsed,
+        crate::hooks::LIFECYCLE_HOOK_TOOL_ARGS_PREVIEW_MAX,
+    )
 }

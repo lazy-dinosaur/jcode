@@ -1,4 +1,7 @@
-use super::{handle_comm_assign_next, handle_comm_assign_task, handle_comm_task_control};
+use super::{
+    handle_comm_assign_next, handle_comm_assign_role, handle_comm_assign_task,
+    handle_comm_task_control,
+};
 use crate::agent::Agent;
 use crate::message::{Message, StreamEvent, ToolDefinition};
 use crate::plan::PlanItem;
@@ -63,10 +66,14 @@ fn member(session_id: &str, swarm_id: &str, status: &str) -> SwarmMember {
         detail: None,
         friendly_name: Some(session_id.to_string()),
         report_back_to_session_id: None,
+        run_id: None,
         latest_completion_report: None,
         role: "agent".to_string(),
         joined_at: Instant::now(),
         last_status_change: Instant::now(),
+        last_heartbeat_at: Some(Instant::now()),
+        last_tool: None,
+        last_checkpoint: None,
         is_headless: false,
     }
 }
@@ -135,6 +142,7 @@ include!("comm_control_tests/assign_less_loaded.rs");
 include!("comm_control_tests/task_control.rs");
 include!("comm_control_tests/assign_next_dependency.rs");
 include!("comm_control_tests/assign_next_metadata.rs");
+include!("comm_control_tests/assign_role.rs");
 include!("comm_control_tests/await_late_joiners.rs");
 include!("comm_control_tests/await_disconnect.rs");
 include!("comm_control_tests/await_any.rs");

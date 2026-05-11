@@ -122,10 +122,14 @@ mod transcript_routing_tests {
             detail: None,
             friendly_name: None,
             report_back_to_session_id: None,
+            run_id: None,
             latest_completion_report: None,
             role: "agent".to_string(),
             joined_at: now,
             last_status_change: now,
+            last_heartbeat_at: Some(now),
+            last_tool: None,
+            last_checkpoint: None,
             is_headless: false,
         }
     }

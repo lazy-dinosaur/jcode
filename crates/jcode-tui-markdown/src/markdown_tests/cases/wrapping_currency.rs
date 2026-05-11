@@ -25,6 +25,23 @@ fn test_lazy_rendering_visible_range() {
     assert!(!lines_partial.is_empty());
 }
 
+#[cfg(feature = "mermaid-renderer")]
+#[test]
+fn test_lazy_renderer_deferred_mermaid_returns_placeholder_on_cache_miss() {
+    jcode_tui_mermaid::clear_cache().ok();
+
+    let md = "```mermaid\nflowchart LR\n  A[Start] --> B[End]\n```";
+    let lines = with_deferred_mermaid_render_context(|| render_markdown_lazy(md, Some(80), 0..100));
+    let rendered = lines_to_string(&lines);
+
+    assert!(
+        rendered.contains("rendering mermaid diagram")
+            || rendered.contains("mermaid diagram rendering"),
+        "expected deferred mermaid placeholder from lazy renderer: {}",
+        rendered
+    );
+}
+
 #[test]
 fn test_ranges_overlap() {
     assert!(ranges_overlap(0..10, 5..15));

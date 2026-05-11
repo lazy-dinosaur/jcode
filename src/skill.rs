@@ -70,133 +70,12 @@ impl SkillRegistry {
         }
     }
 
-    /// Import skills from Claude Code and Codex CLI on first run.
-    /// Only runs if ~/.jcode/skills/ doesn't exist yet.
-    fn import_from_external() {
-        let jcode_skills = match crate::storage::jcode_dir() {
-            Ok(dir) => dir.join("skills"),
-            Err(_) => return,
-        };
-
-        if jcode_skills.exists() {
-            return; // Not first run
-        }
-
-        let mut sources = Vec::new();
-        let mut copied = Vec::new();
-
-        // Import from Claude Code (~/.claude/skills/)
-        if let Ok(claude_skills) = crate::storage::user_home_path(".claude/skills")
-            && claude_skills.is_dir()
-        {
-            let count = Self::copy_skills_dir(&claude_skills, &jcode_skills);
-            if count > 0 {
-                sources.push(format!("{} from Claude Code", count));
-                copied.extend(Self::list_skill_names(&jcode_skills));
-            }
-        }
-
-        // Import from Codex CLI (~/.codex/skills/)
-        if let Ok(codex_skills) = crate::storage::user_home_path(".codex/skills")
-            && codex_skills.is_dir()
-        {
-            let count = Self::copy_skills_dir(&codex_skills, &jcode_skills);
-            if count > 0 {
-                sources.push(format!("{} from Codex CLI", count));
-                copied.extend(Self::list_skill_names(&jcode_skills));
-            }
-        }
-
-        if !sources.is_empty() {
-            // Deduplicate names
-            copied.sort();
-            copied.dedup();
-            crate::logging::info(&format!(
-                "Skills: Imported {} ({}) from {}",
-                copied.len(),
-                copied.join(", "),
-                sources.join(" + "),
-            ));
-        }
-    }
-
-    /// Copy skill directories from src to dst. Returns count of skills copied.
-    fn copy_skills_dir(src: &Path, dst: &Path) -> usize {
-        let entries = match std::fs::read_dir(src) {
-            Ok(e) => e,
-            Err(_) => return 0,
-        };
-
-        let mut count = 0;
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-            let name = match path.file_name().and_then(|n| n.to_str()) {
-                Some(n) => n.to_string(),
-                None => continue,
-            };
-
-            // Skip Codex system skills
-            if name.starts_with('.') {
-                continue;
-            }
-
-            // Only copy if SKILL.md exists
-            if !path.join("SKILL.md").exists() {
-                continue;
-            }
-
-            let dest = dst.join(&name);
-            if let Err(e) = Self::copy_dir_recursive(&path, &dest) {
-                crate::logging::error(&format!("Failed to copy skill '{}': {}", name, e));
-                continue;
-            }
-            count += 1;
-        }
-        count
-    }
-
-    /// Recursively copy a directory
-    fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
-        std::fs::create_dir_all(dst)?;
-        for entry in std::fs::read_dir(src)? {
-            let entry = entry?;
-            let src_path = entry.path();
-            let dst_path = dst.join(entry.file_name());
-
-            if src_path.is_dir() {
-                Self::copy_dir_recursive(&src_path, &dst_path)?;
-            } else if src_path.is_symlink() {
-                // Resolve symlink and copy the target
-                let target = std::fs::read_link(&src_path)?;
-                // Try to create symlink, fall back to copying the file
-                if crate::platform::symlink_or_copy(&target, &dst_path).is_err()
-                    && let Ok(resolved) = std::fs::canonicalize(&src_path)
-                {
-                    std::fs::copy(&resolved, &dst_path)?;
-                }
-            } else {
-                std::fs::copy(&src_path, &dst_path)?;
-            }
-        }
-        Ok(())
-    }
-
-    /// List skill directory names
-    fn list_skill_names(dir: &Path) -> Vec<String> {
-        std::fs::read_dir(dir)
-            .ok()
-            .map(|entries| {
-                entries
-                    .flatten()
-                    .filter(|e| e.path().is_dir())
-                    .filter_map(|e| e.file_name().to_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
+    /// Intentionally no-op.
+    ///
+    /// jcode no longer imports global skills from other tools on first run.
+    /// Global skill discovery is limited to `~/.jcode/skills`; other ecosystem
+    /// skill directories are only read when they are project-local.
+    fn import_from_external() {}
 
     /// Load skills from all standard locations
     pub fn load() -> Result<Self> {
@@ -206,7 +85,7 @@ impl SkillRegistry {
     /// Load skills from all standard locations, with project-local locations
     /// resolved against an optional active session working directory.
     pub fn load_for_working_dir(working_dir: Option<&Path>) -> Result<Self> {
-        // First-run import from Claude Code / Codex CLI
+        // Historical first-run import is intentionally disabled.
         Self::import_from_external();
 
         let mut registry = Self::default();
@@ -230,16 +109,11 @@ impl SkillRegistry {
     }
 
     fn load_project_local_dirs(&mut self, working_dir: Option<&Path>) -> Result<()> {
-        // Load from ./.jcode/skills/ (project-local jcode skills)
-        let local_jcode = Self::project_local_dir(working_dir, ".jcode");
-        if local_jcode.exists() {
-            self.load_from_dir(&local_jcode)?;
-        }
-
-        // Fallback: ./.claude/skills/ (project-local Claude skills for compatibility)
-        let local_claude = Self::project_local_dir(working_dir, ".claude");
-        if local_claude.exists() {
-            self.load_from_dir(&local_claude)?;
+        for dir_name in [".jcode", ".claude", ".agents", ".opencode"] {
+            let local_dir = Self::project_local_dir(working_dir, dir_name);
+            if local_dir.exists() {
+                self.load_from_dir(&local_dir)?;
+            }
         }
 
         Ok(())
@@ -366,16 +240,11 @@ impl SkillRegistry {
             }
         }
 
-        // Load from ./.jcode/skills/ (project-local jcode skills)
-        let local_jcode = Self::project_local_dir(working_dir, ".jcode");
-        if local_jcode.exists() {
-            count += self.load_from_dir_count(&local_jcode)?;
-        }
-
-        // Fallback: ./.claude/skills/ (project-local Claude skills for compatibility)
-        let local_claude = Self::project_local_dir(working_dir, ".claude");
-        if local_claude.exists() {
-            count += self.load_from_dir_count(&local_claude)?;
+        for dir_name in [".jcode", ".claude", ".agents", ".opencode"] {
+            let local_dir = Self::project_local_dir(working_dir, dir_name);
+            if local_dir.exists() {
+                count += self.load_from_dir_count(&local_dir)?;
+            }
         }
 
         Ok(count)
@@ -487,6 +356,29 @@ fn normalize_skill_search_text(text: &str) -> String {
 mod tests {
     use super::*;
 
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set_path(key: &'static str, value: &Path) -> Self {
+            let previous = std::env::var_os(key);
+            crate::env::set_var(key, value);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = self.previous.take() {
+                crate::env::set_var(self.key, previous);
+            } else {
+                crate::env::remove_var(self.key);
+            }
+        }
+    }
+
     fn test_skill(name: &str, description: &str, content: &str) -> Skill {
         Skill {
             name: name.to_string(),
@@ -540,6 +432,45 @@ mod tests {
             .expect("working-dir local skill should load");
         assert_eq!(skill.description, "Test skill wd-only");
         assert!(skill.path.starts_with(temp.path()));
+    }
+
+    #[test]
+    fn load_for_working_dir_reads_common_project_skill_scopes() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_test_skill(temp.path(), ".agents", "agent-skill");
+        write_test_skill(temp.path(), ".opencode", "opencode-skill");
+
+        let registry = SkillRegistry::load_for_working_dir(Some(temp.path())).expect("load skills");
+
+        assert!(registry.get("agent-skill").is_some());
+        assert!(registry.get("opencode-skill").is_some());
+    }
+
+    #[test]
+    fn test_global_external_skill_import_is_disabled() {
+        let _env_lock = crate::storage::lock_test_env();
+        let home = tempfile::tempdir().expect("home tempdir");
+        let project = tempfile::tempdir().expect("project tempdir");
+        let _home_guard = EnvVarGuard::set_path("JCODE_HOME", home.path());
+
+        let external_skill_dir = home
+            .path()
+            .join("external")
+            .join(".claude")
+            .join("skills")
+            .join("foo");
+        std::fs::create_dir_all(&external_skill_dir).expect("create external skill dir");
+        std::fs::write(
+            external_skill_dir.join("SKILL.md"),
+            "---\nname: foo\ndescription: External foo skill\n---\n\nUse foo.\n",
+        )
+        .expect("write external skill");
+
+        let registry =
+            SkillRegistry::load_for_working_dir(Some(project.path())).expect("load skills");
+
+        assert!(!home.path().join("skills").exists());
+        assert!(registry.get("foo").is_none());
     }
 
     #[test]

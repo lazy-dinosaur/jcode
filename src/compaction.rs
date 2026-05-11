@@ -29,7 +29,8 @@ use tokio::task::JoinHandle;
 pub use jcode_compaction_core::{
     CHARS_PER_TOKEN, COMPACTION_THRESHOLD, CRITICAL_THRESHOLD, CompactionAction, CompactionEvent,
     CompactionStats, DEFAULT_TOKEN_BUDGET, EMBED_MAX_CHARS_PER_MSG, EMBEDDING_HISTORY_WINDOW,
-    EMERGENCY_TOOL_RESULT_MAX_CHARS, MANUAL_COMPACT_MIN_THRESHOLD, MIN_TURNS_TO_KEEP,
+    EMERGENCY_TOOL_RESULT_MAX_CHARS, MANUAL_COMPACT_MIN_THRESHOLD,
+    MAX_CONSECUTIVE_COMPACTION_FAILURES, MIN_TURNS_TO_KEEP,
     RECENT_TURNS_TO_KEEP, SEMANTIC_EMBED_CACHE_CAPACITY, SUMMARY_PROMPT, SYSTEM_OVERHEAD_TOKENS,
     Summary, TOKEN_HISTORY_WINDOW, build_compaction_prompt, build_emergency_summary_text,
     compacted_summary_text_block, content_char_count, emergency_truncate_tool_results,
@@ -112,6 +113,16 @@ pub struct CompactionManager {
     /// Used as a cooldown anti-signal.
     turns_since_last_compact: usize,
 
+    /// M14/M14a safety: number of consecutive compaction attempts that ended in
+    /// failure (background task error, panic, hard_compact reject, etc).
+    ///
+    /// When this reaches `MAX_CONSECUTIVE_COMPACTION_FAILURES` the compaction
+    /// triggers (`should_compact_*` and `try_auto_compact_after_context_limit`)
+    /// short-circuit, preventing the runaway loops the user has observed where
+    /// a failing summarizer keeps getting re-invoked on every new turn /
+    /// retry. Reset to 0 by any successful compaction.
+    consecutive_compaction_failures: usize,
+
     // ── Semantic mode state ────────────────────────────────────────────────
     /// Per-turn embedding snapshots for topic-shift detection.
     /// Each entry is the L2-normalized embedding of the last assistant message
@@ -148,6 +159,7 @@ impl CompactionManager {
             compaction_config: cfg,
             token_history: VecDeque::with_capacity(TOKEN_HISTORY_WINDOW + 1),
             turns_since_last_compact: 0,
+            consecutive_compaction_failures: 0,
             embedding_history: VecDeque::with_capacity(EMBEDDING_HISTORY_WINDOW + 1),
             semantic_embed_cache: HashMap::with_capacity(SEMANTIC_EMBED_CACHE_CAPACITY),
             semantic_embed_cache_counter: 0,
@@ -679,6 +691,13 @@ impl CompactionManager {
         if self.suppress_compaction_until_new_message {
             return false;
         }
+        // M14/M14a safety: stop auto-triggering after repeated failures so we
+        // don't spin the summarizer once the previous attempt errored out.
+        // Manual `/compact` and emergency hard-compact have their own paths
+        // and gate themselves separately.
+        if self.consecutive_compaction_failures >= MAX_CONSECUTIVE_COMPACTION_FAILURES {
+            return false;
+        }
         let active = self.active_messages(all_messages);
         match self.mode {
             CompactionMode::Reactive => {
@@ -792,6 +811,8 @@ impl CompactionManager {
                         dropped,
                         post_usage * 100.0,
                     ));
+                    // M14a: clean hard-compact success clears the failure-streak gate.
+                    self.note_compaction_success();
                     return CompactionAction::HardCompacted(dropped);
                 }
                 Err(reason) => {
@@ -799,6 +820,10 @@ impl CompactionManager {
                         "[compaction] Hard compact failed at critical threshold: {}",
                         reason
                     ));
+                    // M14a: bump failure streak so subsequent calls back off
+                    // instead of looping (the user observed 22 consecutive
+                    // hard-compact attempts before this gate existed).
+                    self.note_compaction_failure();
                 }
             }
         }
@@ -977,9 +1002,10 @@ impl CompactionManager {
                     self.active_messages_count(),
                 ));
 
-                // Reset cooldown counter so proactive/semantic modes don't
-                // fire again immediately after a successful compaction.
-                self.turns_since_last_compact = 0;
+                // M14/M14a: clean success clears both the cooldown counter
+                // and the failure streak so subsequent auto-triggers behave
+                // normally.
+                self.note_compaction_success();
 
                 self.pending_cutoff = 0;
             }
@@ -987,11 +1013,30 @@ impl CompactionManager {
                 crate::logging::error(&format!("[compaction] Failed to generate summary: {}", e));
                 self.pending_trigger = None;
                 self.pending_cutoff = 0;
+                // M14: failures must reset the cooldown counter and bump the
+                // failure streak. Without this, `turns_since_last_compact`
+                // keeps growing past `min_turns_between_compactions` so
+                // `should_compact_*` re-fires on every new turn even though
+                // the summarizer is broken.
+                self.note_compaction_failure();
+                if self.consecutive_compaction_failures >= MAX_CONSECUTIVE_COMPACTION_FAILURES {
+                    crate::logging::warn(&format!(
+                        "[compaction] {} consecutive failures; auto-compaction disabled until a successful run or session reset",
+                        self.consecutive_compaction_failures
+                    ));
+                }
             }
             Err(e) => {
                 crate::logging::error(&format!("[compaction] Task panicked: {}", e));
                 self.pending_trigger = None;
                 self.pending_cutoff = 0;
+                self.note_compaction_failure();
+                if self.consecutive_compaction_failures >= MAX_CONSECUTIVE_COMPACTION_FAILURES {
+                    crate::logging::warn(&format!(
+                        "[compaction] {} consecutive failures; auto-compaction disabled until a successful run or session reset",
+                        self.consecutive_compaction_failures
+                    ));
+                }
             }
         }
     }
@@ -1084,6 +1129,30 @@ impl CompactionManager {
     /// Get the active compaction mode
     pub fn mode(&self) -> crate::config::CompactionMode {
         self.mode.clone()
+    }
+
+    /// M14/M14a: how many consecutive compaction attempts have failed since
+    /// the last successful one. Read from agent-level emergency recovery to
+    /// gate further retries.
+    pub fn consecutive_compaction_failures(&self) -> usize {
+        self.consecutive_compaction_failures
+    }
+
+    /// M14/M14a: record a clean compaction success. Resets the cooldown
+    /// counter and the failure streak so subsequent triggers behave normally.
+    pub fn note_compaction_success(&mut self) {
+        self.turns_since_last_compact = 0;
+        self.consecutive_compaction_failures = 0;
+    }
+
+    /// M14/M14a: record a compaction failure (background task error,
+    /// hard-compact reject, panic). Bumps the failure streak and zeroes the
+    /// cooldown counter so we honour `min_turns_between_compactions` even
+    /// when the previous attempt did not succeed.
+    pub fn note_compaction_failure(&mut self) {
+        self.turns_since_last_compact = 0;
+        self.consecutive_compaction_failures =
+            self.consecutive_compaction_failures.saturating_add(1);
     }
 
     /// Change the active compaction mode for this session at runtime.

@@ -548,11 +548,10 @@ fn render_mermaid_deferred_inner(
                 }
             }
             Err(_) => {
-                return Some(render_mermaid_sized_internal(
-                    content,
-                    terminal_width,
-                    register_active,
-                ));
+                crate::log_warn(
+                    "Mermaid deferred render pending map is poisoned; leaving diagram as placeholder",
+                );
+                return None;
             }
         };
 
@@ -566,11 +565,9 @@ fn render_mermaid_deferred_inner(
             if let Ok(mut pending) = PENDING_RENDER_REQUESTS.lock() {
                 pending.remove(&render_key);
             }
-            return Some(render_mermaid_sized_internal(
-                content,
-                terminal_width,
-                register_active,
-            ));
+            crate::log_warn(
+                "Mermaid deferred render worker is unavailable; leaving diagram as placeholder",
+            );
         }
     }
 

@@ -40,7 +40,7 @@ use futures::StreamExt;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, mpsc};
@@ -153,6 +153,14 @@ pub struct Agent {
     /// Transient reminder injected into provider requests for the current turn only.
     /// Not persisted to session history.
     current_turn_system_reminder: Option<String>,
+    /// Lifecycle hook deny reason to inject into the next user turn.
+    /// Not persisted to session history.
+    pending_lifecycle_system_reminder: Option<String>,
+    /// M11 stage 6: consecutive lifecycle denies within an immediate
+    /// continuation chain. Reset at the start of each new user turn. Compared
+    /// against `agents.max_lifecycle_deny_streak` (or env override) to prevent
+    /// runaway self-correction loops.
+    lifecycle_deny_streak: u8,
     /// Tool call ids observed in the current session transcript.
     tool_call_ids: HashSet<String>,
     /// Tool result ids observed in the current session transcript.
@@ -218,6 +226,8 @@ impl Agent {
             last_status_detail: None,
             pending_alerts: Vec::new(),
             current_turn_system_reminder: None,
+            pending_lifecycle_system_reminder: None,
+            lifecycle_deny_streak: 0,
             tool_call_ids: HashSet::new(),
             tool_result_ids: HashSet::new(),
             tool_output_scan_index: 0,
@@ -249,6 +259,35 @@ impl Agent {
             .iter()
             .map(|skill| skill.name.clone())
             .collect()
+    }
+
+    fn reload_skills_for_current_working_dir(&mut self) -> Result<Arc<SkillRegistry>> {
+        let working_dir = self.session.working_dir.as_deref().map(Path::new);
+        let reloaded = SkillRegistry::load_for_working_dir(working_dir)?;
+        if let Ok(mut shared) = self.registry.skills().try_write() {
+            *shared = reloaded.clone();
+        }
+        self.skills = Arc::new(reloaded.clone());
+        Ok(Arc::new(reloaded))
+    }
+
+    pub fn refresh_skills_for_working_dir(&mut self) -> Result<usize> {
+        let reloaded = self.reload_skills_for_current_working_dir()?;
+        Ok(reloaded.list().len())
+    }
+
+    pub fn activate_skill(&mut self, name: &str) -> Result<(String, String)> {
+        let mut skills = self.current_skills_snapshot();
+        let mut skill = skills.get(name).cloned();
+
+        if skill.is_none() {
+            skills = self.reload_skills_for_current_working_dir()?;
+            skill = skills.get(name).cloned();
+        }
+
+        let skill = skill.ok_or_else(|| anyhow::anyhow!("Unknown skill: /{}", name))?;
+        self.active_skill = Some(skill.name.clone());
+        Ok((skill.name, skill.description))
     }
 
     pub fn new(provider: Arc<dyn Provider>, registry: Registry) -> Self {
@@ -400,6 +439,8 @@ impl Agent {
         self.last_status_detail = None;
         self.pending_alerts.clear();
         self.current_turn_system_reminder = None;
+        self.pending_lifecycle_system_reminder = None;
+        self.lifecycle_deny_streak = 0;
         self.reset_tool_output_tracking();
         if let Ok(mut queue) = self.soft_interrupt_queue.lock() {
             queue.clear();
@@ -708,6 +749,28 @@ impl Agent {
             self.session.working_dir = working_dir;
             self.session.refresh_initial_session_context_message();
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn session_mut_for_test(&mut self) -> &mut Session {
+        &mut self.session
+    }
+
+    pub(crate) fn drain_flush_for_shutdown(&mut self) -> Result<bool> {
+        let should_mark_crashed = matches!(self.session.status, SessionStatus::Active)
+            && self
+                .session
+                .visible_conversation_messages()
+                .last()
+                .is_some_and(|message| message.role == Role::User);
+
+        self.session.save()?;
+        if should_mark_crashed {
+            self.mark_crashed(Some("server shutdown drain".to_string()));
+        } else {
+            self.mark_closed();
+        }
+        Ok(should_mark_crashed)
     }
 
     /// Mark this agent session as closed and persist it.

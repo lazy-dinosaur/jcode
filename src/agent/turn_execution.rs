@@ -14,7 +14,10 @@ impl Agent {
         if trace_enabled() {
             eprintln!("[trace] session_id {}", self.session.id);
         }
+        self.reset_lifecycle_deny_streak_for_user_turn();
+        self.current_turn_system_reminder = self.take_pending_lifecycle_system_reminder();
         let _ = self.run_turn(true).await?;
+        self.current_turn_system_reminder = None;
         Ok(())
     }
 
@@ -30,7 +33,11 @@ impl Agent {
         if trace_enabled() {
             eprintln!("[trace] session_id {}", self.session.id);
         }
-        self.run_turn(false).await
+        self.reset_lifecycle_deny_streak_for_user_turn();
+        self.current_turn_system_reminder = self.take_pending_lifecycle_system_reminder();
+        let result = self.run_turn(false).await;
+        self.current_turn_system_reminder = None;
+        result
     }
 
     /// Run a single message with events streamed to a broadcast channel (for server mode)
@@ -64,7 +71,11 @@ impl Agent {
             }],
         );
         self.session.save()?;
-        self.run_turn_streaming(event_tx).await
+        self.reset_lifecycle_deny_streak_for_user_turn();
+        self.current_turn_system_reminder = self.take_pending_lifecycle_system_reminder();
+        let result = self.run_turn_streaming(event_tx).await;
+        self.current_turn_system_reminder = None;
+        result
     }
 
     /// Run one conversation turn with streaming events via mpsc channel (per-client)
@@ -92,8 +103,12 @@ impl Agent {
             );
         }
 
-        self.current_turn_system_reminder =
-            system_reminder.filter(|value| !value.trim().is_empty());
+        self.reset_lifecycle_deny_streak_for_user_turn();
+        let pending_lifecycle_reminder = self.take_pending_lifecycle_system_reminder();
+        self.current_turn_system_reminder = Self::merge_current_and_pending_system_reminders(
+            system_reminder,
+            pending_lifecycle_reminder,
+        );
 
         let mut blocks: Vec<ContentBlock> = images
             .into_iter()

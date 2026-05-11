@@ -37,8 +37,9 @@ use super::provider_control::{
 use super::{
     AwaitMembersRuntime, ClientConnectionInfo, ClientDebugState, FileAccess, SessionControlHandle,
     SessionInterruptQueues, SharedContext, SwarmEvent, SwarmMember, SwarmMutationRuntime,
-    VersionedPlan, format_structured_completion_report, register_session_interrupt_queue,
-    truncate_detail, update_member_status, update_member_status_with_report,
+    VersionedPlan, fanout_session_event_except, format_structured_completion_report,
+    register_session_interrupt_queue, truncate_detail, update_member_status,
+    update_member_status_with_report,
 };
 use crate::agent::Agent;
 use crate::bus::{Bus, BusEvent};
@@ -358,6 +359,7 @@ async fn handle_lightweight_control_request(
             working_dir,
             initial_message,
             request_nonce,
+            run_id,
         } => {
             handle_comm_spawn(
                 id,
@@ -365,6 +367,7 @@ async fn handle_lightweight_control_request(
                 working_dir,
                 initial_message,
                 request_nonce,
+                run_id,
                 &client_event_tx,
                 sessions,
                 global_session_id,
@@ -557,6 +560,7 @@ async fn handle_lightweight_control_request(
             target_session,
             task_id,
             message,
+            task_timeout_minutes,
         } => {
             handle_comm_assign_task(
                 id,
@@ -564,6 +568,7 @@ async fn handle_lightweight_control_request(
                 target_session,
                 task_id,
                 message,
+                task_timeout_minutes,
                 &client_event_tx,
                 sessions,
                 soft_interrupt_queues,
@@ -587,6 +592,7 @@ async fn handle_lightweight_control_request(
             prefer_spawn,
             spawn_if_needed,
             message,
+            run_id,
         } => {
             handle_comm_assign_next(
                 id,
@@ -596,6 +602,7 @@ async fn handle_lightweight_control_request(
                 prefer_spawn,
                 spawn_if_needed,
                 message,
+                run_id,
                 &client_event_tx,
                 sessions,
                 global_session_id,
@@ -621,6 +628,7 @@ async fn handle_lightweight_control_request(
             task_id,
             target_session,
             message,
+            task_timeout_minutes,
         } => {
             handle_comm_task_control(
                 id,
@@ -629,6 +637,7 @@ async fn handle_lightweight_control_request(
                 task_id,
                 target_session,
                 message,
+                task_timeout_minutes,
                 &client_event_tx,
                 sessions,
                 soft_interrupt_queues,
@@ -687,14 +696,19 @@ async fn handle_lightweight_control_request(
             session_id: req_session_id,
             target_status,
             session_ids: requested_ids,
+            owned_only,
             mode,
+            run_id,
             timeout_secs,
         } => {
+            let owned_only = owned_only.unwrap_or(requested_ids.is_empty());
             handle_comm_await_members(
                 id,
                 req_session_id,
                 target_status,
                 requested_ids,
+                owned_only,
+                run_id,
                 mode,
                 timeout_secs,
                 CommAwaitMembersContext {
@@ -1280,6 +1294,7 @@ pub(super) async fn handle_client(
                         system_reminder,
                     },
                     &client_session_id,
+                    &client_connection_id,
                     &mut ProcessingState {
                         client_is_processing: &mut client_is_processing,
                         message_id: &mut processing_message_id,
@@ -1788,6 +1803,30 @@ pub(super) async fn handle_client(
                 handle_set_subagent_model(id, model, &agent, &client_event_tx).await;
             }
 
+            Request::ActivateSkill { id, name } => {
+                let result = {
+                    let mut agent_guard = agent.lock().await;
+                    agent_guard.activate_skill(&name)
+                };
+
+                match result {
+                    Ok((name, description)) => {
+                        let _ = client_event_tx.send(ServerEvent::SkillActivated {
+                            id,
+                            name,
+                            description,
+                        });
+                    }
+                    Err(error) => {
+                        let _ = client_event_tx.send(ServerEvent::Error {
+                            id,
+                            message: error.to_string(),
+                            retry_after_secs: None,
+                        });
+                    }
+                }
+            }
+
             Request::RunSubagent {
                 id,
                 prompt,
@@ -2192,6 +2231,7 @@ pub(super) async fn handle_client(
                 working_dir,
                 initial_message,
                 request_nonce,
+                run_id,
             } => {
                 handle_comm_spawn(
                     id,
@@ -2199,6 +2239,7 @@ pub(super) async fn handle_client(
                     working_dir,
                     initial_message,
                     request_nonce,
+                    run_id,
                     &client_event_tx,
                     &sessions,
                     &global_session_id,
@@ -2400,6 +2441,7 @@ pub(super) async fn handle_client(
                 target_session,
                 task_id,
                 message,
+                task_timeout_minutes,
             } => {
                 handle_comm_assign_task(
                     id,
@@ -2407,6 +2449,7 @@ pub(super) async fn handle_client(
                     target_session,
                     task_id,
                     message,
+                    task_timeout_minutes,
                     &client_event_tx,
                     &sessions,
                     &soft_interrupt_queues,
@@ -2431,6 +2474,7 @@ pub(super) async fn handle_client(
                 prefer_spawn,
                 spawn_if_needed,
                 message,
+                run_id,
             } => {
                 handle_comm_assign_next(
                     id,
@@ -2440,6 +2484,7 @@ pub(super) async fn handle_client(
                     prefer_spawn,
                     spawn_if_needed,
                     message,
+                    run_id,
                     &client_event_tx,
                     &sessions,
                     &global_session_id,
@@ -2466,6 +2511,7 @@ pub(super) async fn handle_client(
                 task_id,
                 target_session,
                 message,
+                task_timeout_minutes,
             } => {
                 handle_comm_task_control(
                     id,
@@ -2474,6 +2520,7 @@ pub(super) async fn handle_client(
                     task_id,
                     target_session,
                     message,
+                    task_timeout_minutes,
                     &client_event_tx,
                     &sessions,
                     &soft_interrupt_queues,
@@ -2535,14 +2582,19 @@ pub(super) async fn handle_client(
                 session_id: req_session_id,
                 target_status,
                 session_ids: requested_ids,
+                owned_only,
                 mode,
+                run_id,
                 timeout_secs,
             } => {
+                let owned_only = owned_only.unwrap_or(requested_ids.is_empty());
                 handle_comm_await_members(
                     id,
                     req_session_id,
                     target_status,
                     requested_ids,
+                    owned_only,
+                    run_id,
                     mode,
                     timeout_secs,
                     CommAwaitMembersContext {
@@ -2597,6 +2649,7 @@ pub(super) async fn handle_client(
 async fn start_processing_message(
     message: ProcessingMessage,
     client_session_id: &str,
+    client_connection_id: &str,
     state: &mut ProcessingState<'_>,
     agent: &Arc<Mutex<Agent>>,
     client_event_tx: &mpsc::UnboundedSender<ServerEvent>,
@@ -2630,6 +2683,35 @@ async fn start_processing_message(
     *state.client_is_processing = true;
     *state.message_id = Some(id);
     *state.session_id = Some(client_session_id.to_string());
+
+    // Lazydino M15 (candidate C): echo the user message to sibling client
+    // connections attached to the same session so external `jcode` clients
+    // (e.g. another TUI or SDK consumer attached alongside the origin TUI)
+    // can render the freshly submitted text *and* any attached image bytes
+    // immediately. The origin connection is excluded because it already
+    // rendered its own local echo before sending `Request::Message`.
+    let sibling_images: Vec<jcode_session_types::RenderedImage> = images
+        .iter()
+        .enumerate()
+        .map(|(idx, (media_type, data))| jcode_session_types::RenderedImage {
+            media_type: media_type.clone(),
+            data: data.clone(),
+            label: Some(format!("image {}", idx + 1)),
+            source: jcode_session_types::RenderedImageSource::UserInput,
+        })
+        .collect();
+    let _delivered_to_siblings = fanout_session_event_except(
+        swarm.members,
+        client_session_id,
+        Some(client_connection_id),
+        ServerEvent::UserMessage {
+            id,
+            session_id: client_session_id.to_string(),
+            content: content.clone(),
+            images: sibling_images,
+        },
+    )
+    .await;
 
     update_member_status(
         client_session_id,
@@ -2785,8 +2867,18 @@ fn move_tool_to_background(
     session_control: &SessionControlHandle,
     client_event_tx: &mpsc::UnboundedSender<ServerEvent>,
 ) {
-    session_control.request_background_current_tool();
-    let _ = client_event_tx.send(ServerEvent::Ack { id });
+    if session_control.request_background_current_tool() {
+        let _ = client_event_tx.send(ServerEvent::Ack { id });
+    } else {
+        crate::logging::debug(
+            "background_tool requested but no active session control signal is registered",
+        );
+        let _ = client_event_tx.send(ServerEvent::Error {
+            id,
+            message: "No active tool is available to move to background".to_string(),
+            retry_after_secs: None,
+        });
+    }
 }
 
 /// Process a message and stream events (mpsc channel - per-client)

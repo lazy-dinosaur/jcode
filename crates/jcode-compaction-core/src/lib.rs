@@ -44,6 +44,22 @@ pub const EMBEDDING_HISTORY_WINDOW: usize = 10;
 /// Per-manager semantic embedding cache capacity.
 pub const SEMANTIC_EMBED_CACHE_CAPACITY: usize = 256;
 
+/// M14/M14a safety: maximum consecutive compaction failures (background task
+/// errors, panics, hard-compact rejects) before triggers short-circuit and
+/// stop calling the summarizer / hard-compact path. Reset to 0 on any
+/// successful compaction.
+///
+/// The user observed two related runaway loops:
+///   * proactive compaction firing on every new turn after the summarizer
+///     errored out (no cooldown applied on failure)
+///   * 22 consecutive emergency hard-compactions inside a single turn loop,
+///     because per-turn `MAX_CONTEXT_LIMIT_RETRIES` does not see the
+///     session-wide repetition.
+///
+/// 3 attempts is enough to recover from a transient failure but small enough
+/// to stop billing the user for an unrecoverable summarizer state.
+pub const MAX_CONSECUTIVE_COMPACTION_FAILURES: usize = 3;
+
 pub const SUMMARY_PROMPT: &str = r#"Summarize our conversation so you can continue this work later.
 
 Write in natural language with these sections:

@@ -28,6 +28,19 @@ const DEFAULT_SWARM_STATUS_DEBOUNCE_MS: u64 = 75;
 const DEFAULT_SWARM_TASK_HEARTBEAT_SECS: u64 = 10;
 const DEFAULT_SWARM_TASK_STALE_AFTER_SECS: u64 = 45;
 const DEFAULT_SWARM_TASK_SWEEP_INTERVAL_SECS: u64 = 5;
+const DEFAULT_WORKER_HEARTBEAT_STALE_SECS: u64 = 180;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum HeartbeatEvent {
+    Chunk,
+    ToolStart { name: String },
+    ToolDone { name: String },
+    Checkpoint { summary: String },
+}
+
+fn truncate_checkpoint(summary: &str) -> String {
+    truncate_detail(summary, 80)
+}
 #[derive(Default, Clone, Copy)]
 struct PendingSwarmStatusBroadcast {
     scheduled: bool,
@@ -103,6 +116,110 @@ pub(super) fn swarm_task_sweep_interval() -> Duration {
         "JCODE_SWARM_TASK_SWEEP_INTERVAL_SECS",
         DEFAULT_SWARM_TASK_SWEEP_INTERVAL_SECS,
     ))
+}
+
+pub(super) fn worker_heartbeat_stale_after(coord_cwd: Option<&std::path::Path>) -> Duration {
+    let secs = std::env::var("JCODE_WORKER_HEARTBEAT_STALE_SECS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .or_else(|| {
+            crate::config::config()
+                .swarm_for_working_dir(coord_cwd)
+                .heartbeat_stale_secs
+                .map(u64::from)
+        })
+        .unwrap_or(DEFAULT_WORKER_HEARTBEAT_STALE_SECS);
+    Duration::from_secs(secs)
+}
+
+pub(super) fn resolve_default_task_timeout_minutes(
+    coord_cwd: Option<&std::path::Path>,
+) -> Option<u32> {
+    std::env::var("JCODE_DEFAULT_TASK_TIMEOUT_MINUTES")
+        .ok()
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .filter(|value| *value > 0)
+        .or_else(|| {
+            crate::config::config()
+                .swarm_for_working_dir(coord_cwd)
+                .default_task_timeout_minutes
+                .filter(|value| *value > 0)
+        })
+}
+
+pub(super) async fn touch_member_heartbeat(
+    session_id: &str,
+    event: HeartbeatEvent,
+    swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,
+) -> bool {
+    let now = Instant::now();
+    let mut members = swarm_members.write().await;
+    let Some(member) = members.get_mut(session_id) else {
+        return false;
+    };
+    let revived = member.status == "running_stale";
+    member.last_heartbeat_at = Some(now);
+    match event {
+        HeartbeatEvent::Chunk => {}
+        HeartbeatEvent::ToolStart { name } | HeartbeatEvent::ToolDone { name } => {
+            member.last_tool = Some(name);
+        }
+        HeartbeatEvent::Checkpoint { summary } => {
+            member.last_checkpoint = Some(truncate_checkpoint(&summary));
+        }
+    }
+    if revived {
+        member.status = "running".to_string();
+        member.last_status_change = now;
+    }
+    revived
+}
+
+pub(super) fn heartbeat_age_secs(member: &SwarmMember) -> Option<u64> {
+    member
+        .last_heartbeat_at
+        .map(|last| last.elapsed().as_secs())
+}
+
+pub(super) fn evaluate_running_stale_members_now(
+    members: &mut HashMap<String, SwarmMember>,
+    threshold: Duration,
+) -> Vec<String> {
+    let now = Instant::now();
+    let mut transitioned = Vec::new();
+    for (session_id, member) in members.iter_mut() {
+        if member.status != "running" {
+            continue;
+        }
+        let last = member.last_heartbeat_at.unwrap_or(member.joined_at);
+        if now.duration_since(last) > threshold {
+            member.status = "running_stale".to_string();
+            member.last_status_change = now;
+            transitioned.push(session_id.clone());
+        }
+    }
+    transitioned
+}
+
+pub(super) async fn refresh_member_staleness(
+    swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,
+    swarms_by_id: &Arc<RwLock<HashMap<String, HashSet<String>>>>,
+) -> Vec<String> {
+    let threshold = worker_heartbeat_stale_after(None);
+    let (changed, swarm_ids) = {
+        let mut members = swarm_members.write().await;
+        let changed = evaluate_running_stale_members_now(&mut members, threshold);
+        let swarm_ids = changed
+            .iter()
+            .filter_map(|session_id| members.get(session_id).and_then(|m| m.swarm_id.clone()))
+            .collect::<HashSet<_>>();
+        (changed, swarm_ids)
+    };
+    for swarm_id in swarm_ids {
+        broadcast_swarm_status(&swarm_id, swarm_members, swarms_by_id).await;
+    }
+    changed
 }
 
 #[expect(
@@ -264,6 +381,9 @@ async fn broadcast_swarm_status_now(
                     is_headless: Some(m.is_headless),
                     live_attachments: Some(m.event_txs.len()),
                     status_age_secs: Some(status_age_secs(m.last_status_change)),
+                    last_heartbeat_secs_ago: heartbeat_age_secs(m),
+                    last_tool: m.last_tool.clone(),
+                    last_checkpoint: m.last_checkpoint.clone(),
                 })
         })
         .collect();
@@ -726,6 +846,10 @@ pub(super) async fn update_member_status_with_report(
             if status_changed {
                 member.last_status_change = Instant::now();
             }
+            member.last_heartbeat_at = Some(Instant::now());
+            if let Some(ref detail) = detail {
+                member.last_checkpoint = Some(truncate_checkpoint(detail));
+            }
             let name = member.friendly_name.clone();
             let is_headless = member.is_headless;
             let report_back_to_session_id = member.report_back_to_session_id.clone();
@@ -951,9 +1075,10 @@ fn parse_swarm_tasks(text: &str) -> Vec<SwarmTaskSpec> {
 #[cfg(test)]
 mod tests {
     use super::{
-        broadcast_swarm_plan_with_previous, now_unix_ms, parse_swarm_tasks,
-        refresh_swarm_task_staleness, remove_session_from_swarm, touch_swarm_task_progress,
-        update_member_status, update_member_status_with_report,
+        HeartbeatEvent, broadcast_swarm_plan_with_previous, evaluate_running_stale_members_now,
+        now_unix_ms, parse_swarm_tasks, refresh_swarm_task_staleness, remove_session_from_swarm,
+        touch_member_heartbeat, touch_swarm_task_progress, update_member_status,
+        update_member_status_with_report,
     };
     use crate::plan::PlanItem;
     use crate::protocol::{NotificationType, ServerEvent};
@@ -963,7 +1088,7 @@ mod tests {
     };
     use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
     use tokio::sync::{RwLock, mpsc};
 
     fn plan_item(id: &str, content: &str) -> PlanItem {
@@ -1042,10 +1167,14 @@ mod tests {
                 detail: None,
                 friendly_name: Some(session_id.to_string()),
                 report_back_to_session_id: None,
+                run_id: None,
                 latest_completion_report: None,
                 role: role.to_string(),
                 joined_at: Instant::now(),
                 last_status_change: Instant::now(),
+                last_heartbeat_at: Some(Instant::now()),
+                last_tool: None,
+                last_checkpoint: None,
                 is_headless,
             },
             event_rx,
@@ -1135,6 +1264,82 @@ mod tests {
             }
             other => panic!("expected SwarmPlan event, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn touch_heartbeat_updates_last_heartbeat_and_tool() {
+        let (member, _rx) = swarm_member("worker-hb", "agent", true);
+        let members = Arc::new(RwLock::new(HashMap::from([(
+            "worker-hb".to_string(),
+            member,
+        )])));
+
+        let revived = touch_member_heartbeat(
+            "worker-hb",
+            HeartbeatEvent::ToolStart {
+                name: "bash".to_string(),
+            },
+            &members,
+        )
+        .await;
+
+        assert!(!revived);
+        let guard = members.read().await;
+        let member = guard.get("worker-hb").unwrap();
+        assert!(member.last_heartbeat_at.is_some());
+        assert_eq!(member.last_tool.as_deref(), Some("bash"));
+    }
+
+    #[tokio::test]
+    async fn touch_heartbeat_restores_running_from_stale() {
+        let (mut member, _rx) = swarm_member("worker-stale", "agent", true);
+        member.status = "running_stale".to_string();
+        let members = Arc::new(RwLock::new(HashMap::from([(
+            "worker-stale".to_string(),
+            member,
+        )])));
+
+        let revived = touch_member_heartbeat("worker-stale", HeartbeatEvent::Chunk, &members).await;
+
+        assert!(revived);
+        assert_eq!(
+            members.read().await["worker-stale"].status.as_str(),
+            "running"
+        );
+    }
+
+    #[test]
+    fn evaluate_running_stale_transitions_after_threshold_and_skips_terminal() {
+        let (mut running, _rx) = swarm_member("running-old", "agent", true);
+        running.status = "running".to_string();
+        running.last_heartbeat_at = Some(Instant::now() - Duration::from_secs(10));
+        let (mut failed, _rx) = swarm_member("failed-old", "agent", true);
+        failed.status = "failed".to_string();
+        failed.last_heartbeat_at = Some(Instant::now() - Duration::from_secs(10));
+        let mut members = HashMap::from([
+            ("running-old".to_string(), running),
+            ("failed-old".to_string(), failed),
+        ]);
+
+        let changed = evaluate_running_stale_members_now(&mut members, Duration::from_secs(1));
+
+        assert_eq!(changed, vec!["running-old".to_string()]);
+        assert_eq!(members["running-old"].status, "running_stale");
+        assert_eq!(members["failed-old"].status, "failed");
+    }
+
+    #[test]
+    fn evaluate_running_stale_uses_joined_at_when_no_heartbeat() {
+        let (mut member, _rx) = swarm_member("never-heartbeat", "agent", true);
+        member.status = "running".to_string();
+        member.last_heartbeat_at = None;
+        member.joined_at = Instant::now() - Duration::from_secs(10);
+        let mut members = HashMap::from([("never-heartbeat".to_string(), member)]);
+
+        let changed = evaluate_running_stale_members_now(&mut members, Duration::from_secs(1));
+
+        assert_eq!(changed, vec!["never-heartbeat".to_string()]);
+        assert_eq!(members["never-heartbeat"].status, "running_stale");
     }
 
     #[tokio::test]

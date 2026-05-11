@@ -125,16 +125,37 @@ impl Agent {
 
         let (dropped, usage_pct) = match compaction.try_write() {
             Ok(mut manager) => {
+                // M14a: per-turn `MAX_CONTEXT_LIMIT_RETRIES` does not see
+                // session-wide repetition; if the previous emergency hard-compact
+                // attempts already failed N times in a row, stop retrying so we
+                // don't spin (the user observed 22 consecutive emergency
+                // compactions in one turn loop).
+                if manager.consecutive_compaction_failures()
+                    >= jcode_compaction_core::MAX_CONSECUTIVE_COMPACTION_FAILURES
+                {
+                    logging::warn(&format!(
+                        "Context-limit auto-recovery skipped: {} consecutive compaction failures (gate active until success or session reset)",
+                        manager.consecutive_compaction_failures()
+                    ));
+                    return false;
+                }
                 let (dropped, usage_pct) = {
                     let all_messages = self.session.provider_messages();
                     manager.update_observed_input_tokens(context_limit);
                     let usage_pct = manager.context_usage_with(all_messages) * 100.0;
                     let dropped = match manager.hard_compact_with(all_messages) {
-                        Ok(dropped) => dropped,
+                        Ok(dropped) => {
+                            // M14a: clean success clears the failure-streak gate
+                            // for both emergency and proactive paths.
+                            manager.note_compaction_success();
+                            dropped
+                        }
                         Err(reason) => {
+                            manager.note_compaction_failure();
                             logging::warn(&format!(
-                                "Context-limit auto-recovery failed: hard compact failed ({})",
-                                reason
+                                "Context-limit auto-recovery failed: hard compact failed ({}) [streak={}]",
+                                reason,
+                                manager.consecutive_compaction_failures()
                             ));
                             return false;
                         }

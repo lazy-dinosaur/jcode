@@ -25,8 +25,7 @@ struct SkillInput {
     #[serde(default = "default_action")]
     action: String,
     /// Skill name (required for load, reload, read)
-    #[serde(alias = "skill")]
-    #[serde(default)]
+    #[serde(default, alias = "skill")]
     name: Option<String>,
     /// Optional Claude-compatible Skill wrapper argument. The skill loader only
     /// needs to load the prompt, so args are currently accepted and ignored.
@@ -61,6 +60,10 @@ impl Tool for SkillTool {
                 "name": {
                     "type": "string",
                     "description": "Skill name."
+                },
+                "skill": {
+                    "type": "string",
+                    "description": "Skill name alias accepted from Skill-style calls."
                 }
             }
         })
@@ -126,7 +129,10 @@ impl SkillTool {
                 "No skills available.\n\n\
                 Skills are loaded from:\n\
                 - ~/.claude/skills/<skill-name>/SKILL.md\n\
-                - ./.claude/skills/<skill-name>/SKILL.md\n\n\
+                - ./.jcode/skills/<skill-name>/SKILL.md\n\
+                - ./.claude/skills/<skill-name>/SKILL.md\n\
+                - ./.agents/skills/<skill-name>/SKILL.md\n\
+                - ./.opencode/skills/<skill-name>/SKILL.md\n\n\
                 Create a SKILL.md file with YAML frontmatter:\n\
                 ---\n\
                 name: my-skill\n\
@@ -309,6 +315,7 @@ mod tests {
         assert_eq!(schema["type"], "object");
         assert!(schema["properties"]["action"].is_object());
         assert!(schema["properties"]["name"].is_object());
+        assert!(schema["properties"]["skill"].is_object());
     }
 
     #[tokio::test]
@@ -351,6 +358,17 @@ mod tests {
 
         let result = tool.execute(input, ctx).await.unwrap();
         assert!(result.output.contains("## Skill: optimization"));
+    }
+
+    #[tokio::test]
+    async fn test_load_accepts_skill_alias_for_missing_skill() {
+        let tool = create_test_tool();
+        let ctx = create_test_context();
+        let input = json!({"action": "load", "skill": "missing-alias"});
+
+        let result = tool.execute(input, ctx).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("missing-alias"));
     }
 
     #[tokio::test]

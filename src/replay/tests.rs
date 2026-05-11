@@ -4,17 +4,6 @@ use crate::protocol::SwarmMemberStatus;
 use crate::session::{StoredReplayEvent, StoredReplayEventKind};
 use chrono::{Duration, Utc};
 use std::ffi::OsString;
-use std::sync::{Mutex, OnceLock};
-
-static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-
-fn lock_env() -> std::sync::MutexGuard<'static, ()> {
-    let mutex = ENV_LOCK.get_or_init(|| Mutex::new(()));
-    match mutex.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    }
-}
 
 struct EnvVarGuard {
     key: &'static str,
@@ -258,6 +247,9 @@ fn test_export_timeline_includes_persisted_swarm_replay_events() {
                     is_headless: None,
                     live_attachments: None,
                     status_age_secs: None,
+                    last_heartbeat_secs_ago: None,
+                    last_tool: None,
+                    last_checkpoint: None,
                 }],
             },
         },
@@ -325,6 +317,9 @@ fn test_timeline_to_replay_events_converts_swarm_replay_events() {
                     is_headless: None,
                     live_attachments: None,
                     status_age_secs: None,
+                    last_heartbeat_secs_ago: None,
+                    last_tool: None,
+                    last_checkpoint: None,
                 }],
             },
         },
@@ -371,7 +366,7 @@ fn test_timeline_to_replay_events_converts_swarm_replay_events() {
 
 #[test]
 fn test_load_swarm_sessions_discovers_related_sessions() {
-    let _env_lock = lock_env();
+    let _env_lock = crate::storage::lock_test_env();
     let temp_home = tempfile::Builder::new()
         .prefix("jcode-replay-swarm-test-")
         .tempdir()
@@ -389,6 +384,9 @@ fn test_load_swarm_sessions_discovers_related_sessions() {
         is_headless: None,
         live_attachments: None,
         status_age_secs: None,
+        last_heartbeat_secs_ago: None,
+        last_tool: None,
+        last_checkpoint: None,
     }]);
     seed.save().unwrap();
 

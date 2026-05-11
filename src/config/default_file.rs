@@ -151,7 +151,7 @@ update_channel = "stable"
 [provider]
 # Default model (optional, uses provider default if not set)
 # Set via /model picker with Ctrl+D to save as default
-# default_model = "claude-opus-4-6"
+# default_model = "claude-opus-4-7"
 # Default provider (optional: claude|openai|copilot|openrouter)
 # When set, this provider is preferred on startup if available
 # default_provider = "copilot"
@@ -173,6 +173,126 @@ cross_provider_failover = "countdown"
 # Copilot premium mode: "normal" (default), "one" (first msg only), "zero" (all free)
 # Set to "zero" if you have premium Copilot and want free requests
 # copilot_premium = "zero"
+
+[prompt]
+# Project prompt/instruction loading.
+# If your repo has a team AGENTS.md but you want to use only your private .jcode harness,
+# set this in <project>/.jcode/config.toml:
+# ignore_project_agents = true
+ignore_project_agents = false
+# Ignore ~/.AGENTS.md if desired.
+ignore_global_agents = false
+# Load private project harness instructions from <project>/.jcode/AGENTS.md.
+load_jcode_agents = true
+# Load private project harness modules from <project>/.jcode/harness/*.md in sorted order.
+load_harness_dir = true
+
+[agents]
+# Default model override for spawned swarm/subagent sessions when no profile matches.
+# swarm_model = "gpt-5.5"
+# Optional memory sidecar model override.
+# memory_model = "claude-sonnet-4-6"
+# Enable memory sidecar extraction/relevance model.
+memory_sidecar_enabled = false
+
+# Lazydino M2 stage 2 — control whether `swarm spawn` opens a visible terminal
+# window for each new worker. Leaving this unset (or `true`) keeps upstream
+# behavior: try a visible terminal first and fall back to headless if no
+# emulator is available. Setting `false` forces every swarm worker to run
+# headless even when a terminal emulator is installed. This avoids the
+# upstream issue #76 failure mode where the coordinator opened 10+ visible
+# windows that the user could not easily control.
+#
+# The `JCODE_SWARM_NO_TERMINAL=1` env var (also `true`/`yes`/`on`) overrides
+# this setting at runtime without rebuilding. `JCODE_SWARM_NO_TERMINAL=0`
+# (also `false`/`no`/`off`) forces visible-first even if config says
+# otherwise. The spawn tool result string includes the active mode so the
+# coordinator agent always knows which mode it spawned under.
+#
+# swarm_spawn_visible = false
+
+# M11 lifecycle hooks: when a blocking response.completed hook prints
+# {"action":"deny","reason":"..."}, jcode immediately continues the turn
+# with that reason as a transient System Reminder. This cap prevents a bad
+# hook from creating an infinite self-correction loop.
+#
+# Default: 3 immediate continuation turns, then leave the reminder pending
+# for the next user prompt and stop the current turn.
+# Set to 0 for unlimited claude-code trust mode, where hook scripts are
+# expected to self-throttle using the response.completed payload field
+# `stop_hook_active = true` on continuation turns.
+# Environment override wins over config:
+#   JCODE_MAX_LIFECYCLE_DENY_STREAK=1 jcode
+# max_lifecycle_deny_streak = 3
+
+[swarm]
+# Lazydino M2 stage 3 — opt-in hard caps for concurrently active workers
+# owned by one coordinator. Active means any non-terminal worker status;
+# completed, failed, crashed, closed, and disconnected workers do not count.
+# `0` (the default) disables the cap entirely, matching upstream jcode
+# behavior. Set a positive value to defend against runaway spawn patterns
+# (see issue #76). Env vars override these values:
+#   JCODE_MAX_ACTIVE_SPAWNS_PER_COORDINATOR
+#   JCODE_MAX_ACTIVE_SPAWNS_PER_RUN
+# Defaults when unset are 0 (unlimited) for both.
+# max_active_spawns_per_coordinator = 0
+# max_active_spawns_per_run = 0
+#
+# Lazydino M2 stage 4 — worker heartbeat stale surfacing. A running worker
+# that emits no text/tool/status heartbeat for this many seconds is marked
+# running_stale on status/await reads. This is reversible; a later heartbeat
+# restores running. Env override: JCODE_WORKER_HEARTBEAT_STALE_SECS.
+# Default when unset: 180 seconds.
+# heartbeat_stale_secs = 180
+#
+# Optional hard timeout for assigned task execution. Default is unlimited for
+# safety; set this only when you explicitly want long-silent workers failed.
+# Per-request task_timeout_minutes on assign_task/start_task overrides this.
+# Env override: JCODE_DEFAULT_TASK_TIMEOUT_MINUTES.
+# default_task_timeout_minutes = 30
+#
+# Spawned worker cwd is pinned under the coordinator's cwd after canonicalizing
+# symlinks. To intentionally bypass for a one-off run, set env var only:
+#   JCODE_SWARM_ALLOW_ANY_CWD=1
+
+# Practical callable agent profiles. Each [agents.profiles.<type>] name becomes a valid
+# subagent_type exposed to the subagent tool. Profiles can carry model, variant/effort,
+# description, when-to-use guidance, and optional prompt instructions.
+#
+# Explicit `model` in the subagent tool still wins over profiles.
+# Reused session model also wins over profiles.
+# Deprecated [agents.routes.<type>] and [agents.routing] are still accepted for compatibility.
+#
+# GPT/OpenAI `variant = "max"` maps to jcode effort `xhigh`.
+# Supported Claude `variant = "max"` maps to the Claude Max / long-context `[1m]` route.
+# Gemini routes currently ignore variant.
+#
+# [agents.profiles.planner]
+# model = "claude-opus-4-7"
+# variant = "max"
+# description = "Planning and architecture agent for ambiguous or multi-step work."
+# when = ["the request needs decomposition", "architecture or sequencing decisions matter"]
+# prompt = "Create a concise plan, identify risks, and hand off implementation-ready steps."
+#
+# [agents.profiles.coder]
+# model = "gpt-5.5"
+# variant = "medium"
+# description = "Implementation agent for concrete code changes."
+# when = ["the plan is clear", "files need editing"]
+#
+# [agents.profiles.searcher]
+# model = "gpt-5.5"
+# variant = "medium"
+# description = "Codebase research agent for finding files, symbols, and implementation patterns."
+#
+# [agents.profiles.reviewer]
+# model = "claude-opus-4-7"
+# variant = "max"
+# description = "Review and risk analysis agent."
+#
+# [agents.profiles.quick]
+# model = "claude-haiku-4-5-20251001"
+# description = "Fast lightweight helper for tiny checks."
 
 [ambient]
 # Ambient mode: background agent that maintains your codebase
@@ -199,6 +319,10 @@ work_branch_prefix = "ambient/"
 # Show ambient cycle in a terminal window (default: true)
 # visible = true
 
+[reload]
+# Max seconds to wait for server History after reload before using local cached messages.
+awaiting_history_timeout_secs = 10
+
 [gateway]
 # Enable WebSocket gateway for iOS/web clients
 enabled = false
@@ -206,6 +330,93 @@ enabled = false
 port = 7643
 # Bind address (0.0.0.0 for LAN/Tailscale reachability)
 bind_addr = "0.0.0.0"
+
+[hooks]
+# Command hooks for tool/session/response lifecycle events (default: disabled).
+# Global hooks live here. Project hooks may be added in:
+#   <project>/.jcode/config.toml
+#   <project>/.jcode/config.local.toml
+# Project/local hook commands are appended to global hook commands.
+# Hooks receive a JSON payload on stdin.
+# Blocking tool.execute.before hooks may return {"action":"allow"} or {"action":"deny","reason":"..."}.
+# Blocking lifecycle hooks (response.completed, session.stop, client.disconnect) may also return
+# {"action":"deny","reason":"..."}; the reason is injected as a system reminder into the next user
+# turn. After 3 consecutive denies a loop guard surfaces a single notice telling the model to stop
+# and clears the streak (see M11 stage 3).
+enabled = false
+
+# Example: block or allow tool calls before execution.
+# [[hooks.commands]]
+# event = "tool.execute.before"
+# tool = "bash" # optional, use "*" or omit for all tools
+# command = ".jcode/hooks/check-bash.sh"
+# blocking = true
+# timeout_ms = 3000
+
+# Example: log tool results after execution.
+# [[hooks.commands]]
+# event = "tool.execute.after"
+# command = ".jcode/hooks/log-tool.sh"
+# blocking = false
+# timeout_ms = 3000
+
+# Example: react to client teardown (M11 stage 4). Fires when a client connection
+# closes or crashes. Preferred over `session.stop` for client-disconnect semantics.
+# [[hooks.commands]]
+# event = "client.disconnect"
+# command = ".jcode/hooks/client-disconnect.sh"
+# blocking = false
+# timeout_ms = 3000
+
+# Example: notify when a session truly stops. Currently `session.stop` is also
+# emitted on client disconnect for backward compatibility; new hooks should
+# prefer `client.disconnect` above. `session.stop` will be reserved for a
+# future explicit logical session-end signal.
+# [[hooks.commands]]
+# event = "session.stop"
+# command = ".jcode/hooks/session-stop.sh"
+# blocking = false
+# timeout_ms = 3000
+
+# Example: log final assistant response completion once per turn.
+# [[hooks.commands]]
+# event = "response.completed"
+# command = ".jcode/hooks/response-completed.sh"
+# blocking = false
+# timeout_ms = 3000
+
+# M11 stage 5: lifecycle hook payloads (response.completed, session.stop,
+# client.disconnect) carry these optional context fields. They are omitted
+# from the JSON when empty so existing scripts keep working unchanged:
+#
+#   last_user_message     string  Most recent user-authored input
+#                                 (system reminders skipped, max 500 chars)
+#   recent_tool_calls     array   Up to 5 most-recent tool uses, each:
+#                                   { "name": "bash",
+#                                     "args_preview": "{\"command\":\"git status\"}" }
+#                                 args_preview is one-line and ≤200 chars.
+#   turn_count            number  Distinct user-authored turns so far
+#   session_age_seconds   number  Seconds since session creation
+#
+# Example policy: block "commit and push" requests where the model didn't
+# actually run git. Save as .jcode/hooks/require-git-on-commit.sh:
+#
+#   #!/usr/bin/env bash
+#   read -r payload
+#   msg=$(printf '%s' "$payload" | jq -r '.last_user_message // ""')
+#   tools=$(printf '%s' "$payload" | jq -r '.recent_tool_calls[].name // ""')
+#   if printf '%s' "$msg" | grep -qiE "commit|push|커밋"; then
+#     if ! printf '%s' "$tools" | grep -qE '^bash$'; then
+#       printf '{"action":"deny","reason":"commit was requested but no git tool ran"}'
+#     fi
+#   fi
+#
+# Wire it up with:
+# [[hooks.commands]]
+# event = "response.completed"
+# command = ".jcode/hooks/require-git-on-commit.sh"
+# blocking = true
+# timeout_ms = 3000
 
 [safety]
 # Notification settings for ambient mode events

@@ -4,7 +4,10 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::time::Instant;
 
-use super::journal::{PersistVectorMode, SessionJournalEntry, metadata_requires_snapshot};
+use super::journal::{
+    PersistVectorMode, SessionJournalEntry, metadata_requires_journal_append,
+    metadata_requires_snapshot,
+};
 use super::storage_paths::{file_len_or_zero, session_journal_path_from_snapshot, session_path};
 use super::{MAX_SESSION_JOURNAL_BYTES, RemoteStartupSessionSnapshot, Session, SessionStartupStub};
 use crate::storage;
@@ -20,6 +23,48 @@ impl Session {
         self.mark_memory_profile_dirty();
     }
 
+    /// Replay journal entries from disk into this session, returning the
+    /// number of entries successfully applied. Stops at first parse error
+    /// (logging the failure) so partial recovery is still possible.
+    ///
+    /// Used by all session-load paths so journal-only data (messages
+    /// appended after the last snapshot checkpoint) is never silently
+    /// dropped on read. This is critical when the server is killed or
+    /// crashes before `/save` runs — the snapshot file may be stale but
+    /// the journal still has the latest user/assistant messages.
+    fn replay_journal_from_path(&mut self, journal_path: &Path) -> std::io::Result<usize> {
+        if !journal_path.exists() {
+            return Ok(0);
+        }
+        let file = std::fs::File::open(journal_path)?;
+        let reader = BufReader::new(file);
+        let mut applied = 0usize;
+        for (line_idx, line) in reader.lines().enumerate() {
+            let line = line?;
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<SessionJournalEntry>(trimmed) {
+                Ok(entry) => {
+                    applied += 1;
+                    self.apply_journal_entry(entry);
+                }
+                Err(err) => {
+                    crate::logging::warn(&format!(
+                        "Session journal parse failed at {} line {}: {} (stopping; {} entries applied)",
+                        journal_path.display(),
+                        line_idx + 1,
+                        err,
+                        applied
+                    ));
+                    break;
+                }
+            }
+        }
+        Ok(applied)
+    }
+
     fn checkpoint_snapshot(&mut self, snapshot_path: &Path, journal_path: &Path) -> Result<()> {
         storage::write_json_fast(snapshot_path, self)?;
         if journal_path.exists() {
@@ -27,6 +72,61 @@ impl Session {
         }
         self.reset_persist_state(true);
         Ok(())
+    }
+
+    /// Append a single new message to the session journal immediately.
+    ///
+    /// Best-effort: failure must not break the in-memory session, only logged.
+    /// Caller must have already pushed `message` into `self.messages`.
+    /// On success, advances `persist_state.messages_len` so the next `save()`
+    /// does not duplicate this message in the save-time journal delta.
+    pub(crate) fn append_journal_entry_for_new_message(
+        &mut self,
+        message: &super::StoredMessage,
+    ) -> std::io::Result<()> {
+        if self.persist_state.messages_mode == PersistVectorMode::Full {
+            return Ok(());
+        }
+
+        let snapshot_path =
+            session_path(&self.id).map_err(|err| std::io::Error::other(err.to_string()))?;
+        if !snapshot_path.exists() {
+            return Ok(());
+        }
+
+        let current_meta = self.journal_meta();
+        if self
+            .persist_state
+            .last_meta
+            .as_ref()
+            .is_some_and(|prev| metadata_requires_snapshot(prev, &current_meta))
+        {
+            return Ok(());
+        }
+
+        let journal_path = session_journal_path_from_snapshot(&snapshot_path);
+        let entry = SessionJournalEntry {
+            meta: current_meta,
+            append_messages: vec![message.clone()],
+            append_env_snapshots: Vec::new(),
+            append_memory_injections: Vec::new(),
+            append_replay_events: Vec::new(),
+        };
+
+        match storage::append_json_line_fast(&journal_path, &entry) {
+            Ok(()) => {
+                self.persist_state.messages_len += 1;
+                Ok(())
+            }
+            Err(err) => {
+                let io_err = std::io::Error::other(err.to_string());
+                crate::logging::warn(&format!(
+                    "Immediate session journal append failed for {}: {}",
+                    self.id, io_err
+                ));
+                Err(io_err)
+            }
+        }
     }
 
     pub fn load_from_path(path: &Path) -> Result<Self> {
@@ -38,33 +138,7 @@ impl Session {
         let journal_path = session_journal_path_from_snapshot(path);
         let journal_bytes = file_len_or_zero(&journal_path);
         let journal_start = Instant::now();
-        let mut journal_entries = 0usize;
-        if journal_path.exists() {
-            let file = std::fs::File::open(&journal_path)?;
-            let reader = BufReader::new(file);
-            for (line_idx, line) in reader.lines().enumerate() {
-                let line = line?;
-                let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                match serde_json::from_str::<SessionJournalEntry>(trimmed) {
-                    Ok(entry) => {
-                        journal_entries += 1;
-                        session.apply_journal_entry(entry)
-                    }
-                    Err(err) => {
-                        crate::logging::warn(&format!(
-                            "Session journal parse failed at {} line {}: {}",
-                            journal_path.display(),
-                            line_idx + 1,
-                            err
-                        ));
-                        break;
-                    }
-                }
-            }
-        }
+        let journal_entries = session.replay_journal_from_path(&journal_path)?;
         let journal_ms = journal_start.elapsed().as_millis();
         let finalize_start = Instant::now();
         session.reset_persist_state(path.exists());
@@ -93,16 +167,47 @@ impl Session {
         Self::load_from_path(&path)
     }
 
-    /// Load only the metadata needed for remote-client startup.
+    /// Load metadata needed for remote-client startup, plus any journal-only
+    /// messages so that messages appended after the last snapshot checkpoint
+    /// are not silently dropped on read.
     ///
-    /// This intentionally skips heavyweight transcript vectors so the remote
+    /// This is the safety-net fallback when `load_for_remote_startup` fails
+    /// (e.g. snapshot file is corrupt, contains an unknown variant, or was
+    /// truncated). Even in that case we want to surface whatever the journal
+    /// holds rather than show the user an empty conversation.
+    ///
+    /// Lighter than `load_for_remote_startup`: skips heavyweight transcript
+    /// vectors in the snapshot (only stub fields are decoded), so the remote
     /// client can paint quickly while the server performs the authoritative
     /// session restore + history bootstrap.
     pub fn load_startup_stub(session_id: &str) -> Result<Self> {
         let path = session_path(session_id)?;
         let reader = BufReader::new(std::fs::File::open(&path)?);
         let stub: SessionStartupStub = serde_json::from_reader(reader)?;
-        Ok(Self::session_from_startup_stub(stub))
+        let mut session = Self::session_from_startup_stub(stub);
+        let journal_path = session_journal_path_from_snapshot(&path);
+        let journal_entries = match session.replay_journal_from_path(&journal_path) {
+            Ok(n) => n,
+            Err(err) => {
+                crate::logging::warn(&format!(
+                    "load_startup_stub: journal replay failed for {}: {}",
+                    session.id, err
+                ));
+                0
+            }
+        };
+        if journal_entries > 0 {
+            crate::logging::info(&format!(
+                "load_startup_stub: session={}, journal_entries={}, messages={}",
+                session.id,
+                journal_entries,
+                session.messages.len(),
+            ));
+        }
+        session.reset_persist_state(path.exists());
+        session.reset_provider_messages_cache();
+        session.mark_memory_profile_dirty();
+        Ok(session)
     }
 
     pub fn load_for_remote_startup(session_id: &str) -> Result<Self> {
@@ -117,35 +222,7 @@ impl Session {
         let journal_path = session_journal_path_from_snapshot(&path);
         let journal_bytes = file_len_or_zero(&journal_path);
         let journal_start = Instant::now();
-        let mut journal_entries = 0usize;
-        if journal_path.exists() {
-            let file = std::fs::File::open(&journal_path)?;
-            let reader = BufReader::new(file);
-            for (line_idx, line) in reader.lines().enumerate() {
-                let line = line?;
-                let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                match serde_json::from_str::<SessionJournalEntry>(trimmed) {
-                    Ok(entry) => {
-                        journal_entries += 1;
-                        session.apply_journal_meta(entry.meta);
-                        session.messages.extend(entry.append_messages);
-                        session.replay_events.extend(entry.append_replay_events);
-                    }
-                    Err(err) => {
-                        crate::logging::warn(&format!(
-                            "Remote startup journal parse failed at {} line {}: {}",
-                            journal_path.display(),
-                            line_idx + 1,
-                            err
-                        ));
-                        break;
-                    }
-                }
-            }
-        }
+        let journal_entries = session.replay_journal_from_path(&journal_path)?;
         let journal_ms = journal_start.elapsed().as_millis();
         let finalize_start = Instant::now();
         session.reset_persist_state(path.exists());
@@ -206,6 +283,24 @@ impl Session {
             .replay_events
             .len()
             .saturating_sub(self.persist_state.replay_events_len);
+
+        let metadata_needs_journal_append = self
+            .persist_state
+            .last_meta
+            .as_ref()
+            .is_some_and(|prev| metadata_requires_journal_append(prev, &current_meta));
+        if !metadata_needs_snapshot
+            && !vectors_need_snapshot
+            && !metadata_needs_journal_append
+            && delta_messages == 0
+            && delta_env_snapshots == 0
+            && delta_memory_injections == 0
+            && delta_replay_events == 0
+        {
+            self.reset_persist_state(true);
+            return Ok(());
+        }
+
         let (
             result,
             save_mode,

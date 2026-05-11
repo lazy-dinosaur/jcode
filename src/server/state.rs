@@ -156,6 +156,8 @@ pub struct SwarmMember {
     pub friendly_name: Option<String>,
     /// Session that should receive direct completion report-back for this member, if any.
     pub report_back_to_session_id: Option<String>,
+    /// Run/generation id for the orchestration run that spawned this member.
+    pub run_id: Option<String>,
     /// Latest explicit completion report submitted by this member.
     pub latest_completion_report: Option<String>,
     /// Role: "agent", "coordinator", "worktree_manager"
@@ -164,6 +166,12 @@ pub struct SwarmMember {
     pub joined_at: Instant,
     /// When status was last changed
     pub last_status_change: Instant,
+    /// Last observed activity heartbeat for this member.
+    pub last_heartbeat_at: Option<Instant>,
+    /// Last tool name observed for this member. Tool args are intentionally not stored.
+    pub last_tool: Option<String>,
+    /// Last short checkpoint/status summary observed for this member.
+    pub last_checkpoint: Option<String>,
     /// Whether this is a headless (spawned) session vs a TUI-connected session.
     /// Headless sessions should not be automatically elected as coordinator.
     pub is_headless: bool,
@@ -180,6 +188,7 @@ impl SwarmMember {
             detail: self.detail.clone(),
             friendly_name: self.friendly_name.clone(),
             report_back_to_session_id: self.report_back_to_session_id.clone(),
+            run_id: self.run_id.clone(),
             latest_completion_report: self.latest_completion_report.clone(),
             role: SwarmRole::from(self.role.clone()),
             is_headless: self.is_headless,
@@ -211,10 +220,14 @@ impl SwarmMember {
             detail: record.detail,
             friendly_name: record.friendly_name,
             report_back_to_session_id: record.report_back_to_session_id,
+            run_id: record.run_id,
             latest_completion_report: record.latest_completion_report,
             role: record.role.as_str().into_owned(),
             joined_at: Instant::now(),
             last_status_change: Instant::now(),
+            last_heartbeat_at: Some(Instant::now()),
+            last_tool: None,
+            last_checkpoint: None,
             is_headless: record.is_headless,
         }
     }
@@ -322,6 +335,26 @@ pub(super) async fn fanout_session_event(
     session_id: &str,
     event: ServerEvent,
 ) -> usize {
+    fanout_session_event_except(swarm_members, session_id, None, event).await
+}
+
+/// Like `fanout_session_event` but skips the given `excluded_connection_id`.
+///
+/// Lazydino M15 (candidate C): used when the server wants to echo a message
+/// to all sibling client connections of a session *except* the origin that
+/// just submitted it (which already rendered the message locally via TUI echo
+/// or via its own request/response pairing).
+///
+/// If `excluded_connection_id` is `None` this behaves identically to
+/// `fanout_session_event`. When the only connection in the member's
+/// `event_txs` map matches the exclusion, the fallback `event_tx` is also
+/// suppressed so we do not double-deliver.
+pub(super) async fn fanout_session_event_except(
+    swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,
+    session_id: &str,
+    excluded_connection_id: Option<&str>,
+    event: ServerEvent,
+) -> usize {
     let targets = {
         let mut members = swarm_members.write().await;
         let Some(member) = members.get_mut(session_id) else {
@@ -331,12 +364,29 @@ pub(super) async fn fanout_session_event(
         member.event_txs.retain(|_, tx| !tx.is_closed());
 
         if member.event_txs.is_empty() {
-            vec![member.event_tx.clone()]
+            // No live connections registered: the fallback `event_tx` is the
+            // only path back to whoever owns this session. If it's the same
+            // connection we're trying to exclude (origin-only attach) the
+            // M15 echo would loop right back to the sender, so just bail.
+            if excluded_connection_id.is_some() {
+                vec![]
+            } else {
+                vec![member.event_tx.clone()]
+            }
         } else {
             if let Some((_, tx)) = member.event_txs.iter().next() {
                 member.event_tx = tx.clone();
             }
-            member.event_txs.values().cloned().collect::<Vec<_>>()
+            member
+                .event_txs
+                .iter()
+                .filter(|(conn_id, _)| {
+                    excluded_connection_id
+                        .map(|excluded| conn_id.as_str() != excluded)
+                        .unwrap_or(true)
+                })
+                .map(|(_, tx)| tx.clone())
+                .collect::<Vec<_>>()
         }
     };
 

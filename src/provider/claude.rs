@@ -21,7 +21,7 @@ use tokio_stream::wrappers::ReceiverStream;
 /// that occur when multiple CLI instances run concurrently
 static CLAUDE_CLI_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
-const DEFAULT_MODEL: &str = "claude-opus-4-6";
+const DEFAULT_MODEL: &str = "claude-opus-4-7";
 const DEFAULT_PERMISSION_MODE: &str = "bypassPermissions";
 
 /// Maximum number of retries for transient errors
@@ -35,6 +35,7 @@ const TRANSPORT_ERROR_DELAY_MS: u64 = 2000;
 
 /// Available Claude models
 const AVAILABLE_MODELS: &[&str] = &[
+    "claude-opus-4-7",
     "claude-opus-4-6",
     "claude-sonnet-4-6",
     "claude-opus-4-5-20251101",

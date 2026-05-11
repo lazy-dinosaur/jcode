@@ -1,3 +1,4 @@
+use super::turn_loops::LifecycleHookOutcome;
 use super::*;
 
 impl Agent {
@@ -9,8 +10,14 @@ impl Agent {
         let trace = trace_enabled();
         let mut context_limit_retries = 0u32;
         let mut incomplete_continuations = 0u32;
+        let mut empty_after_tool_continuations = 0u32;
 
         loop {
+            // Clear any stale background-tool request before the provider can emit
+            // ToolStart for this turn. Once ToolStart is visible to the UI, an
+            // Alt+B fire must be preserved until the tool execution select observes it.
+            self.background_tool_signal.reset();
+
             let repaired = self.repair_missing_tool_outputs();
             if repaired > 0 {
                 logging::warn(&format!(
@@ -640,6 +647,7 @@ impl Agent {
                 &mut tool_calls,
                 assistant_message_id.as_ref(),
             );
+            let assistant_tool_calls_count = tool_calls.len();
 
             if tool_calls.is_empty() && !generated_image_contexts.is_empty() {
                 for blocks in generated_image_contexts.drain(..) {
@@ -652,6 +660,15 @@ impl Agent {
                 continue;
             }
 
+            if tool_calls.is_empty()
+                && assistant_message_id.is_none()
+                && text_content.trim().is_empty()
+                && self
+                    .maybe_continue_empty_after_tool_result(&mut empty_after_tool_continuations)?
+            {
+                continue;
+            }
+
             // If no tool calls, check for soft interrupt or exit
             // NOTE: We only inject here (Point B) when there are no tools.
             // Injecting before tool_results would break the API requirement that
@@ -661,7 +678,23 @@ impl Agent {
                     stop_reason.as_deref(),
                     &mut incomplete_continuations,
                 )? {
-                    NoToolCallOutcome::Break => break,
+                    NoToolCallOutcome::Break => {
+                        match self
+                            .fire_response_completed_hook(
+                                assistant_message_id.as_deref(),
+                                stop_reason.as_deref(),
+                                assistant_tool_calls_count,
+                                text_content.chars().count(),
+                            )
+                            .await
+                        {
+                            LifecycleHookOutcome::Stop => break,
+                            LifecycleHookOutcome::ContinueImmediate => {
+                                self.inject_lifecycle_reminder_for_continuation();
+                                continue;
+                            }
+                        }
+                    }
                     NoToolCallOutcome::ContinueWithoutEvent => continue,
                     NoToolCallOutcome::ContinueWithSoftInterrupt { injected, point } => {
                         for event in Self::build_soft_interrupt_events(injected, point, None) {
@@ -711,7 +744,21 @@ impl Agent {
                         // Don't break - continue loop to process injected message
                         continue;
                     }
-                    break;
+                    match self
+                        .fire_response_completed_hook(
+                            assistant_message_id.as_deref(),
+                            stop_reason.as_deref(),
+                            assistant_tool_calls_count,
+                            text_content.chars().count(),
+                        )
+                        .await
+                    {
+                        LifecycleHookOutcome::Stop => break,
+                        LifecycleHookOutcome::ContinueImmediate => {
+                            self.inject_lifecycle_reminder_for_continuation();
+                            continue;
+                        }
+                    }
                 }
             }
 
@@ -832,9 +879,6 @@ impl Agent {
                         .execute(&tool_name_for_spawn, tool_input_for_spawn, ctx)
                         .await
                 });
-
-                // Reset background signal before waiting
-                self.background_tool_signal.reset();
 
                 // Wait for tool completion OR background signal from user (Alt+B)
                 // OR graceful shutdown signal from server reload
@@ -991,8 +1035,19 @@ impl Agent {
                         tool_elapsed.as_secs_f64()
                     ));
 
+                    let delivery_session_id = self
+                        .session
+                        .parent_id
+                        .clone()
+                        .unwrap_or_else(|| self.session.id.clone());
                     let bg_info = crate::background::global()
-                        .adopt(&tc.name, &self.session.id, tool_handle)
+                        .adopt_with_delivery(
+                            &tc.name,
+                            &self.session.id,
+                            &delivery_session_id,
+                            true,
+                            tool_handle,
+                        )
                         .await;
 
                     let bg_msg = format!(
@@ -1018,9 +1073,36 @@ impl Agent {
                         }],
                         Some(tool_elapsed.as_millis() as u64),
                     );
-                    self.session.save()?;
 
                     self.background_tool_signal.reset();
+
+                    // M8: end the current turn after Alt+B detach. Without this
+                    // return, the parent agent kept driving the turn loop into
+                    // the next provider call, which left TUI `is_processing=true`
+                    // and blocked client-side queued messages from dispatching.
+                    // The detached tool keeps running in the background and its
+                    // result is delivered back via the bg/wait flow when the
+                    // user (or agent) chooses to collect it.
+                    //
+                    // Fill in skipped ToolResults for any remaining tool_calls
+                    // in this round so the persisted history stays valid for
+                    // the API invariant (every tool_use must have a matching
+                    // tool_result before the next assistant turn).
+                    for remaining_tc in &tool_calls[(tool_index + 1)..] {
+                        self.add_message(
+                            Role::User,
+                            vec![ContentBlock::ToolResult {
+                                tool_use_id: remaining_tc.id.clone(),
+                                content: format!(
+                                    "[Skipped: '{}' was moved to background; remaining tools in this round are deferred]",
+                                    tc.name
+                                ),
+                                is_error: Some(true),
+                            }],
+                        );
+                    }
+                    self.session.save()?;
+                    return Ok(());
                 }
 
                 // NOTE: We do NOT inject between tools (non-urgent) because that would

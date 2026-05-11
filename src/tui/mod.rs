@@ -55,6 +55,10 @@ pub(crate) fn scheduled_notification_text(
     Some(format!("⏰ next scheduled task {}{}", next, suffix))
 }
 
+pub(crate) fn registered_command_names() -> Vec<&'static str> {
+    app::state_ui_input_helpers::registered_command_names()
+}
+
 pub(crate) use self::core::DisplayMessageRoleExt;
 pub use jcode_tui_core::{
     CopySelectionPane, CopySelectionPoint, CopySelectionRange, CopySelectionStatus,

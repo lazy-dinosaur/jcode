@@ -440,6 +440,9 @@ async fn handle_remote_key_internal(
                 return Ok(());
             }
             KeyCode::Char('c') | KeyCode::Char('d') => {
+                if abort_awaiting_history_with_local_cache(app, remote).await {
+                    return Ok(());
+                }
                 if app.is_processing {
                     remote.cancel().await?;
                     app.set_status_notice("Interrupting...");
@@ -2214,6 +2217,8 @@ async fn handle_remote_key_internal(
             {
                 app.inline_interactive_state = None;
                 input::clear_input_for_escape(app);
+            } else if abort_awaiting_history_with_local_cache(app, remote).await {
+                return Ok(());
             } else if app.is_processing {
                 let disabled_auto_poke = app.auto_poke_incomplete_todos
                     || app

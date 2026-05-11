@@ -120,6 +120,13 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     RegisteredCommand::hidden("/zstatus", "Secret premium-mode status command"),
 ];
 
+pub(crate) fn registered_command_names() -> Vec<&'static str> {
+    REGISTERED_COMMANDS
+        .iter()
+        .map(|command| command.name)
+        .collect()
+}
+
 impl App {
     /// Find word boundary going backward (for Ctrl+W, Alt+B)
     pub(super) fn find_word_boundary_back(&self) -> usize {
@@ -274,6 +281,28 @@ impl App {
             })
             .collect();
 
+        fn push_project_commands(
+            commands: &mut Vec<(String, &'static str)>,
+            seen: &mut std::collections::HashSet<String>,
+            project_commands: &crate::project_commands::ProjectCommandRegistry,
+        ) {
+            for command_def in project_commands.list() {
+                let command = format!("/{}", command_def.name);
+                if seen.insert(command.clone()) {
+                    let help: &'static str = command_def
+                        .description
+                        .as_deref()
+                        .filter(|description| !description.trim().is_empty())
+                        .map(|description| {
+                            Box::leak(format!("{} [project]", description.trim()).into_boxed_str())
+                                as &'static str
+                        })
+                        .unwrap_or("Project command");
+                    commands.push((command, help));
+                }
+            }
+        }
+
         let skills = self.current_skills_snapshot();
         push_skill_commands(&mut commands, &mut seen, &skills);
 
@@ -289,6 +318,11 @@ impl App {
         if let Ok(reloaded) = crate::skill::SkillRegistry::load_for_working_dir(working_dir) {
             push_skill_commands(&mut commands, &mut seen, &reloaded);
         }
+
+        push_project_commands(&mut commands, &mut seen, &self.project_commands);
+        let reloaded_project_commands =
+            crate::project_commands::ProjectCommandRegistry::load_for_working_dir(working_dir);
+        push_project_commands(&mut commands, &mut seen, &reloaded_project_commands);
 
         commands
     }

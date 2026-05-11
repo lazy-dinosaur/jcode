@@ -133,6 +133,81 @@ fn test_prompt_overlay_files_are_loaded_from_project_and_global_jcode_dirs() {
 }
 
 #[test]
+fn test_private_jcode_agents_load_after_project_agents() {
+    let project_dir = tempfile::TempDir::new().unwrap();
+    std::fs::create_dir_all(project_dir.path().join(".jcode")).unwrap();
+    std::fs::write(project_dir.path().join("AGENTS.md"), "team harness").unwrap();
+    std::fs::write(
+        project_dir.path().join(".jcode/AGENTS.md"),
+        "personal harness",
+    )
+    .unwrap();
+
+    let prompt_config = crate::config::PromptConfig::default();
+    let (content, info) =
+        load_agents_md_files_from_dir_with_config(Some(project_dir.path()), &prompt_config);
+    let content = content.expect("agents content");
+
+    assert!(info.has_project_agents_md);
+    assert!(info.has_jcode_agents_md);
+    assert!(content.contains("team harness"));
+    assert!(content.contains("personal harness"));
+    assert!(
+        content.find("team harness").unwrap() < content.find("personal harness").unwrap(),
+        "personal .jcode harness should load after team AGENTS.md for prompt priority"
+    );
+}
+
+#[test]
+fn test_prompt_config_can_ignore_project_agents_and_keep_private_harness() {
+    let project_dir = tempfile::TempDir::new().unwrap();
+    std::fs::create_dir_all(project_dir.path().join(".jcode")).unwrap();
+    std::fs::write(project_dir.path().join("AGENTS.md"), "team harness").unwrap();
+    std::fs::write(
+        project_dir.path().join(".jcode/AGENTS.md"),
+        "personal harness",
+    )
+    .unwrap();
+
+    let prompt_config = crate::config::PromptConfig {
+        ignore_project_agents: true,
+        ..Default::default()
+    };
+    let (content, info) =
+        load_agents_md_files_from_dir_with_config(Some(project_dir.path()), &prompt_config);
+    let content = content.expect("agents content");
+
+    assert!(!info.has_project_agents_md);
+    assert!(info.has_jcode_agents_md);
+    assert!(!content.contains("team harness"));
+    assert!(content.contains("personal harness"));
+}
+
+#[test]
+fn test_private_jcode_harness_modules_load_sorted() {
+    let project_dir = tempfile::TempDir::new().unwrap();
+    let harness_dir = project_dir.path().join(".jcode/harness");
+    std::fs::create_dir_all(&harness_dir).unwrap();
+    std::fs::write(harness_dir.join("20-coder.md"), "coder module").unwrap();
+    std::fs::write(harness_dir.join("10-planner.md"), "planner module").unwrap();
+    std::fs::write(harness_dir.join("ignore.txt"), "ignored").unwrap();
+
+    let prompt_config = crate::config::PromptConfig::default();
+    let (content, _overlay_chars, harness_chars) =
+        load_prompt_overlay_files_from_dir_with_config(Some(project_dir.path()), &prompt_config);
+    let content = content.expect("harness content");
+
+    assert!(harness_chars > 0);
+    assert!(content.contains("planner module"));
+    assert!(content.contains("coder module"));
+    assert!(!content.contains("ignored"));
+    assert!(
+        content.find("planner module").unwrap() < content.find("coder module").unwrap(),
+        "harness modules should load in sorted filename order"
+    );
+}
+
+#[test]
 fn test_non_selfdev_prompt_includes_lightweight_selfdev_hint() {
     let prompt = build_system_prompt(None, &[]);
     assert!(prompt.contains("Self-Development Access"));

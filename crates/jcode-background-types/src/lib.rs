@@ -68,6 +68,21 @@ pub struct BackgroundTaskProgressEvent {
     pub task_id: String,
     pub tool_name: String,
     pub display_name: Option<String>,
+    /// Session id where the task was owned/executed.
     pub session_id: String,
+    /// Session id where progress should be delivered. Defaults to `session_id`
+    /// at construction sites for backwards-compatible owner-local delivery.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub delivery_session_id: String,
     pub progress: BackgroundTaskProgress,
+}
+
+impl BackgroundTaskProgressEvent {
+    pub fn delivery_session_id_or_owner(&self) -> &str {
+        if self.delivery_session_id.is_empty() {
+            &self.session_id
+        } else {
+            &self.delivery_session_id
+        }
+    }
 }

@@ -322,6 +322,10 @@ pub enum Request {
         model: Option<String>,
     },
 
+    /// Activate a skill on the server-side session.
+    #[serde(rename = "activate_skill")]
+    ActivateSkill { id: u64, name: String },
+
     /// Launch a subagent immediately in the active session.
     #[serde(rename = "run_subagent")]
     RunSubagent {
@@ -545,6 +549,9 @@ pub enum Request {
         initial_message: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         request_nonce: Option<String>,
+        /// Optional run/generation id used to group workers spawned by one orchestration run.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        run_id: Option<String>,
     },
 
     /// Stop/destroy an agent session (coordinator only)
@@ -629,6 +636,9 @@ pub enum Request {
         task_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         message: Option<String>,
+        /// Optional hard timeout for this task execution in minutes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task_timeout_minutes: Option<u32>,
     },
 
     /// Assign the next runnable unassigned task from the plan (coordinator only)
@@ -646,6 +656,9 @@ pub enum Request {
         spawn_if_needed: Option<bool>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         message: Option<String>,
+        /// Optional run/generation id for workers spawned by this assignment request.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        run_id: Option<String>,
     },
 
     /// Control an existing assigned task lifecycle (coordinator only)
@@ -659,6 +672,9 @@ pub enum Request {
         target_session: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         message: Option<String>,
+        /// Optional hard timeout for this task execution in minutes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task_timeout_minutes: Option<u32>,
     },
 
     /// Subscribe to a named channel in the swarm
@@ -687,9 +703,17 @@ pub enum Request {
         /// Specific session IDs to watch. If empty, watches all non-self members.
         #[serde(default)]
         session_ids: Vec<String>,
+        /// If true and `session_ids` is empty, snapshot only non-terminal workers spawned by this
+        /// session instead of watching every member in the swarm. Server handlers default this to
+        /// true for empty `session_ids` to avoid capturing stale agents from older runs.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        owned_only: Option<bool>,
         /// Whether to wait for all matching members or wake when any member matches.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         mode: Option<String>,
+        /// Optional run/generation id used to scope implicit await candidates.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        run_id: Option<String>,
         /// Timeout in seconds (default 3600 = 1 hour)
         #[serde(default)]
         timeout_secs: Option<u64>,
@@ -957,6 +981,14 @@ pub enum ServerEvent {
         servers: Vec<String>,
     },
 
+    /// Skill activation confirmed by the server-side session.
+    #[serde(rename = "skill_activated")]
+    SkillActivated {
+        id: u64,
+        name: String,
+        description: String,
+    },
+
     /// Client debug command forwarded from debug socket to TUI
     #[serde(rename = "client_debug_request")]
     ClientDebugRequest { id: u64, command: String },
@@ -976,6 +1008,30 @@ pub enum ServerEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         title: Option<String>,
         display_title: String,
+    },
+
+    /// Incremental echo of a user message just submitted to this session.
+    ///
+    /// Lazydino M15 (candidate C): emitted to sibling client connections of the
+    /// same session_id (e.g. a remote `jcode` SDK client attached alongside the
+    /// origin TUI) so they can render the user's freshly submitted message and
+    /// any attached images without having to re-fetch the full history. The
+    /// origin client connection (the one that actually sent `Request::Message`)
+    /// is excluded from the fanout to avoid double-rendering its local echo.
+    #[serde(rename = "user_message")]
+    UserMessage {
+        /// The message id of the corresponding `Request::Message`.
+        id: u64,
+        /// The session that received the user message.
+        session_id: String,
+        /// Raw textual content of the user message (may contain placeholders
+        /// like `[image 1]` if the origin TUI condensed paste data).
+        content: String,
+        /// Image bytes (mime + base64) attached to the user message. Empty
+        /// when no images were attached. Carried as `RenderedImage` so wire
+        /// shape stays aligned with `ServerEvent::History.images`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<jcode_session_types::RenderedImage>,
     },
 
     /// Full conversation history (response to GetHistory)
@@ -1273,6 +1329,10 @@ pub enum ServerEvent {
         id: u64,
         session_id: String,
         new_session_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        active_count: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        active_cap: Option<u32>,
     },
 
     /// Response to comm_await_members request
@@ -1368,6 +1428,9 @@ pub struct AgentInfo {
     /// Session that owns report-back/cleanup responsibility for this member.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report_back_to_session_id: Option<String>,
+    /// Run/generation id for the orchestration run that spawned this member.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
     /// Latest structured completion report submitted by this member, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub latest_completion_report: Option<String>,
@@ -1377,6 +1440,15 @@ pub struct AgentInfo {
     /// Seconds since the last status change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_age_secs: Option<u64>,
+    /// Seconds since the last member heartbeat/activity event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_heartbeat_secs_ago: Option<u64>,
+    /// Last tool name observed for this member. Tool args are not exposed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_tool: Option<String>,
+    /// Last short checkpoint/status summary observed for this member.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_checkpoint: Option<String>,
 }
 
 /// Lightweight status snapshot for a swarm member.
@@ -1399,6 +1471,15 @@ pub struct AgentStatusSnapshot {
     pub live_attachments: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_age_secs: Option<u64>,
+    /// Seconds since the last member heartbeat/activity event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_heartbeat_secs_ago: Option<u64>,
+    /// Last tool name observed for this member. Tool args are not exposed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_tool: Option<String>,
+    /// Last short checkpoint/status summary observed for this member.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_checkpoint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub joined_age_secs: Option<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1499,6 +1580,15 @@ pub struct SwarmMemberStatus {
     /// Seconds since the last status change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_age_secs: Option<u64>,
+    /// Seconds since the last member heartbeat/activity event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_heartbeat_secs_ago: Option<u64>,
+    /// Last tool name observed for this member. Tool args are not exposed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_tool: Option<String>,
+    /// Last short checkpoint/status summary observed for this member.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_checkpoint: Option<String>,
 }
 
 /// Status of a member being awaited by comm_await_members
@@ -1513,6 +1603,15 @@ pub struct AwaitedMemberStatus {
     /// Latest structured completion report submitted by this member, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion_report: Option<String>,
+    /// Seconds since the last member heartbeat/activity event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_heartbeat_secs_ago: Option<u64>,
+    /// Last tool name observed for this member. Tool args are not exposed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_tool: Option<String>,
+    /// Last short checkpoint/status summary observed for this member.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_checkpoint: Option<String>,
 }
 
 pub fn format_comm_plan_followup(summary: &PlanGraphStatus) -> String {
@@ -1536,6 +1635,10 @@ pub fn default_comm_cleanup_target_statuses() -> Vec<String> {
         "completed".to_string(),
         "failed".to_string(),
         "stopped".to_string(),
+        "crashed".to_string(),
+        "closed".to_string(),
+        "disconnected".to_string(),
+        "running_stale".to_string(),
     ]
 }
 
@@ -1638,6 +1741,18 @@ pub fn comm_display_friendly_name(
     }
 }
 
+pub fn fresh_swarm_run_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("sw-{now_ms:x}-{counter:x}")
+}
+
 pub fn format_comm_members(current_session_id: &str, members: &[AgentInfo]) -> String {
     if members.is_empty() {
         "No other agents in this codebase.".to_string()
@@ -1672,6 +1787,9 @@ pub fn format_comm_members(current_session_id: &str, members: &[AgentInfo]) -> S
                 } else {
                     extra_meta.push(format!("owned_by={owner}"));
                 }
+            }
+            if let Some(run_id) = member.run_id.as_deref() {
+                extra_meta.push(format!("run_id={run_id}"));
             }
             if let Some(attachments) = member.live_attachments {
                 extra_meta.push(format!("attachments={attachments}"));
@@ -2004,6 +2122,7 @@ impl Request {
             Request::RefreshModels { id } => *id,
             Request::SetModel { id, .. } => *id,
             Request::SetSubagentModel { id, .. } => *id,
+            Request::ActivateSkill { id, .. } => *id,
             Request::RunSubagent { id, .. } => *id,
             Request::SetReasoningEffort { id, .. } => *id,
             Request::SetServiceTier { id, .. } => *id,

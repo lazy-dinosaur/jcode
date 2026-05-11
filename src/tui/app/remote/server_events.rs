@@ -8,6 +8,7 @@ pub(in crate::tui::app) fn handle_server_event(
     event: ServerEvent,
     remote: &mut impl RemoteEventState,
 ) -> bool {
+    app.last_remote_server_event_at = Some(Instant::now());
     let eager_stream_redraw = !crate::perf::tui_policy().enable_decorative_animations;
     if app.is_processing {
         app.last_stream_activity = Some(Instant::now());
@@ -193,6 +194,23 @@ pub(in crate::tui::app) fn handle_server_event(
             false
         }
         ServerEvent::Pong { .. } => false,
+        ServerEvent::SkillActivated {
+            id: _,
+            name,
+            description,
+        } => {
+            app.active_skill = Some(name.clone());
+            app.push_display_message(DisplayMessage {
+                role: "system".to_string(),
+                content: format!("Activated skill: {} - {}", name, description),
+                tool_calls: vec![],
+                duration_secs: None,
+                title: None,
+                tool_data: None,
+            });
+            app.set_status_notice(format!("Skill active: /{}", name));
+            true
+        }
         ServerEvent::ConnectionPhase { phase } => {
             let cp = match phase.as_str() {
                 "authenticating" => crate::message::ConnectionPhase::Authenticating,
@@ -535,6 +553,35 @@ pub(in crate::tui::app) fn handle_server_event(
             app.status_notice = Some((format!("Reload: {}", message), std::time::Instant::now()));
             false
         }
+        ServerEvent::UserMessage {
+            id: _,
+            session_id,
+            content,
+            images,
+        } => {
+            // Lazydino M15 (candidate C): incremental echo of a user message
+            // submitted on a *sibling* client connection of the same session.
+            // The origin connection that sent `Request::Message` is excluded
+            // server-side, so reaching here means another attached client
+            // (e.g. another TUI window, an SDK consumer) just sent input
+            // and we want to render it in this view too.
+            if app.active_client_session_id() != Some(session_id.as_str()) {
+                return false;
+            }
+            app.commit_pending_streaming_assistant_message();
+            app.push_display_message(DisplayMessage {
+                role: "user".to_string(),
+                content,
+                tool_calls: vec![],
+                duration_secs: None,
+                title: None,
+                tool_data: None,
+            });
+            if !images.is_empty() {
+                app.remote_side_pane_images.extend(images);
+            }
+            false
+        }
         ServerEvent::History {
             messages,
             images,
@@ -782,16 +829,18 @@ pub(in crate::tui::app) fn handle_server_event(
 
             app.maybe_show_catchup_after_history(&session_id);
 
-            let should_consume_pending_reload_status = match app
-                .pending_reload_reconnect_status
-                .as_ref()
-            {
-                Some(PendingReloadReconnectStatus::AwaitingHistory {
-                    session_id: Some(expected),
-                }) => expected == &session_id,
-                Some(PendingReloadReconnectStatus::AwaitingHistory { session_id: None }) => true,
-                _ => false,
-            };
+            let should_consume_pending_reload_status =
+                match app.pending_reload_reconnect_status.as_ref() {
+                    Some(PendingReloadReconnectStatus::AwaitingHistory {
+                        session_id: Some(expected),
+                        ..
+                    }) => expected == &session_id,
+                    Some(PendingReloadReconnectStatus::AwaitingHistory {
+                        session_id: None,
+                        ..
+                    }) => true,
+                    _ => false,
+                };
             let pending_reload_reconnect_status = if should_consume_pending_reload_status {
                 app.pending_reload_reconnect_status.take()
             } else {

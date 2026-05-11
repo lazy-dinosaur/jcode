@@ -734,3 +734,93 @@ fn test_context_usage_after_compaction_resets_observed() {
         post_usage
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// M14 / M14a: compaction failure cooldown + streak gate regression tests
+// ─────────────────────────────────────────────────────────────────────────
+
+/// M14: a successful compaction must zero both the cooldown counter and the
+/// failure streak so subsequent triggers behave normally.
+#[test]
+fn test_note_compaction_success_resets_cooldown_and_streak() {
+    let mut manager = CompactionManager::new();
+    manager.note_compaction_failure();
+    manager.note_compaction_failure();
+    assert_eq!(manager.consecutive_compaction_failures(), 2);
+
+    manager.note_compaction_success();
+    assert_eq!(manager.consecutive_compaction_failures(), 0);
+    assert_eq!(manager.turns_since_last_compact, 0);
+}
+
+/// M14: a failed compaction must zero `turns_since_last_compact` so the
+/// proactive/semantic cooldown anti-signal stays active even when the
+/// previous attempt errored out (the bug: failure path used to leave the
+/// counter monotonically increasing, eventually unblocking re-triggers on
+/// every new turn).
+#[test]
+fn test_note_compaction_failure_zeros_cooldown_counter() {
+    let mut manager = CompactionManager::new();
+    // Simulate having advanced several turns since the last compaction.
+    manager.turns_since_last_compact = 50;
+
+    manager.note_compaction_failure();
+
+    assert_eq!(manager.turns_since_last_compact, 0);
+    assert_eq!(manager.consecutive_compaction_failures(), 1);
+}
+
+/// M14: after `MAX_CONSECUTIVE_COMPACTION_FAILURES` failures in a row,
+/// `should_compact_with` must short-circuit to `false` for every mode so we
+/// stop spinning the broken summarizer on every new turn.
+#[test]
+fn test_should_compact_with_short_circuits_after_failure_streak() {
+    use crate::config::CompactionMode;
+
+    // Build a context that would normally trigger reactive compaction.
+    let mut manager = CompactionManager::new().with_budget(1_000);
+    manager.set_mode(CompactionMode::Reactive);
+    manager.update_observed_input_tokens(900); // 90% > 80% threshold
+    let mut messages = Vec::new();
+    for i in 0..(RECENT_TURNS_TO_KEEP * 2 + 4) {
+        messages.push(make_text_message(Role::User, &format!("msg {}", i)));
+        manager.notify_message_added();
+    }
+    assert!(
+        manager.should_compact_with(&messages),
+        "precondition: reactive trigger should fire above threshold"
+    );
+
+    // Simulate the streak.
+    for _ in 0..MAX_CONSECUTIVE_COMPACTION_FAILURES {
+        manager.note_compaction_failure();
+    }
+
+    assert!(
+        !manager.should_compact_with(&messages),
+        "should short-circuit once failure streak hits the cap"
+    );
+
+    // A successful run clears the gate.
+    manager.note_compaction_success();
+    assert!(
+        manager.should_compact_with(&messages),
+        "successful run should re-enable triggers"
+    );
+}
+
+/// M14a: the streak counter must saturate, never wrap, even under pathological
+/// repeated-failure pressure (the user reported 22 consecutive emergency
+/// hard-compactions in a single turn loop).
+#[test]
+fn test_note_compaction_failure_saturates() {
+    let mut manager = CompactionManager::new();
+    for _ in 0..30 {
+        manager.note_compaction_failure();
+    }
+    // Just needs to be >= cap and not have panicked.
+    assert!(
+        manager.consecutive_compaction_failures() >= MAX_CONSECUTIVE_COMPACTION_FAILURES,
+        "streak counter must monotonically grow past the cap"
+    );
+}

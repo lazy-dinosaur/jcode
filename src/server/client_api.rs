@@ -2,6 +2,7 @@ use super::{connect_socket, debug_socket_path, socket_path};
 use crate::protocol::{HistoryMessage, Request, ServerEvent, TranscriptMode};
 use crate::transport::{ReadHalf, WriteHalf};
 use anyhow::Result;
+use jcode_session_types::RenderedImage;
 use std::path::PathBuf;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -153,10 +154,21 @@ impl Client {
 
     pub async fn get_history(&mut self) -> Result<Vec<HistoryMessage>> {
         let event = self.get_history_event().await?;
-        match event {
-            ServerEvent::History { messages, .. } => Ok(messages),
-            _ => Ok(Vec::new()),
-        }
+        let (messages, _) = split_history_event(event).unwrap_or_default();
+        Ok(messages)
+    }
+
+    /// Fetch full conversation history plus rendered images.
+    ///
+    /// `get_history()` is kept for backwards compatibility with existing SDK
+    /// callers that only consume text/tool history. New clients that need image
+    /// bytes should use this method so the `images` field from the history event
+    /// is preserved instead of being discarded.
+    pub async fn get_history_with_images(
+        &mut self,
+    ) -> Result<(Vec<HistoryMessage>, Vec<RenderedImage>)> {
+        let event = self.get_history_event().await?;
+        Ok(split_history_event(event).unwrap_or_default())
     }
 
     pub async fn get_history_event(&mut self) -> Result<ServerEvent> {
@@ -311,3 +323,53 @@ impl Client {
         Ok(id)
     }
 }
+
+fn split_history_event(event: ServerEvent) -> Option<(Vec<HistoryMessage>, Vec<RenderedImage>)> {
+    match event {
+        ServerEvent::History {
+            messages, images, ..
+        } => Some((messages, images)),
+        _ => None,
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn m18_split_history_event_preserves_image_bytes() {
+        let event: ServerEvent = serde_json::from_value(serde_json::json!({
+            "type": "history",
+            "id": 7,
+            "session_id": "session-1",
+            "messages": [
+                {"role": "user", "content": "see attached"}
+            ],
+            "images": [
+                {
+                    "media_type": "image/png",
+                    "data": "base64-bytes",
+                    "label": "attachment.png",
+                    "source": {"kind": "user_input"}
+                }
+            ]
+        }))
+        .expect("minimal history event should deserialize");
+
+        let (messages, images) = split_history_event(event).expect("history event");
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].content, "see attached");
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].media_type, "image/png");
+        assert_eq!(images[0].data, "base64-bytes");
+    }
+
+    #[test]
+    fn m18_split_history_event_ignores_non_history_events() {
+        let event = ServerEvent::Ack { id: 7 };
+
+        assert!(split_history_event(event).is_none());
+    }
+}
+

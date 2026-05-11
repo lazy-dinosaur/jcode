@@ -51,7 +51,12 @@ pub struct TaskStatusFile {
     pub tool_name: String,
     #[serde(default)]
     pub display_name: Option<String>,
+    /// Session id where the task was owned/executed.
     pub session_id: String,
+    /// Session id where notifications and wakeups should be delivered.
+    /// Empty/missing values from older status files fall back to `session_id`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub delivery_session_id: String,
     pub status: BackgroundTaskStatus,
     pub exit_code: Option<i32>,
     pub error: Option<String>,
@@ -70,6 +75,16 @@ pub struct TaskStatusFile {
     pub progress: Option<BackgroundTaskProgress>,
     #[serde(default)]
     pub event_history: Vec<BackgroundTaskEventRecord>,
+}
+
+impl TaskStatusFile {
+    pub fn delivery_session_id_or_owner(&self) -> &str {
+        if self.delivery_session_id.is_empty() {
+            &self.session_id
+        } else {
+            &self.delivery_session_id
+        }
+    }
 }
 
 fn default_true() -> bool {
@@ -260,6 +275,7 @@ pub(super) struct RunningTask {
     pub(super) tool_name: String,
     pub(super) display_name: Option<String>,
     pub(super) session_id: String,
+    pub(super) delivery_session_id: String,
     pub(super) status_path: PathBuf,
     pub(super) started_at: Instant,
     pub(super) started_at_rfc3339: String,

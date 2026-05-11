@@ -2,6 +2,7 @@ use super::*;
 use std::time::Instant;
 
 struct EnvGuard {
+    _guard: std::sync::MutexGuard<'static, ()>,
     runtime: Option<std::ffi::OsString>,
 }
 
@@ -16,10 +17,13 @@ impl Drop for EnvGuard {
 }
 
 fn test_env(dir: &tempfile::TempDir) -> EnvGuard {
-    let _guard = storage::lock_test_env();
+    let guard = storage::lock_test_env();
     let previous = std::env::var_os("JCODE_RUNTIME_DIR");
     crate::env::set_var("JCODE_RUNTIME_DIR", dir.path());
-    EnvGuard { runtime: previous }
+    EnvGuard {
+        _guard: guard,
+        runtime: previous,
+    }
 }
 
 #[test]
@@ -77,10 +81,14 @@ fn persisted_swarm_state_round_trips_and_marks_running_stale() {
         detail: Some("writing tests".to_string()),
         friendly_name: Some("fox".to_string()),
         report_back_to_session_id: Some("session-2".to_string()),
+        run_id: Some("run-alpha".to_string()),
         latest_completion_report: None,
         role: "agent".to_string(),
         joined_at: Instant::now(),
         last_status_change: Instant::now(),
+        last_heartbeat_at: Some(Instant::now()),
+        last_tool: None,
+        last_checkpoint: None,
         is_headless: true,
     }];
 
@@ -116,6 +124,7 @@ fn persisted_swarm_state_round_trips_and_marks_running_stale() {
         recovered_member.report_back_to_session_id.as_deref(),
         Some("session-2")
     );
+    assert_eq!(recovered_member.run_id.as_deref(), Some("run-alpha"));
     assert_eq!(recovered_member.status, "crashed");
     assert_eq!(
         recovered_member.detail.as_deref(),
@@ -165,10 +174,14 @@ fn persisted_swarm_state_without_plan_still_restores_coordinator_and_members() {
         detail: None,
         friendly_name: Some("owl".to_string()),
         report_back_to_session_id: None,
+        run_id: None,
         latest_completion_report: None,
         role: "coordinator".to_string(),
         joined_at: Instant::now(),
         last_status_change: Instant::now(),
+        last_heartbeat_at: Some(Instant::now()),
+        last_tool: None,
+        last_checkpoint: None,
         is_headless: false,
     }];
 

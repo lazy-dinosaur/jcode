@@ -40,6 +40,10 @@ pub fn anthropic_map_tool_name_for_oauth(name: &str) -> String {
         "subagent" => "Agent",
         "schedule" => "ScheduleWakeup",
         "skill_manage" => "Skill",
+        // M12: Anthropic OAuth advertises ToolSearch; route the local
+        // `codesearch` dispatcher to that public name on the wire so the
+        // model sees a tool whose schema we actually serve.
+        "codesearch" => "ToolSearch",
         _ => name,
     }
     .to_string()
@@ -56,7 +60,12 @@ pub fn anthropic_map_tool_name_from_oauth(name: &str) -> String {
         "Agent" => "subagent",
         "ScheduleWakeup" => "schedule",
         "Skill" => "skill_manage",
-        // ToolSearch intentionally has no direct local analogue yet.
+        // M12: When the model invokes the advertised `ToolSearch`, dispatch
+        // it via our local `codesearch` handler. Mirrors the equivalent
+        // mapping already in `src/provider/claude.rs` for the Claude
+        // provider; previously the comment claimed "no direct local
+        // analogue" but `codesearch` already serves the same intent.
+        "ToolSearch" => "codesearch",
         _ => name,
     }
     .to_string()
@@ -113,6 +122,8 @@ mod tests {
             ("subagent", "Agent"),
             ("schedule", "ScheduleWakeup"),
             ("skill_manage", "Skill"),
+            // M12: codesearch <-> ToolSearch round-trip.
+            ("codesearch", "ToolSearch"),
         ] {
             assert_eq!(anthropic_map_tool_name_for_oauth(local), oauth);
             assert_eq!(anthropic_map_tool_name_from_oauth(oauth), local);

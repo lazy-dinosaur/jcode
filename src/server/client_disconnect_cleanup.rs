@@ -37,6 +37,77 @@ fn disconnect_disposition(disconnected_while_processing: bool) -> DisconnectDisp
     }
 }
 
+fn session_stop_hook_reason(disposition: DisconnectDisposition) -> Option<&'static str> {
+    match disposition {
+        DisconnectDisposition::Closed => Some("disconnect"),
+        DisconnectDisposition::Crashed => Some("disconnect"),
+        DisconnectDisposition::Reloading => None,
+    }
+}
+
+async fn fire_session_stop_hook(
+    session_id: &str,
+    working_dir: Option<String>,
+    reason: &'static str,
+    message_count: usize,
+    context: SessionStopHookContext,
+) {
+    // M11 stage 4: fire both the new `client.disconnect` event and the
+    // legacy `session.stop` event. Existing user configurations listening
+    // for `session.stop` continue to work; new configurations should listen
+    // for `client.disconnect` for accurate semantics. `session.stop` is
+    // reserved for a future explicit logical session-end producer.
+    //
+    // Order is intentional: `client.disconnect` fires first so a single
+    // blocking hook subscribed to both events sees the new event first.
+    // Deny reasons from either path are warn-logged but do not abort
+    // cleanup (a denial here has no next turn to inject into).
+    //
+    // M11 stage 5: forward the agent-side context snapshot
+    // (last user message, recent tool calls, turn count, session age)
+    // so disconnect hooks can write meaningful policies.
+    let new_event_payload = crate::hooks::SessionStopHookPayload {
+        event: crate::hooks::CLIENT_DISCONNECT,
+        session_id,
+        working_dir: working_dir.clone(),
+        reason,
+        message_count,
+        last_user_message: context.last_user_message.clone(),
+        recent_tool_calls: context.recent_tool_calls.clone(),
+        turn_count: context.turn_count,
+        session_age_seconds: context.session_age_seconds,
+    };
+    if let Err(err) = crate::hooks::run_client_disconnect_hooks(new_event_payload).await {
+        crate::logging::warn(&format!("client.disconnect hook failed: {err:#}"));
+    }
+
+    let legacy_payload = crate::hooks::SessionStopHookPayload {
+        event: crate::hooks::SESSION_STOP,
+        session_id,
+        working_dir,
+        reason,
+        message_count,
+        last_user_message: context.last_user_message,
+        recent_tool_calls: context.recent_tool_calls,
+        turn_count: context.turn_count,
+        session_age_seconds: context.session_age_seconds,
+    };
+    if let Err(err) = crate::hooks::run_session_hooks(legacy_payload).await {
+        crate::logging::warn(&format!("session.stop hook failed: {err:#}"));
+    }
+}
+
+/// M11 stage 5: snapshot of agent-derived context captured *before* the
+/// agent lock is dropped, so the disconnect hook payload can include the
+/// same enrichment fields that `response.completed` carries.
+#[derive(Debug, Clone, Default)]
+struct SessionStopHookContext {
+    last_user_message: Option<String>,
+    recent_tool_calls: Vec<crate::hooks::LifecycleHookToolCallPreview>,
+    turn_count: Option<usize>,
+    session_age_seconds: Option<u64>,
+}
+
 async fn session_has_live_successor(
     client_connections: &Arc<RwLock<HashMap<String, ClientConnectionInfo>>>,
     session_id: &str,
@@ -117,6 +188,7 @@ pub(super) async fn cleanup_client_connection(
 
             match lock_result {
                 Ok(mut agent) => {
+                    let stop_hook_reason = session_stop_hook_reason(disposition);
                     match disposition {
                         DisconnectDisposition::Closed => {
                             agent.mark_closed();
@@ -141,7 +213,27 @@ pub(super) async fn cleanup_client_connection(
                     };
                     let sid = client_session_id.to_string();
                     let working_dir = agent.working_dir().map(|dir| dir.to_string());
+                    let message_count = agent.messages().len();
+                    // M11 stage 5: snapshot enrichment context while the
+                    // agent lock is still held so the disconnect hook
+                    // payload matches what `response.completed` carries.
+                    let stop_hook_context = SessionStopHookContext {
+                        last_user_message: agent.lifecycle_hook_last_user_message(),
+                        recent_tool_calls: agent.lifecycle_hook_recent_tool_calls(),
+                        turn_count: Some(agent.lifecycle_hook_turn_count()),
+                        session_age_seconds: Some(agent.lifecycle_hook_session_age_seconds()),
+                    };
                     drop(agent);
+                    if let Some(reason) = stop_hook_reason {
+                        fire_session_stop_hook(
+                            &sid,
+                            working_dir.clone(),
+                            reason,
+                            message_count,
+                            stop_hook_context,
+                        )
+                        .await;
+                    }
                     let event = match disposition {
                         DisconnectDisposition::Closed => {
                             crate::runtime_memory_log::RuntimeMemoryLogEvent::new(
@@ -263,11 +355,27 @@ pub(super) async fn cleanup_client_connection(
 
 #[cfg(test)]
 mod tests {
-    use super::{DisconnectDisposition, disconnect_disposition};
+    use super::{DisconnectDisposition, disconnect_disposition, session_stop_hook_reason};
 
     #[test]
     fn idle_disconnect_is_closed() {
         assert_eq!(disconnect_disposition(false), DisconnectDisposition::Closed);
+    }
+
+    #[test]
+    fn session_stop_hook_skips_reload_disposition() {
+        assert_eq!(
+            session_stop_hook_reason(DisconnectDisposition::Closed),
+            Some("disconnect")
+        );
+        assert_eq!(
+            session_stop_hook_reason(DisconnectDisposition::Crashed),
+            Some("disconnect")
+        );
+        assert_eq!(
+            session_stop_hook_reason(DisconnectDisposition::Reloading),
+            None
+        );
     }
 
     #[test]

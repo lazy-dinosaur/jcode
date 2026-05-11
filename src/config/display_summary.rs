@@ -70,8 +70,15 @@ impl Config {
 - OpenAI native compaction threshold ratio: {:.2}
 - Cross-provider failover: {}
 
+**Prompt:**
+- Ignore project AGENTS.md: {}
+- Ignore global ~/.AGENTS.md: {}
+- Load .jcode/AGENTS.md: {}
+- Load .jcode/harness/*.md: {}
+
 **Agent models:**
 - Swarm / subagent: {}
+- Agent profiles: {}
 - Review: {}
 - Judge: {}
 - Memory: {}
@@ -187,10 +194,41 @@ impl Config {
             self.provider.openai_native_compaction_mode.as_str(),
             self.provider.openai_native_compaction_threshold_tokens,
             self.provider.cross_provider_failover.as_str(),
+            self.prompt.ignore_project_agents,
+            self.prompt.ignore_global_agents,
+            self.prompt.load_jcode_agents,
+            self.prompt.load_harness_dir,
             self.agents
                 .swarm_model
                 .as_deref()
                 .unwrap_or("(inherit current session)"),
+            if self.agents.profiles.is_empty()
+                && self.agents.routes.is_empty()
+                && self.agents.routing.is_empty()
+            {
+                "(none)".to_string()
+            } else {
+                let mut entries = self
+                    .agents
+                    .profiles
+                    .iter()
+                    .chain(self.agents.routes.iter())
+                    .map(|(name, route)| {
+                        route
+                            .model
+                            .as_deref()
+                            .map(|model| format!("{name}={model}"))
+                            .unwrap_or_else(|| name.to_string())
+                    })
+                    .collect::<Vec<_>>();
+                entries.extend(
+                    self.agents
+                        .routing
+                        .iter()
+                        .map(|(name, model)| format!("{name}={model} (legacy)")),
+                );
+                entries.join(", ")
+            },
             self.autoreview
                 .model
                 .as_deref()

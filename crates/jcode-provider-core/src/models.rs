@@ -1,9 +1,12 @@
 /// Available Claude models used by model lists and provider routing.
 pub const ALL_CLAUDE_MODELS: &[&str] = &[
+    "claude-opus-4-7",
+    "claude-opus-4-7[1m]",
     "claude-opus-4-6",
     "claude-opus-4-6[1m]",
     "claude-sonnet-4-6",
     "claude-sonnet-4-6[1m]",
+    "claude-haiku-4-5-20251001",
     "claude-haiku-4-5",
     "claude-opus-4-5",
     "claude-sonnet-4-5",
@@ -87,10 +90,14 @@ fn model_id_for_capability_lookup(model: &str, provider: Option<&str>) -> (Strin
 fn copilot_context_limit_for_model(model: &str) -> usize {
     match model {
         "claude-sonnet-4" | "claude-sonnet-4-6" | "claude-sonnet-4.6" => 128_000,
-        "claude-opus-4-6" | "claude-opus-4.6" | "claude-opus-4.6-fast" => 200_000,
+        "claude-opus-4-7"
+        | "claude-opus-4.7"
+        | "claude-opus-4-6"
+        | "claude-opus-4.6"
+        | "claude-opus-4.6-fast" => 200_000,
         "claude-opus-4.5" | "claude-opus-4-5" => 200_000,
         "claude-sonnet-4.5" | "claude-sonnet-4-5" => 200_000,
-        "claude-haiku-4.5" | "claude-haiku-4-5" => 200_000,
+        "claude-haiku-4.5" | "claude-haiku-4-5" | "claude-haiku-4-5-20251001" => 200_000,
         "gpt-4o" | "gpt-4o-mini" => 128_000,
         m if m.starts_with("gpt-4o") => 128_000,
         m if m.starts_with("gpt-4.1") => 128_000,
@@ -174,7 +181,11 @@ pub fn context_limit_for_model_with_provider_and_cache(
         return Some(272_000);
     }
 
-    if model.starts_with("claude-opus-4-6") || model.starts_with("claude-opus-4.6") {
+    if model.starts_with("claude-opus-4-7")
+        || model.starts_with("claude-opus-4.7")
+        || model.starts_with("claude-opus-4-6")
+        || model.starts_with("claude-opus-4.6")
+    {
         return Some(if is_1m { 1_048_576 } else { 200_000 });
     }
 
@@ -269,6 +280,10 @@ mod tests {
 
     #[test]
     fn normalizes_copilot_model_names() {
+        assert_eq!(
+            normalize_copilot_model_name("claude-opus-4.7"),
+            Some("claude-opus-4-7")
+        );
         assert_eq!(
             normalize_copilot_model_name("claude-opus-4.6"),
             Some("claude-opus-4-6")

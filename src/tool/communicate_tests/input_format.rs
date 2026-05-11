@@ -78,6 +78,27 @@ fn communicate_input_accepts_cleanup_lifecycle_flags() {
 }
 
 #[test]
+fn communicate_input_accepts_run_id() {
+    let parsed: CommunicateInput = serde_json::from_value(serde_json::json!({
+        "action": "run_plan",
+        "run_id": "run-explicit-1"
+    }))
+    .expect("run_id should deserialize");
+    assert_eq!(parsed.run_id.as_deref(), Some("run-explicit-1"));
+}
+
+#[test]
+fn communicate_input_accepts_list_run_id() {
+    let parsed: CommunicateInput = serde_json::from_value(serde_json::json!({
+        "action": "list",
+        "run_id": "run-list-1"
+    }))
+    .expect("list run_id should deserialize");
+    assert_eq!(parsed.action, "list");
+    assert_eq!(parsed.run_id.as_deref(), Some("run-list-1"));
+}
+
+#[test]
 fn cleanup_candidates_default_to_owned_terminal_workers() {
     let members = vec![
         AgentInfo {
@@ -89,9 +110,13 @@ fn cleanup_candidates_default_to_owned_terminal_workers() {
             role: Some("coordinator".to_string()),
             is_headless: None,
             report_back_to_session_id: None,
+            run_id: None,
             latest_completion_report: None,
             live_attachments: None,
             status_age_secs: None,
+            last_heartbeat_secs_ago: None,
+            last_tool: None,
+            last_checkpoint: None,
         },
         AgentInfo {
             session_id: "owned-done".to_string(),
@@ -102,9 +127,13 @@ fn cleanup_candidates_default_to_owned_terminal_workers() {
             role: Some("agent".to_string()),
             is_headless: Some(true),
             report_back_to_session_id: Some("coord".to_string()),
+            run_id: None,
             latest_completion_report: None,
             live_attachments: None,
             status_age_secs: None,
+            last_heartbeat_secs_ago: None,
+            last_tool: None,
+            last_checkpoint: None,
         },
         AgentInfo {
             session_id: "user-created".to_string(),
@@ -115,9 +144,13 @@ fn cleanup_candidates_default_to_owned_terminal_workers() {
             role: Some("agent".to_string()),
             is_headless: None,
             report_back_to_session_id: None,
+            run_id: None,
             latest_completion_report: None,
             live_attachments: None,
             status_age_secs: None,
+            last_heartbeat_secs_ago: None,
+            last_tool: None,
+            last_checkpoint: None,
         },
         AgentInfo {
             session_id: "owned-running".to_string(),
@@ -128,19 +161,184 @@ fn cleanup_candidates_default_to_owned_terminal_workers() {
             role: Some("agent".to_string()),
             is_headless: Some(true),
             report_back_to_session_id: Some("coord".to_string()),
+            run_id: None,
             latest_completion_report: None,
             live_attachments: None,
             status_age_secs: None,
+            last_heartbeat_secs_ago: None,
+            last_tool: None,
+            last_checkpoint: None,
         },
     ];
     let statuses = default_cleanup_target_statuses();
     assert_eq!(
-        cleanup_candidate_session_ids("coord", &members, &statuses, &[], false),
+        cleanup_candidate_session_ids("coord", &members, &statuses, &[], false, None),
         vec!["owned-done".to_string()]
     );
     assert_eq!(
-        cleanup_candidate_session_ids("coord", &members, &statuses, &[], true),
+        cleanup_candidate_session_ids("coord", &members, &statuses, &[], true, None),
         vec!["owned-done".to_string(), "user-created".to_string()]
+    );
+}
+
+#[test]
+fn cleanup_candidates_can_be_scoped_by_run_id() {
+    let members = vec![
+        AgentInfo {
+            session_id: "coord".to_string(),
+            friendly_name: Some("coord".to_string()),
+            files_touched: vec![],
+            status: Some("ready".to_string()),
+            detail: None,
+            role: Some("coordinator".to_string()),
+            is_headless: None,
+            report_back_to_session_id: None,
+            run_id: None,
+            latest_completion_report: None,
+            live_attachments: None,
+            status_age_secs: None,
+            last_heartbeat_secs_ago: None,
+            last_tool: None,
+            last_checkpoint: None,
+        },
+        AgentInfo {
+            session_id: "current-run".to_string(),
+            friendly_name: Some("current".to_string()),
+            files_touched: vec![],
+            status: Some("completed".to_string()),
+            detail: None,
+            role: Some("agent".to_string()),
+            is_headless: Some(true),
+            report_back_to_session_id: Some("coord".to_string()),
+            run_id: Some("run-current".to_string()),
+            latest_completion_report: None,
+            live_attachments: None,
+            status_age_secs: None,
+            last_heartbeat_secs_ago: None,
+            last_tool: None,
+            last_checkpoint: None,
+        },
+        AgentInfo {
+            session_id: "old-run".to_string(),
+            friendly_name: Some("old".to_string()),
+            files_touched: vec![],
+            status: Some("completed".to_string()),
+            detail: None,
+            role: Some("agent".to_string()),
+            is_headless: Some(true),
+            report_back_to_session_id: Some("coord".to_string()),
+            run_id: Some("run-old".to_string()),
+            latest_completion_report: None,
+            live_attachments: None,
+            status_age_secs: None,
+            last_heartbeat_secs_ago: None,
+            last_tool: None,
+            last_checkpoint: None,
+        },
+    ];
+    let statuses = default_cleanup_target_statuses();
+
+    assert_eq!(
+        cleanup_candidate_session_ids(
+            "coord",
+            &members,
+            &statuses,
+            &[],
+            false,
+            Some("run-current")
+        ),
+        vec!["current-run".to_string()]
+    );
+}
+
+#[test]
+fn cleanup_candidates_include_owned_stale_workers_by_default() {
+    let members = vec![
+        AgentInfo {
+            session_id: "coord".to_string(),
+            friendly_name: Some("coord".to_string()),
+            files_touched: vec![],
+            status: Some("ready".to_string()),
+            detail: None,
+            role: Some("coordinator".to_string()),
+            is_headless: None,
+            report_back_to_session_id: None,
+            run_id: None,
+            latest_completion_report: None,
+            live_attachments: None,
+            status_age_secs: None,
+            last_heartbeat_secs_ago: None,
+            last_tool: None,
+            last_checkpoint: None,
+        },
+        AgentInfo {
+            session_id: "owned-crashed".to_string(),
+            friendly_name: Some("owned-crashed".to_string()),
+            files_touched: vec![],
+            status: Some("crashed".to_string()),
+            detail: Some("recovered after reload".to_string()),
+            role: Some("agent".to_string()),
+            is_headless: Some(true),
+            report_back_to_session_id: Some("coord".to_string()),
+            run_id: Some("run-current".to_string()),
+            latest_completion_report: None,
+            live_attachments: None,
+            status_age_secs: Some(900),
+            last_heartbeat_secs_ago: Some(900),
+            last_tool: None,
+            last_checkpoint: None,
+        },
+        AgentInfo {
+            session_id: "owned-running-stale".to_string(),
+            friendly_name: Some("owned-stale".to_string()),
+            files_touched: vec![],
+            status: Some("running_stale".to_string()),
+            detail: None,
+            role: Some("agent".to_string()),
+            is_headless: Some(true),
+            report_back_to_session_id: Some("coord".to_string()),
+            run_id: Some("run-current".to_string()),
+            latest_completion_report: None,
+            live_attachments: None,
+            status_age_secs: Some(600),
+            last_heartbeat_secs_ago: Some(600),
+            last_tool: None,
+            last_checkpoint: None,
+        },
+        AgentInfo {
+            session_id: "foreign-crashed".to_string(),
+            friendly_name: Some("foreign".to_string()),
+            files_touched: vec![],
+            status: Some("crashed".to_string()),
+            detail: None,
+            role: Some("agent".to_string()),
+            is_headless: Some(true),
+            report_back_to_session_id: Some("other-coord".to_string()),
+            run_id: None,
+            latest_completion_report: None,
+            live_attachments: None,
+            status_age_secs: Some(1200),
+            last_heartbeat_secs_ago: Some(1200),
+            last_tool: None,
+            last_checkpoint: None,
+        },
+    ];
+    let statuses = default_cleanup_target_statuses();
+
+    assert_eq!(
+        cleanup_candidate_session_ids("coord", &members, &statuses, &[], false, None),
+        vec![
+            "owned-crashed".to_string(),
+            "owned-running-stale".to_string()
+        ]
+    );
+    assert_eq!(
+        cleanup_candidate_session_ids("coord", &members, &statuses, &[], true, None),
+        vec![
+            "foreign-crashed".to_string(),
+            "owned-crashed".to_string(),
+            "owned-running-stale".to_string()
+        ]
     );
 }
 
@@ -194,9 +392,13 @@ fn format_members_includes_status_and_detail() {
             role: Some("agent".to_string()),
             is_headless: Some(true),
             report_back_to_session_id: Some("sess-self".to_string()),
+            run_id: None,
             latest_completion_report: None,
             live_attachments: Some(0),
             status_age_secs: Some(12),
+            last_heartbeat_secs_ago: Some(12),
+            last_tool: None,
+            last_checkpoint: None,
         }],
     );
 
@@ -206,6 +408,65 @@ fn format_members_includes_status_and_detail() {
         output
             .output
             .contains("Meta: headless · owned_by_you · attachments=0 · status_age=12s")
+    );
+}
+
+#[test]
+fn format_members_can_be_scoped_to_one_run_id() {
+    let ctx = test_ctx("coord", std::path::Path::new("."));
+    let members = vec![
+        AgentInfo {
+            session_id: "current-worker".to_string(),
+            friendly_name: Some("current".to_string()),
+            files_touched: vec![],
+            status: Some("running".to_string()),
+            detail: None,
+            role: Some("agent".to_string()),
+            is_headless: Some(true),
+            report_back_to_session_id: Some("coord".to_string()),
+            run_id: Some("run-current".to_string()),
+            latest_completion_report: None,
+            live_attachments: Some(0),
+            status_age_secs: Some(3),
+            last_heartbeat_secs_ago: Some(3),
+            last_tool: None,
+            last_checkpoint: None,
+        },
+        AgentInfo {
+            session_id: "old-worker".to_string(),
+            friendly_name: Some("old".to_string()),
+            files_touched: vec![],
+            status: Some("ready".to_string()),
+            detail: None,
+            role: Some("agent".to_string()),
+            is_headless: Some(true),
+            report_back_to_session_id: Some("coord".to_string()),
+            run_id: Some("run-old".to_string()),
+            latest_completion_report: None,
+            live_attachments: Some(0),
+            status_age_secs: Some(10),
+            last_heartbeat_secs_ago: Some(10),
+            last_tool: None,
+            last_checkpoint: None,
+        },
+    ];
+
+    let output = format_members_for_run(&ctx, &members, Some("run-current")).output;
+
+    assert!(output.contains("Run scope: run_id=run-current (showing 1/2)"));
+    assert!(output.contains("current"));
+    assert!(output.contains("run_id=run-current"));
+    assert!(!output.contains("old-worker"));
+    assert!(!output.contains("run-old"));
+
+    let unscoped = format_members_for_run(&ctx, &members, None).output;
+    assert!(unscoped.contains("current"));
+    assert!(unscoped.contains("old"));
+
+    let empty = format_members_for_run(&ctx, &members, Some("run-missing")).output;
+    assert_eq!(
+        empty,
+        "No agents found for run_id=run-missing (0/2 in current swarm)."
     );
 }
 
@@ -227,9 +488,13 @@ fn format_members_disambiguates_duplicate_friendly_names() {
                 role: Some("agent".to_string()),
                 is_headless: None,
                 report_back_to_session_id: None,
+                run_id: None,
                 latest_completion_report: None,
                 live_attachments: None,
                 status_age_secs: None,
+                last_heartbeat_secs_ago: None,
+                last_tool: None,
+                last_checkpoint: None,
             },
             AgentInfo {
                 session_id: "session_shark_1234567890_bbbbbbbbbbbb0002".to_string(),
@@ -240,9 +505,13 @@ fn format_members_disambiguates_duplicate_friendly_names() {
                 role: Some("agent".to_string()),
                 is_headless: None,
                 report_back_to_session_id: None,
+                run_id: None,
                 latest_completion_report: None,
                 live_attachments: None,
                 status_age_secs: None,
+                last_heartbeat_secs_ago: None,
+                last_tool: None,
+                last_checkpoint: None,
             },
         ],
     );
@@ -263,6 +532,9 @@ fn format_awaited_members_disambiguates_duplicate_friendly_names() {
                 status: "ready".to_string(),
                 done: true,
                 completion_report: None,
+                last_heartbeat_secs_ago: None,
+                last_tool: None,
+                last_checkpoint: None,
             },
             AwaitedMemberStatus {
                 session_id: "session_shark_1234567890_bbbbbbbbbbbb0002".to_string(),
@@ -270,6 +542,9 @@ fn format_awaited_members_disambiguates_duplicate_friendly_names() {
                 status: "ready".to_string(),
                 done: true,
                 completion_report: None,
+                last_heartbeat_secs_ago: None,
+                last_tool: None,
+                last_checkpoint: None,
             },
         ],
     );
@@ -290,6 +565,9 @@ fn format_status_snapshot_includes_activity_and_metadata() {
         is_headless: Some(true),
         live_attachments: Some(0),
         status_age_secs: Some(7),
+        last_heartbeat_secs_ago: Some(3),
+        last_tool: Some("bash".to_string()),
+        last_checkpoint: Some("working".to_string()),
         joined_age_secs: Some(42),
         files_touched: vec!["src/server/comm_sync.rs".to_string()],
         activity: Some(SessionActivitySnapshot {

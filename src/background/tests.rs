@@ -1,5 +1,6 @@
 use super::*;
 use crate::bus::{BackgroundTaskProgressKind, BackgroundTaskProgressSource, BusEvent};
+use crate::tool::ToolOutput;
 use anyhow::anyhow;
 use tempfile::tempdir;
 use tokio::time::{Duration, sleep};
@@ -93,6 +94,50 @@ async fn update_delivery_applies_to_running_task_completion() -> Result<()> {
     }
 
     Err(anyhow!("background task did not complete in time"))
+}
+
+#[tokio::test]
+async fn adopt_with_delivery_persists_parent_delivery_session_and_wake_policy() -> Result<()> {
+    let tmp = tempdir()?;
+    let manager = BackgroundTaskManager::with_output_dir(tmp.path().to_path_buf());
+    let handle = tokio::spawn(async { Ok(ToolOutput::new("done")) });
+
+    let info = manager
+        .adopt_with_delivery("task", "child-session", "parent-session", true, handle)
+        .await;
+
+    let wait_result = manager
+        .wait(&info.task_id, Duration::from_secs(2), false)
+        .await
+        .ok_or_else(|| anyhow!("task should exist"))?;
+
+    assert_eq!(wait_result.task.session_id, "child-session");
+    assert_eq!(wait_result.task.delivery_session_id, "parent-session");
+    assert!(wait_result.task.notify);
+    assert!(wait_result.task.wake);
+    assert_eq!(wait_result.task.status, BackgroundTaskStatus::Completed);
+    Ok(())
+}
+
+#[tokio::test]
+async fn adopt_keeps_default_wake_policy_false() -> Result<()> {
+    let tmp = tempdir()?;
+    let manager = BackgroundTaskManager::with_output_dir(tmp.path().to_path_buf());
+    let handle = tokio::spawn(async { Ok(ToolOutput::new("done")) });
+
+    let info = manager.adopt("task", "session", handle).await;
+
+    let wait_result = manager
+        .wait(&info.task_id, Duration::from_secs(2), false)
+        .await
+        .ok_or_else(|| anyhow!("task should exist"))?;
+
+    assert_eq!(wait_result.task.session_id, "session");
+    assert_eq!(wait_result.task.delivery_session_id, "session");
+    assert!(wait_result.task.notify);
+    assert!(!wait_result.task.wake);
+    assert_eq!(wait_result.task.status, BackgroundTaskStatus::Completed);
+    Ok(())
 }
 
 #[tokio::test]

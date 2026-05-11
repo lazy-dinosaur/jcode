@@ -959,6 +959,9 @@ impl crate::tui::TuiState for App {
                         is_headless: Some(false),
                         live_attachments: Some(1),
                         status_age_secs: Some(0),
+                        last_heartbeat_secs_ago: Some(0),
+                        last_tool: None,
+                        last_checkpoint: subagent_status.clone(),
                     });
                 }
                 (

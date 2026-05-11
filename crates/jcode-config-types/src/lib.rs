@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Compaction mode
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -260,6 +261,24 @@ impl Default for CompactionConfig {
     }
 }
 
+/// Reload/reconnect recovery configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ReloadConfig {
+    /// Maximum time to wait for the new server to deliver session History
+    /// after a reload/reconnect before falling back to locally cached messages.
+    /// Default: 10 seconds.
+    pub awaiting_history_timeout_secs: Option<u64>,
+}
+
+impl Default for ReloadConfig {
+    fn default() -> Self {
+        Self {
+            awaiting_history_timeout_secs: Some(10),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum NamedProviderType {
@@ -357,10 +376,89 @@ pub struct AuthConfig {
 pub struct AgentsConfig {
     /// Optional default model override for spawned swarm/subagent sessions.
     pub swarm_model: Option<String>,
+    /// Deprecated simple model routing by subagent type/name, e.g. planner -> claude-opus-4-7.
+    pub routing: BTreeMap<String, String>,
+    /// Deprecated rich routing by subagent type/name. Prefer `profiles` for new configs.
+    pub routes: BTreeMap<String, AgentRouteConfig>,
+    /// Callable agent profiles by subagent type/name, including model, effort, variant, and usage guidance.
+    pub profiles: BTreeMap<String, AgentRouteConfig>,
     /// Optional default model override for the memory sidecar.
     pub memory_model: Option<String>,
     /// Whether memory should use the sidecar for relevance/extraction.
     pub memory_sidecar_enabled: bool,
+    /// Lazydino M2 stage 2 — controls whether `swarm spawn` opens a visible
+    /// terminal window for each new worker. `None` keeps upstream behavior
+    /// (try visible, fall back to headless). `Some(false)` forces
+    /// headless-only spawn even when a terminal emulator is available, which
+    /// avoids the "10+ terminals open" failure mode from upstream issue #76
+    /// and gives a clean reproduction surface. Env var
+    /// `JCODE_SWARM_NO_TERMINAL=1` overrides the config to force headless.
+    pub swarm_spawn_visible: Option<bool>,
+    /// Maximum consecutive lifecycle hook denies that may trigger immediate
+    /// continuation turns. `None` uses the default (3). `Some(0)` means
+    /// unlimited / trust hook scripts to self-throttle.
+    pub max_lifecycle_deny_streak: Option<u8>,
+}
+
+/// Swarm coordination safety limits.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct SwarmConfig {
+    /// Maximum non-terminal workers one coordinator may own concurrently.
+    /// `None` uses the built-in default; `Some(0)` disables the limit.
+    pub max_active_spawns_per_coordinator: Option<u32>,
+    /// Maximum non-terminal workers one orchestration run may own concurrently.
+    /// `None` uses the built-in default; `Some(0)` disables the limit.
+    pub max_active_spawns_per_run: Option<u32>,
+    /// Seconds without member heartbeat before a running worker is surfaced as running_stale.
+    /// `None` uses the built-in default of 180 seconds.
+    pub heartbeat_stale_secs: Option<u32>,
+    /// Optional hard timeout for assigned task execution. `None` means unlimited.
+    pub default_task_timeout_minutes: Option<u32>,
+}
+
+/// Rich subagent routing configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct AgentRouteConfig {
+    /// Model to use for this subagent type.
+    pub model: Option<String>,
+    /// Reasoning effort for providers that support it, e.g. OpenAI `medium`, `high`, `xhigh`.
+    pub effort: Option<String>,
+    /// oh-my-opencode-compatible variant. For GPT/OpenAI this maps to reasoning effort; for
+    /// supported Claude models, `max` selects the `[1m]` Claude Max / long-context route.
+    pub variant: Option<String>,
+    /// Human-readable role description for this callable agent profile.
+    pub description: Option<String>,
+    /// Guidance for when the coordinator should use this agent profile.
+    pub when: Vec<String>,
+    /// Optional extra instructions prepended to the subagent prompt when this profile is used.
+    pub prompt: Option<String>,
+}
+
+/// Prompt and project instruction loading configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PromptConfig {
+    /// Ignore `<project>/AGENTS.md` when building the system prompt.
+    pub ignore_project_agents: bool,
+    /// Ignore `~/.AGENTS.md` when building the system prompt.
+    pub ignore_global_agents: bool,
+    /// Load private project harness instructions from `<project>/.jcode/AGENTS.md`.
+    pub load_jcode_agents: bool,
+    /// Load private project harness modules from `<project>/.jcode/harness/*.md`.
+    pub load_harness_dir: bool,
+}
+
+impl Default for PromptConfig {
+    fn default() -> Self {
+        Self {
+            ignore_project_agents: false,
+            ignore_global_agents: false,
+            load_jcode_agents: true,
+            load_harness_dir: true,
+        }
+    }
 }
 
 /// Automatic end-of-turn code review configuration.
@@ -381,6 +479,56 @@ pub struct AutoJudgeConfig {
     pub enabled: bool,
     /// Optional model override for autojudge sessions.
     pub model: Option<String>,
+}
+
+/// Command hook configuration.
+///
+/// Hook support covers tool and lifecycle boundaries:
+/// `tool.execute.before`, `tool.execute.after`, `session.stop`, and `response.completed`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HooksConfig {
+    /// Enable command hooks globally (default: false).
+    pub enabled: bool,
+    /// Command hooks to run for matching events/tools.
+    pub commands: Vec<HookCommandConfig>,
+}
+
+impl Default for HooksConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            commands: Vec::new(),
+        }
+    }
+}
+
+/// A single command hook.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HookCommandConfig {
+    /// Event name, e.g. `tool.execute.before`, `tool.execute.after`, `session.stop`, or `response.completed`.
+    pub event: String,
+    /// Optional tool name matcher. Empty means all tools.
+    pub tool: Option<String>,
+    /// Shell command to execute. Receives JSON payload on stdin.
+    pub command: String,
+    /// Whether jcode should wait for the hook. Deny decisions are only honored by tool.execute.before.
+    pub blocking: bool,
+    /// Maximum runtime in milliseconds.
+    pub timeout_ms: u64,
+}
+
+impl Default for HookCommandConfig {
+    fn default() -> Self {
+        Self {
+            event: String::new(),
+            tool: None,
+            command: String::new(),
+            blocking: false,
+            timeout_ms: 3000,
+        }
+    }
 }
 
 /// Keybinding configuration
@@ -589,7 +737,7 @@ impl Default for FeatureConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ProviderConfig {
-    /// Default model to use (e.g. "claude-opus-4-6", "copilot:claude-opus-4.6")
+    /// Default model to use (e.g. "claude-opus-4-7", "copilot:claude-opus-4.6")
     pub default_model: Option<String>,
     /// Default provider to use (claude|openai|copilot|openrouter)
     pub default_provider: Option<String>,
@@ -770,6 +918,75 @@ impl Default for GatewayConfig {
             enabled: false,
             port: 7643,
             bind_addr: "0.0.0.0".to_string(),
+        }
+    }
+}
+
+/// Per-tool configuration (M20).
+///
+/// Lets users override default/cap timeouts for the `bash`/shell tool so
+/// long-running commands like `cargo build`, `cargo test --release`, or
+/// stress checks aren't killed by the historical 2-minute hard timeout.
+///
+/// Both `default_timeout_ms` and `max_timeout_ms` are clamped at runtime by
+/// the absolute upper bound `BashToolConfig::HARD_CAP_MS` (20 minutes) to
+/// avoid pathological values like `u64::MAX`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ToolConfig {
+    /// Bash / shell tool defaults.
+    pub bash: BashToolConfig,
+}
+
+impl Default for ToolConfig {
+    fn default() -> Self {
+        Self {
+            bash: BashToolConfig::default(),
+        }
+    }
+}
+
+/// Bash / shell tool defaults (M20).
+///
+/// Historical jcode behaviour was a hardcoded `DEFAULT_TIMEOUT_MS = 120_000`
+/// (2 min) and a hardcoded cap of 600_000 (10 min). M20 lifts both to
+/// 5 min default / 20 min cap and makes them configurable.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BashToolConfig {
+    /// Default timeout (ms) when the model does not pass `timeout` on a
+    /// `bash`/shell tool call. Clamped to `[1_000, max_timeout_ms]`.
+    pub default_timeout_ms: u64,
+    /// Maximum timeout (ms) the model is allowed to request via the
+    /// `timeout` argument. Clamped to `[default_timeout_ms, HARD_CAP_MS]`.
+    pub max_timeout_ms: u64,
+}
+
+impl BashToolConfig {
+    /// Absolute upper bound (20 minutes). Applied even if config asks for more
+    /// so we never end up with a runaway tool call.
+    pub const HARD_CAP_MS: u64 = 20 * 60 * 1000;
+
+    /// Resolve `default_timeout_ms` clamped into `[1s, HARD_CAP_MS]`.
+    pub fn effective_default_ms(&self) -> u64 {
+        self.default_timeout_ms.clamp(1_000, Self::HARD_CAP_MS)
+    }
+
+    /// Resolve `max_timeout_ms` clamped into `[effective_default_ms, HARD_CAP_MS]`.
+    pub fn effective_max_ms(&self) -> u64 {
+        self.max_timeout_ms
+            .clamp(self.effective_default_ms(), Self::HARD_CAP_MS)
+    }
+}
+
+impl Default for BashToolConfig {
+    fn default() -> Self {
+        Self {
+            // 5 minutes is enough for most cargo test/build runs while still
+            // surfacing genuine hangs early.
+            default_timeout_ms: 5 * 60 * 1000,
+            // 20 minutes covers full release builds, long stress checks, etc.
+            max_timeout_ms: Self::HARD_CAP_MS,
         }
     }
 }

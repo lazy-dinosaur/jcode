@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 #![allow(
     unknown_lints,
     clippy::collapsible_match,
@@ -7,6 +8,7 @@
 )]
 
 pub mod agent;
+pub mod agent_profiles_md;
 pub mod ambient;
 pub mod ambient_runner;
 pub mod ambient_scheduler;
@@ -23,6 +25,7 @@ pub mod compaction;
 pub mod config;
 pub mod copilot_usage;
 pub mod dictation;
+pub mod doctor;
 #[cfg(feature = "embeddings")]
 pub mod embedding;
 #[cfg(not(feature = "embeddings"))]
@@ -33,6 +36,7 @@ pub mod env;
 pub mod gateway;
 pub mod gmail;
 pub mod goal;
+pub mod hooks;
 pub mod id;
 pub mod import;
 pub mod logging;
@@ -52,6 +56,8 @@ pub mod plan;
 pub mod platform;
 pub mod process_memory;
 pub mod process_title;
+pub mod project_commands;
+pub mod project_init;
 pub mod prompt;
 pub mod protocol;
 pub mod provider;
@@ -83,6 +89,9 @@ pub mod update;
 pub mod usage;
 pub mod util;
 pub mod video_export;
+
+#[cfg(test)]
+mod doctor_tests;
 
 use anyhow::Result;
 use std::sync::Mutex;

@@ -1,8 +1,10 @@
 use super::{
     CommunicateInput, CommunicateTool, cleanup_candidate_session_ids,
     default_await_target_statuses, default_cleanup_target_statuses, format_awaited_members,
-    format_awaited_members_with_reports, format_members, format_plan_status,
-    latest_assistant_report, resolve_optional_target_session,
+    format_awaited_members_with_reports, format_members, format_members_for_run,
+    format_plan_status, format_spawn_telemetry, latest_assistant_report,
+    resolve_optional_target_session, send_spawn_request_with_coordinator_retry,
+    spawn_requires_coordinator, spawn_self_promote_failure_message,
 };
 use crate::message::{Message, StreamEvent, ToolDefinition};
 use crate::protocol::{
@@ -87,6 +89,9 @@ fn format_awaited_members_includes_completion_reports() {
         status: "ready".to_string(),
         done: true,
         completion_report: Some("Structured report wins.".to_string()),
+        last_heartbeat_secs_ago: None,
+        last_tool: None,
+        last_checkpoint: None,
     }];
     let reports = HashMap::from([(
         "session_worker".to_string(),
@@ -121,6 +126,31 @@ fn resolve_optional_target_session_defaults_to_current() {
         resolve_optional_target_session(Some("session_other".to_string()), "session_current"),
         "session_other"
     );
+}
+
+#[test]
+fn spawn_requires_coordinator_detects_spawn_denials_only() {
+    let denial = ServerEvent::Error {
+        id: 1,
+        message: "Only the coordinator can spawn new agents. Assign the current session as coordinator first.".to_string(),
+        retry_after_secs: None,
+    };
+    assert!(spawn_requires_coordinator(&denial));
+
+    let unrelated = ServerEvent::Error {
+        id: 2,
+        message: "Only the coordinator can assign tasks.".to_string(),
+        retry_after_secs: None,
+    };
+    assert!(!spawn_requires_coordinator(&unrelated));
+}
+
+#[test]
+fn spawn_self_promote_failure_message_includes_actionable_retry() {
+    let message = spawn_self_promote_failure_message("Only the coordinator can assign roles.");
+    assert!(message.contains("automatic self-promotion failed"));
+    assert!(message.contains("swarm assign_role target_session=current role=coordinator"));
+    assert!(message.contains("retry spawn"));
 }
 
 #[test]
@@ -159,6 +189,14 @@ fn schema_advertises_supported_swarm_fields() {
     assert!(props.contains_key("spawn_if_needed"));
     assert!(props.contains_key("prefer_spawn"));
     assert!(props.contains_key("session_ids"));
+    assert!(props.contains_key("owned_only"));
+    assert_eq!(props["owned_only"]["type"], json!("boolean"));
+    assert!(
+        props["owned_only"]["description"]
+            .as_str()
+            .is_some_and(|description| description
+                .contains("non-terminal workers spawned by this coordinator"))
+    );
     assert!(props.contains_key("mode"));
     assert!(props.contains_key("target_status"));
     assert!(props.contains_key("timeout_minutes"));
@@ -169,6 +207,7 @@ fn schema_advertises_supported_swarm_fields() {
     assert!(props.contains_key("initial_message"));
     assert!(props.contains_key("force"));
     assert!(props.contains_key("retain_agents"));
+    assert!(props.contains_key("run_id"));
     assert!(props.contains_key("status"));
     assert!(props.contains_key("validation"));
     assert!(props.contains_key("follow_up"));
@@ -547,3 +586,117 @@ fn default_await_members_targets_include_ready() {
 include!("communicate_tests/input_format.rs");
 include!("communicate_tests/end_to_end.rs");
 include!("communicate_tests/assignment.rs");
+
+mod format_spawn_telemetry_tests {
+    //! Lazydino M2 stage 2 — verify the spawn-result string includes the
+    //! session id, requested cwd (or inherit marker), and run_id when set.
+    //! The mode field depends on env/config; we serialize tests behind an
+    //! env lock and pin the env var to a known value so the rendered string
+    //! is deterministic.
+
+    use super::format_spawn_telemetry;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvGuard {
+        previous: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn set(value: &str) -> Self {
+            let previous = std::env::var("JCODE_SWARM_NO_TERMINAL").ok();
+            // SAFETY: serialized via `env_lock()`.
+            unsafe { std::env::set_var("JCODE_SWARM_NO_TERMINAL", value) };
+            Self { previous }
+        }
+
+        fn unset() -> Self {
+            let previous = std::env::var("JCODE_SWARM_NO_TERMINAL").ok();
+            // SAFETY: serialized via `env_lock()`.
+            unsafe { std::env::remove_var("JCODE_SWARM_NO_TERMINAL") };
+            Self { previous }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            // SAFETY: serialized.
+            unsafe {
+                match self.previous.take() {
+                    Some(prev) => std::env::set_var("JCODE_SWARM_NO_TERMINAL", prev),
+                    None => std::env::remove_var("JCODE_SWARM_NO_TERMINAL"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn includes_session_id_cwd_and_run_id_in_visible_mode() {
+        let _guard = env_lock().lock().unwrap();
+        let _env = EnvGuard::set("0");
+
+        let rendered = format_spawn_telemetry(
+            "sess-1234",
+            Some("/repo/project"),
+            Some("run-abc"),
+            Some(3),
+            Some(6),
+        );
+
+        assert!(rendered.contains("sess-1234"));
+        assert!(rendered.contains("/repo/project"));
+        assert!(rendered.contains("run-abc"));
+        assert!(rendered.contains("visible-first"));
+        assert!(!rendered.contains("headless-only"));
+    }
+
+    #[test]
+    fn headless_only_mode_reflected_in_telemetry() {
+        let _guard = env_lock().lock().unwrap();
+        let _env = EnvGuard::set("1");
+
+        let rendered = format_spawn_telemetry("s-1", Some("/tmp/repo"), None, None, None);
+
+        assert!(rendered.contains("s-1"));
+        assert!(rendered.contains("/tmp/repo"));
+        assert!(rendered.contains("headless-only"));
+        assert!(!rendered.contains("visible-first"));
+    }
+
+    #[test]
+    fn omits_run_id_part_when_not_provided() {
+        let _guard = env_lock().lock().unwrap();
+        let _env = EnvGuard::unset();
+
+        let rendered = format_spawn_telemetry("s-2", Some("/tmp/repo"), None, None, None);
+
+        assert!(!rendered.contains("run_id="));
+    }
+
+    #[test]
+    fn shows_inherit_marker_when_cwd_omitted() {
+        let _guard = env_lock().lock().unwrap();
+        let _env = EnvGuard::unset();
+
+        let rendered = format_spawn_telemetry("s-3", None, None, None, None);
+
+        assert!(rendered.contains("inherit coordinator cwd"));
+    }
+
+    #[test]
+    fn omits_run_id_part_when_empty_string() {
+        let _guard = env_lock().lock().unwrap();
+        let _env = EnvGuard::unset();
+
+        let rendered = format_spawn_telemetry("s-4", Some("/tmp"), Some(""), Some(10), Some(0));
+
+        assert!(
+            !rendered.contains("run_id="),
+            "empty run_id should not appear in telemetry"
+        );
+    }
+}

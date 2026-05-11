@@ -221,6 +221,9 @@ impl App {
         mut session: Session,
     ) -> Self {
         let skills = Arc::new(SkillRegistry::default());
+        let project_commands = Arc::new(ProjectCommandRegistry::load_for_working_dir(
+            session.working_dir.as_deref().map(std::path::Path::new),
+        ));
         let mcp_manager = Arc::new(RwLock::new(McpManager::new()));
         if session.model.is_none() {
             session.model = Some(provider.model());
@@ -270,6 +273,7 @@ impl App {
             provider,
             registry,
             skills,
+            project_commands,
             mcp_manager,
             messages: Vec::new(),
             session,
@@ -321,6 +325,7 @@ impl App {
             stream_message_ended: false,
             remote_resume_activity: None,
             pending_reload_reconnect_status: None,
+            last_remote_server_event_at: None,
             streaming_tps_start: None,
             streaming_tps_elapsed: Duration::ZERO,
             streaming_tps_collect_output: false,
@@ -556,6 +561,7 @@ impl App {
     pub fn new(provider: Arc<dyn Provider>, registry: Registry) -> Self {
         let t0 = std::time::Instant::now();
         let skills = SkillRegistry::shared_snapshot();
+        let project_commands = ProjectCommandRegistry::shared_snapshot();
         let t_skills = t0.elapsed();
         let mcp_manager = Arc::new(RwLock::new(McpManager::new()));
         let mut session = Session::create(None, None);
@@ -635,6 +641,7 @@ impl App {
             provider,
             registry,
             skills,
+            project_commands,
             mcp_manager,
             messages: Vec::new(),
             session,
@@ -686,6 +693,7 @@ impl App {
             stream_message_ended: false,
             remote_resume_activity: None,
             pending_reload_reconnect_status: None,
+            last_remote_server_event_at: None,
             streaming_tps_start: None,
             streaming_tps_elapsed: Duration::ZERO,
             streaming_tps_collect_output: false,

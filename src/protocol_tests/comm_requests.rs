@@ -114,7 +114,9 @@ fn test_comm_await_members_roundtrip() -> Result<()> {
         session_id: "sess_waiter".to_string(),
         target_status: vec!["completed".to_string(), "stopped".to_string()],
         session_ids: vec!["sess_a".to_string(), "sess_b".to_string()],
+        owned_only: Some(true),
         mode: Some("any".to_string()),
+        run_id: Some("run-await-1".to_string()),
         timeout_secs: Some(120),
     };
     let json = serde_json::to_string(&req)?;
@@ -125,7 +127,9 @@ fn test_comm_await_members_roundtrip() -> Result<()> {
         session_id,
         target_status,
         session_ids,
+        owned_only,
         mode,
+        run_id,
         timeout_secs,
         ..
     } = decoded
@@ -135,7 +139,9 @@ fn test_comm_await_members_roundtrip() -> Result<()> {
     assert_eq!(session_id, "sess_waiter");
     assert_eq!(target_status, vec!["completed", "stopped"]);
     assert_eq!(session_ids, vec!["sess_a", "sess_b"]);
+    assert_eq!(owned_only, Some(true));
     assert_eq!(mode.as_deref(), Some("any"));
+    assert_eq!(run_id.as_deref(), Some("run-await-1"));
     assert_eq!(timeout_secs, Some(120));
     Ok(())
 }
@@ -147,7 +153,9 @@ fn test_comm_await_members_defaults() -> Result<()> {
     let decoded = parse_request_json(json)?;
     let Request::CommAwaitMembers {
         session_ids,
+        owned_only,
         mode,
+        run_id,
         timeout_secs,
         ..
     } = decoded
@@ -158,7 +166,9 @@ fn test_comm_await_members_defaults() -> Result<()> {
         session_ids.is_empty(),
         "session_ids should default to empty"
     );
+    assert_eq!(owned_only, None, "owned_only should default to None");
     assert_eq!(mode, None, "mode should default to None");
+    assert_eq!(run_id, None, "run_id should default to None");
     assert_eq!(timeout_secs, None, "timeout_secs should default to None");
     Ok(())
 }
@@ -366,9 +376,11 @@ fn test_comm_assign_next_roundtrip() -> Result<()> {
         prefer_spawn: Some(true),
         spawn_if_needed: Some(true),
         message: Some("Take the next runnable task.".to_string()),
+        run_id: Some("run-assign-next".to_string()),
     };
     let json = serde_json::to_string(&req)?;
     assert!(json.contains("\"type\":\"comm_assign_next\""));
+    assert!(json.contains("\"run_id\":\"run-assign-next\""));
     let decoded = parse_request_json(&json)?;
     assert_eq!(decoded.id(), 60);
     let Request::CommAssignNext {
@@ -378,6 +390,7 @@ fn test_comm_assign_next_roundtrip() -> Result<()> {
         prefer_spawn,
         spawn_if_needed,
         message,
+        run_id,
         ..
     } = decoded
     else {
@@ -389,6 +402,7 @@ fn test_comm_assign_next_roundtrip() -> Result<()> {
     assert_eq!(prefer_spawn, Some(true));
     assert_eq!(spawn_if_needed, Some(true));
     assert_eq!(message.as_deref(), Some("Take the next runnable task."));
+    assert_eq!(run_id.as_deref(), Some("run-assign-next"));
     Ok(())
 }
 
@@ -428,10 +442,12 @@ fn test_comm_spawn_roundtrip_with_optional_nonce() -> Result<()> {
         working_dir: Some("/tmp/project".to_string()),
         initial_message: Some("Start here".to_string()),
         request_nonce: Some("planner-fresh-123".to_string()),
+        run_id: Some("run-spawn".to_string()),
     };
     let json = serde_json::to_string(&req)?;
     assert!(json.contains("\"type\":\"comm_spawn\""));
     assert!(json.contains("\"request_nonce\":\"planner-fresh-123\""));
+    assert!(json.contains("\"run_id\":\"run-spawn\""));
     let decoded = parse_request_json(&json)?;
     assert_eq!(decoded.id(), 59);
     let Request::CommSpawn {
@@ -439,6 +455,7 @@ fn test_comm_spawn_roundtrip_with_optional_nonce() -> Result<()> {
         working_dir,
         initial_message,
         request_nonce,
+        run_id,
         ..
     } = decoded
     else {
@@ -448,5 +465,6 @@ fn test_comm_spawn_roundtrip_with_optional_nonce() -> Result<()> {
     assert_eq!(working_dir.as_deref(), Some("/tmp/project"));
     assert_eq!(initial_message.as_deref(), Some("Start here"));
     assert_eq!(request_nonce.as_deref(), Some("planner-fresh-123"));
+    assert_eq!(run_id.as_deref(), Some("run-spawn"));
     Ok(())
 }

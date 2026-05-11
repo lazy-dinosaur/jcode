@@ -1906,6 +1906,7 @@ impl App {
             return;
         }
 
+        let mut unknown_skill_invocation: Option<String> = None;
         // Check for skill invocation
         if let Some(skill_name) = SkillRegistry::parse_invocation(&input) {
             let mut skill = self.current_skills_snapshot().get(skill_name).cloned();
@@ -1940,16 +1941,123 @@ impl App {
                     title: None,
                     tool_data: None,
                 });
+                return;
             } else {
+                unknown_skill_invocation = Some(skill_name.to_string());
+            }
+        }
+
+        if let Some((command_name, args)) =
+            crate::project_commands::parse_project_command_invocation(&input)
+        {
+            let working_dir = self
+                .session
+                .working_dir
+                .as_deref()
+                .map(std::path::Path::new);
+            let reloaded =
+                crate::project_commands::ProjectCommandRegistry::load_for_working_dir(working_dir);
+            let command = self
+                .project_commands
+                .get(command_name)
+                .cloned()
+                .or_else(|| reloaded.get(command_name).cloned());
+            self.project_commands = std::sync::Arc::new(reloaded.clone());
+            if let Ok(mut shared) =
+                crate::project_commands::ProjectCommandRegistry::shared_registry().try_write()
+            {
+                *shared = reloaded;
+            }
+
+            if let Some(command) = command {
+                self.active_skill = None;
+                let rendered = command.render(args);
+                let raw_input = rendered.clone();
+                let input = rendered;
+
+                // Add user message to display (show placeholder to user, not full paste)
                 self.push_display_message(DisplayMessage {
-                    role: "error".to_string(),
-                    content: format!("Unknown skill: /{}", skill_name),
+                    role: "user".to_string(),
+                    content: raw_input, // Show placeholder to user (condensed view)
                     tool_calls: vec![],
                     duration_secs: None,
                     title: None,
                     tool_data: None,
                 });
+                // Send expanded content (with actual pasted text) to model
+                let images = std::mem::take(&mut self.pending_images);
+                if !images.is_empty() {
+                    crate::logging::info(&format!(
+                        "Submitting with {} image(s): {}",
+                        images.len(),
+                        images
+                            .iter()
+                            .map(|(t, d)| format!("{} ({}KB)", t, d.len() / 1024))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
+                if images.is_empty() {
+                    self.add_provider_message(Message::user(&input));
+                    self.session.add_message(
+                        Role::User,
+                        vec![ContentBlock::Text {
+                            text: input.clone(),
+                            cache_control: None,
+                        }],
+                    );
+                } else {
+                    self.add_provider_message(Message::user_with_images(&input, images.clone()));
+                    let mut blocks: Vec<ContentBlock> = images
+                        .into_iter()
+                        .map(|(media_type, data)| ContentBlock::Image { media_type, data })
+                        .collect();
+                    blocks.push(ContentBlock::Text {
+                        text: input.clone(),
+                        cache_control: None,
+                    });
+                    self.session.add_message(Role::User, blocks);
+                }
+                crate::telemetry::record_turn();
+                self.session_save_pending = true;
+
+                // Set up processing state - actual processing happens after UI redraws
+                self.is_processing = true;
+                self.status = ProcessingStatus::Sending;
+                self.clear_streaming_render_state();
+                self.stream_buffer.clear();
+                self.thought_line_inserted = false;
+                self.thinking_prefix_emitted = false;
+                self.thinking_buffer.clear();
+                self.streaming_tool_calls.clear();
+                self.streaming_input_tokens = 0;
+                self.streaming_output_tokens = 0;
+                self.streaming_cache_read_tokens = None;
+                self.streaming_cache_creation_tokens = None;
+                self.upstream_provider = None;
+                self.status_detail = None;
+                self.streaming_tps_start = None;
+                self.streaming_tps_elapsed = Duration::ZERO;
+                self.streaming_tps_collect_output = false;
+                self.streaming_total_output_tokens = 0;
+                self.streaming_tps_observed_output_tokens = 0;
+                self.streaming_tps_observed_elapsed = Duration::ZERO;
+                self.processing_started = Some(Instant::now());
+                self.visible_turn_started = Some(Instant::now());
+                self.pending_turn = true;
+                return;
             }
+        }
+
+        if let Some(skill_name) = unknown_skill_invocation {
+            self.push_display_message(DisplayMessage {
+                role: "error".to_string(),
+                content: format!("Unknown skill: /{}", skill_name),
+                tool_calls: vec![],
+                duration_secs: None,
+                title: None,
+                tool_data: None,
+            });
             return;
         }
 

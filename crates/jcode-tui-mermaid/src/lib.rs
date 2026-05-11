@@ -1311,7 +1311,15 @@ pub fn debug_test_scroll(content: Option<&str>) -> ScrollTestResult {
 fn hash_content(content: &str) -> u64 {
     use std::collections::hash_map::DefaultHasher;
 
+    // Include a renderer/cache schema salt so visual fixes invalidate stale PNGs.
+    // Older cached Mermaid images can survive rebuilds because their filenames
+    // were based only on source text and target width. In particular, a previous
+    // SVG font fallback regression produced textless diagrams that kept being
+    // reused after the renderer was fixed.
+    const MERMAID_RENDER_CACHE_SCHEMA: &str = "mermaid-render-v2-font-fallback";
+
     let mut hasher = DefaultHasher::new();
+    MERMAID_RENDER_CACHE_SCHEMA.hash(&mut hasher);
     content.hash(&mut hasher);
     hasher.finish()
 }

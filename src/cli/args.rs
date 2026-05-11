@@ -174,6 +174,34 @@ pub(crate) enum Command {
         api_key_env: Option<String>,
     },
 
+    /// Initialize a project-local private .jcode harness
+    Init {
+        /// Target project directory. Defaults to the current working directory.
+        #[arg(default_value = ".")]
+        target: String,
+
+        /// Overwrite existing generated .jcode files.
+        #[arg(long)]
+        force: bool,
+
+        /// Add .jcode/ to project .gitignore instead of .git/info/exclude.
+        #[arg(long)]
+        gitignore: bool,
+
+        /// Ignore the project's team AGENTS.md and use the private .jcode harness as primary.
+        #[arg(long)]
+        ignore_team_agents: bool,
+    },
+
+    /// Diagnose the full jcode harness (config, hooks, skills, agents, commands, mcp).
+    /// For auth-only diagnosis use `jcode auth doctor`.
+    Doctor {
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        quiet: bool,
+    },
+
     /// Run in simple REPL mode (no TUI)
     Repl,
 
