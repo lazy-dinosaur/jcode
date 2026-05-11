@@ -118,16 +118,27 @@ pub struct ToolHookTool<'a> {
     pub result: Option<Value>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct SessionStopHookPayload<'a> {
     pub event: &'a str,
     pub session_id: &'a str,
     pub working_dir: Option<String>,
     pub reason: &'a str,
     pub message_count: usize,
+    /// M11 stage 5: optional context fields. Skipped from JSON when None so
+    /// existing hook scripts continue to see the same payload shape they
+    /// always did unless they opt in by reading these keys.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_user_message: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub recent_tool_calls: Vec<LifecycleHookToolCallPreview>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_age_seconds: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct ResponseCompletedHookPayload<'a> {
     pub event: &'a str,
     pub session_id: &'a str,
@@ -136,7 +147,37 @@ pub struct ResponseCompletedHookPayload<'a> {
     pub stop_reason: Option<&'a str>,
     pub tool_calls_count: usize,
     pub output_chars: usize,
+    /// M11 stage 5: optional context fields. Skipped when not provided so
+    /// the wire format stays backward compatible with stage 1-4 consumers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_user_message: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub recent_tool_calls: Vec<LifecycleHookToolCallPreview>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_age_seconds: Option<u64>,
 }
+
+/// M11 stage 5: compact tool-call summary embedded in lifecycle hook payloads.
+/// `args_preview` is a one-line, truncated rendering of the tool input
+/// (`LIFECYCLE_HOOK_TOOL_ARGS_PREVIEW_MAX` chars) so hook scripts can match
+/// on what the agent actually did without inflating stdin.
+#[derive(Debug, Clone, Serialize)]
+pub struct LifecycleHookToolCallPreview {
+    pub name: String,
+    pub args_preview: String,
+}
+
+/// M11 stage 5: maximum number of recent tool calls embedded in a lifecycle
+/// hook payload. Older entries are dropped first.
+pub const LIFECYCLE_HOOK_RECENT_TOOL_CALLS_MAX: usize = 5;
+/// M11 stage 5: maximum length (chars) of each `args_preview` string before
+/// truncation. Keeps stdin small for blocking hooks with strict timeouts.
+pub const LIFECYCLE_HOOK_TOOL_ARGS_PREVIEW_MAX: usize = 200;
+/// M11 stage 5: maximum length (chars) of `last_user_message` before
+/// truncation with a trailing ellipsis.
+pub const LIFECYCLE_HOOK_LAST_USER_MESSAGE_MAX: usize = 500;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
@@ -558,6 +599,7 @@ mod tests {
             working_dir: Some("/tmp/work".to_string()),
             reason: "disconnect",
             message_count: 3,
+            ..Default::default()
         };
 
         let value = serde_json::to_value(payload).unwrap();
@@ -569,6 +611,45 @@ mod tests {
                 "working_dir": "/tmp/work",
                 "reason": "disconnect",
                 "message_count": 3,
+            }),
+            "M11 stage 5: optional context fields must be omitted (skip_serializing_if) when empty so existing hook scripts see the same wire format they always did"
+        );
+    }
+
+    // M11 stage 5: golden test with context fields populated. Pins the new
+    // wire format so hook authors know exactly what keys/types to expect.
+    #[test]
+    fn session_stop_payload_serializes_with_context_fields() {
+        let payload = SessionStopHookPayload {
+            event: CLIENT_DISCONNECT,
+            session_id: "sess-1",
+            working_dir: Some("/tmp/work".to_string()),
+            reason: "disconnect",
+            message_count: 3,
+            last_user_message: Some("ship it".to_string()),
+            recent_tool_calls: vec![LifecycleHookToolCallPreview {
+                name: "bash".to_string(),
+                args_preview: r#"{"command":"git status"}"#.to_string(),
+            }],
+            turn_count: Some(7),
+            session_age_seconds: Some(123),
+        };
+
+        let value = serde_json::to_value(payload).unwrap();
+        assert_eq!(
+            value,
+            json!({
+                "event": "client.disconnect",
+                "session_id": "sess-1",
+                "working_dir": "/tmp/work",
+                "reason": "disconnect",
+                "message_count": 3,
+                "last_user_message": "ship it",
+                "recent_tool_calls": [
+                    {"name": "bash", "args_preview": r#"{"command":"git status"}"#}
+                ],
+                "turn_count": 7,
+                "session_age_seconds": 123,
             })
         );
     }
@@ -591,6 +672,7 @@ mod tests {
             working_dir: Some("/tmp/work".to_string()),
             reason: "disconnect",
             message_count: 3,
+            ..Default::default()
         };
 
         let value = serde_json::to_value(payload).unwrap();
@@ -628,6 +710,7 @@ mod tests {
             working_dir: None,
             reason: "disconnect",
             message_count: 1,
+            ..Default::default()
         };
 
         let denial = run_lifecycle_hook_commands(
@@ -655,6 +738,7 @@ mod tests {
             stop_reason: Some("end_turn"),
             tool_calls_count: 0,
             output_chars: 42,
+            ..Default::default()
         };
 
         let value = serde_json::to_value(payload).unwrap();
@@ -668,8 +752,45 @@ mod tests {
                 "stop_reason": "end_turn",
                 "tool_calls_count": 0,
                 "output_chars": 42,
-            })
+            }),
+            "M11 stage 5: optional context fields must be omitted (skip_serializing_if) when empty so existing hook scripts see the same wire format they always did"
         );
+    }
+
+    // M11 stage 5: golden test with response.completed context fields
+    // populated end-to-end. Pins the exact JSON keys/types hook authors
+    // get when context is available.
+    #[test]
+    fn response_completed_payload_serializes_with_context_fields() {
+        let payload = ResponseCompletedHookPayload {
+            event: RESPONSE_COMPLETED,
+            session_id: "sess-1",
+            message_id: "msg-1",
+            working_dir: Some("/tmp/work".to_string()),
+            stop_reason: Some("end_turn"),
+            tool_calls_count: 2,
+            output_chars: 42,
+            last_user_message: Some("commit and push".to_string()),
+            recent_tool_calls: vec![
+                LifecycleHookToolCallPreview {
+                    name: "bash".to_string(),
+                    args_preview: r#"{"command":"git add ."}"#.to_string(),
+                },
+                LifecycleHookToolCallPreview {
+                    name: "bash".to_string(),
+                    args_preview: r#"{"command":"git commit -m fix"}"#.to_string(),
+                },
+            ],
+            turn_count: Some(3),
+            session_age_seconds: Some(900),
+        };
+
+        let value = serde_json::to_value(payload).unwrap();
+        assert_eq!(value["last_user_message"], "commit and push");
+        assert_eq!(value["recent_tool_calls"].as_array().unwrap().len(), 2);
+        assert_eq!(value["recent_tool_calls"][0]["name"], "bash");
+        assert_eq!(value["turn_count"], 3);
+        assert_eq!(value["session_age_seconds"], 900);
     }
 
     #[test]
@@ -743,6 +864,7 @@ mod tests {
             stop_reason: Some("end_turn"),
             tool_calls_count: 0,
             output_chars: 5,
+            ..Default::default()
         };
 
         let denial = run_lifecycle_hook_commands(commands, None, &payload)
@@ -800,6 +922,7 @@ mod tests {
             stop_reason: Some("end_turn"),
             tool_calls_count: 0,
             output_chars: 5,
+            ..Default::default()
         };
 
         let denial = run_lifecycle_hook_commands(commands, None, &payload)

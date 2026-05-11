@@ -72,6 +72,105 @@ impl Agent {
         self.lifecycle_deny_streak
     }
 
+    /// M11 stage 5: extract the most recent user-authored message text from
+    /// the session transcript. Internal `<system-reminder>` injections are
+    /// skipped so the hook sees what the real human typed last.
+    /// Returned string is truncated to `LIFECYCLE_HOOK_LAST_USER_MESSAGE_MAX`
+    /// chars (with a `…` suffix on overflow). Returns None for empty
+    /// transcripts or when no user-authored message is found.
+    pub(crate) fn lifecycle_hook_last_user_message(&self) -> Option<String> {
+        for stored in self.session.messages.iter().rev() {
+            if !matches!(stored.role, Role::User) {
+                continue;
+            }
+            // Find first plain text block; skip tool results, images, etc.
+            let text = stored.content.iter().find_map(|block| match block {
+                ContentBlock::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })?;
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            // Skip injected system reminders (these aren't real user input).
+            if trimmed.starts_with("<system-reminder>") {
+                continue;
+            }
+            return Some(truncate_with_ellipsis(
+                trimmed,
+                crate::hooks::LIFECYCLE_HOOK_LAST_USER_MESSAGE_MAX,
+            ));
+        }
+        None
+    }
+
+    /// M11 stage 5: build the last-N tool-call previews from the session
+    /// transcript (oldest of the kept window first, newest last) so hook
+    /// scripts can match on the tail of agent activity. Each entry's
+    /// `args_preview` is a one-line, truncated rendering of the tool input.
+    pub(crate) fn lifecycle_hook_recent_tool_calls(
+        &self,
+    ) -> Vec<crate::hooks::LifecycleHookToolCallPreview> {
+        let mut collected: Vec<crate::hooks::LifecycleHookToolCallPreview> = Vec::new();
+        for stored in self.session.messages.iter().rev() {
+            for block in stored.content.iter().rev() {
+                if let ContentBlock::ToolUse { name, input, .. } = block {
+                    collected.push(crate::hooks::LifecycleHookToolCallPreview {
+                        name: name.clone(),
+                        args_preview: build_tool_args_preview(input),
+                    });
+                    if collected.len() >= crate::hooks::LIFECYCLE_HOOK_RECENT_TOOL_CALLS_MAX {
+                        break;
+                    }
+                }
+            }
+            if collected.len() >= crate::hooks::LIFECYCLE_HOOK_RECENT_TOOL_CALLS_MAX {
+                break;
+            }
+        }
+        collected.reverse();
+        collected
+    }
+
+    /// M11 stage 5: session_age_seconds derived from Session::created_at.
+    /// Clamped to 0 if the system clock moved backwards.
+    pub(crate) fn lifecycle_hook_session_age_seconds(&self) -> u64 {
+        let now = chrono::Utc::now();
+        let elapsed = now.signed_duration_since(self.session.created_at);
+        elapsed.num_seconds().max(0) as u64
+    }
+
+    /// M11 stage 5: count user-authored turns observed so far. Each contiguous
+    /// run of user messages (ignoring system reminders) counts as one turn.
+    pub(crate) fn lifecycle_hook_turn_count(&self) -> usize {
+        let mut count = 0usize;
+        let mut last_was_user = false;
+        for stored in &self.session.messages {
+            if matches!(stored.role, Role::User) {
+                let is_reminder = stored.content.iter().any(|block| match block {
+                    ContentBlock::Text { text, .. } => {
+                        text.trim_start().starts_with("<system-reminder>")
+                    }
+                    _ => false,
+                });
+                let is_tool_result_only = stored
+                    .content
+                    .iter()
+                    .all(|block| matches!(block, ContentBlock::ToolResult { .. }));
+                if is_reminder || is_tool_result_only {
+                    continue;
+                }
+                if !last_was_user {
+                    count += 1;
+                }
+                last_was_user = true;
+            } else {
+                last_was_user = false;
+            }
+        }
+        count
+    }
+
     pub(super) fn merge_current_and_pending_system_reminders(
         current: Option<String>,
         pending: Option<String>,
@@ -108,6 +207,14 @@ impl Agent {
         let Some(message_id) = message_id else {
             return;
         };
+        // M11 stage 5: enrich payload with last user message, recent tool
+        // calls, turn count, and session age so hook scripts can write
+        // meaningful policies. All fields are optional / omitted-when-empty
+        // so existing stage 1-4 hook scripts keep working unchanged.
+        let last_user_message = self.lifecycle_hook_last_user_message();
+        let recent_tool_calls = self.lifecycle_hook_recent_tool_calls();
+        let turn_count = Some(self.lifecycle_hook_turn_count());
+        let session_age_seconds = Some(self.lifecycle_hook_session_age_seconds());
         let payload = crate::hooks::ResponseCompletedHookPayload {
             event: crate::hooks::RESPONSE_COMPLETED,
             session_id: &self.session.id,
@@ -116,6 +223,10 @@ impl Agent {
             stop_reason,
             tool_calls_count,
             output_chars,
+            last_user_message,
+            recent_tool_calls,
+            turn_count,
+            session_age_seconds,
         };
         match crate::hooks::run_response_hooks(payload).await {
             Ok(Some(reason)) => self.set_pending_lifecycle_system_reminder(reason),
@@ -1022,4 +1133,32 @@ impl Agent {
 
         Ok(final_text)
     }
+}
+
+/// M11 stage 5: truncate a string to `max_chars` Unicode chars and append
+/// `…` if truncation occurred. Operates on char boundaries (NOT bytes) so
+/// non-ASCII text such as Korean is never split mid-codepoint.
+fn truncate_with_ellipsis(input: &str, max_chars: usize) -> String {
+    let trimmed = input.trim();
+    if trimmed.chars().count() <= max_chars {
+        return trimmed.to_string();
+    }
+    let mut out: String = trimmed.chars().take(max_chars).collect();
+    out.push('…');
+    out
+}
+
+/// M11 stage 5: render a tool-input JSON value as a compact, single-line
+/// preview suitable for `args_preview`. Newlines collapse to spaces and the
+/// string is truncated to `LIFECYCLE_HOOK_TOOL_ARGS_PREVIEW_MAX` chars.
+fn build_tool_args_preview(input: &serde_json::Value) -> String {
+    let raw = if input.is_null() {
+        String::new()
+    } else {
+        serde_json::to_string(input).unwrap_or_default()
+    };
+    // Collapse all whitespace runs (including newlines) into a single space
+    // so the preview reads as one line.
+    let collapsed: String = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    truncate_with_ellipsis(&collapsed, crate::hooks::LIFECYCLE_HOOK_TOOL_ARGS_PREVIEW_MAX)
 }

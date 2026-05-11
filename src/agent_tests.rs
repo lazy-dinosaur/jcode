@@ -1323,3 +1323,202 @@ async fn env_snapshot_detail_is_minimal_for_empty_sessions_and_full_after_histor
 
     assert_eq!(agent.env_snapshot_detail(), EnvSnapshotDetail::Full);
 }
+
+// --- M11 stage 5: lifecycle hook payload context enrichment ----------------
+
+/// Helper for stage 5 tests: append a User text message to the session
+/// without going through `add_message` (which auto-fills metadata that
+/// doesn't matter for the context-extraction logic).
+fn push_user_text(agent: &mut Agent, text: &str) {
+    agent
+        .session
+        .append_stored_message(crate::session::StoredMessage {
+            id: format!("msg_user_{}", agent.session.messages.len()),
+            role: crate::message::Role::User,
+            content: vec![ContentBlock::Text {
+                text: text.to_string(),
+                cache_control: None,
+            }],
+            display_role: None,
+            timestamp: None,
+            tool_duration_ms: None,
+            token_usage: None,
+        });
+}
+
+fn push_assistant_tool_use(agent: &mut Agent, name: &str, input: serde_json::Value) {
+    agent
+        .session
+        .append_stored_message(crate::session::StoredMessage {
+            id: format!("msg_asst_{}", agent.session.messages.len()),
+            role: crate::message::Role::Assistant,
+            content: vec![ContentBlock::ToolUse {
+                id: format!("tool_use_{}", agent.session.messages.len()),
+                name: name.to_string(),
+                input,
+            }],
+            display_role: None,
+            timestamp: None,
+            tool_duration_ms: None,
+            token_usage: None,
+        });
+}
+
+#[tokio::test]
+async fn lifecycle_hook_last_user_message_returns_most_recent_user_text() {
+    let _guard = crate::storage::lock_test_env();
+    let provider: Arc<dyn Provider> = Arc::new(NativeAutoCompactionProvider);
+    let registry = Registry::new(provider.clone()).await;
+    let mut agent = Agent::new(provider, registry);
+
+    assert!(agent.lifecycle_hook_last_user_message().is_none());
+
+    push_user_text(&mut agent, "first ask");
+    push_assistant_tool_use(&mut agent, "bash", serde_json::json!({"command": "ls"}));
+    push_user_text(&mut agent, "second ask");
+
+    assert_eq!(
+        agent.lifecycle_hook_last_user_message().as_deref(),
+        Some("second ask")
+    );
+}
+
+#[tokio::test]
+async fn lifecycle_hook_last_user_message_skips_system_reminder_injections() {
+    let _guard = crate::storage::lock_test_env();
+    let provider: Arc<dyn Provider> = Arc::new(NativeAutoCompactionProvider);
+    let registry = Registry::new(provider.clone()).await;
+    let mut agent = Agent::new(provider, registry);
+
+    push_user_text(&mut agent, "real user input");
+    // <system-reminder> messages are internally injected (memory, lifecycle
+    // hook denies, etc.) and must not be reported as user input.
+    push_user_text(
+        &mut agent,
+        "<system-reminder>\nyou forgot to commit\n</system-reminder>",
+    );
+
+    assert_eq!(
+        agent.lifecycle_hook_last_user_message().as_deref(),
+        Some("real user input"),
+        "system-reminder messages must be skipped"
+    );
+}
+
+#[tokio::test]
+async fn lifecycle_hook_last_user_message_truncates_long_text() {
+    let _guard = crate::storage::lock_test_env();
+    let provider: Arc<dyn Provider> = Arc::new(NativeAutoCompactionProvider);
+    let registry = Registry::new(provider.clone()).await;
+    let mut agent = Agent::new(provider, registry);
+
+    let long = "a".repeat(crate::hooks::LIFECYCLE_HOOK_LAST_USER_MESSAGE_MAX + 50);
+    push_user_text(&mut agent, &long);
+
+    let extracted = agent.lifecycle_hook_last_user_message().unwrap();
+    // Expect max_chars chars + a single '…' (1 char) appended.
+    let char_count = extracted.chars().count();
+    assert_eq!(
+        char_count,
+        crate::hooks::LIFECYCLE_HOOK_LAST_USER_MESSAGE_MAX + 1
+    );
+    assert!(extracted.ends_with('…'));
+}
+
+#[tokio::test]
+async fn lifecycle_hook_recent_tool_calls_keeps_last_n_in_chronological_order() {
+    let _guard = crate::storage::lock_test_env();
+    let provider: Arc<dyn Provider> = Arc::new(NativeAutoCompactionProvider);
+    let registry = Registry::new(provider.clone()).await;
+    let mut agent = Agent::new(provider, registry);
+
+    assert!(agent.lifecycle_hook_recent_tool_calls().is_empty());
+
+    // Push more than LIFECYCLE_HOOK_RECENT_TOOL_CALLS_MAX tool uses; the
+    // oldest must drop, the newest must remain, and ordering must be
+    // oldest-of-kept-window first so hook scripts can read it as a tail.
+    for i in 0..(crate::hooks::LIFECYCLE_HOOK_RECENT_TOOL_CALLS_MAX + 2) {
+        push_assistant_tool_use(
+            &mut agent,
+            "bash",
+            serde_json::json!({"command": format!("echo {i}")}),
+        );
+    }
+
+    let recent = agent.lifecycle_hook_recent_tool_calls();
+    assert_eq!(recent.len(), crate::hooks::LIFECYCLE_HOOK_RECENT_TOOL_CALLS_MAX);
+    // First kept entry must be index=2 (the first 2 were dropped); last
+    // must be the most recent one we pushed (max+1).
+    assert!(recent.first().unwrap().args_preview.contains("echo 2"));
+    let max_plus_one = crate::hooks::LIFECYCLE_HOOK_RECENT_TOOL_CALLS_MAX + 1;
+    assert!(
+        recent
+            .last()
+            .unwrap()
+            .args_preview
+            .contains(&format!("echo {max_plus_one}"))
+    );
+}
+
+#[tokio::test]
+async fn lifecycle_hook_recent_tool_calls_truncates_long_args_preview() {
+    let _guard = crate::storage::lock_test_env();
+    let provider: Arc<dyn Provider> = Arc::new(NativeAutoCompactionProvider);
+    let registry = Registry::new(provider.clone()).await;
+    let mut agent = Agent::new(provider, registry);
+
+    let long_command = "x".repeat(crate::hooks::LIFECYCLE_HOOK_TOOL_ARGS_PREVIEW_MAX + 50);
+    push_assistant_tool_use(
+        &mut agent,
+        "bash",
+        serde_json::json!({"command": long_command}),
+    );
+
+    let recent = agent.lifecycle_hook_recent_tool_calls();
+    assert_eq!(recent.len(), 1);
+    let preview = &recent[0].args_preview;
+    // Truncated previews end with `…` and are max+1 chars (max + ellipsis).
+    assert!(preview.ends_with('…'));
+    assert_eq!(
+        preview.chars().count(),
+        crate::hooks::LIFECYCLE_HOOK_TOOL_ARGS_PREVIEW_MAX + 1
+    );
+}
+
+#[tokio::test]
+async fn lifecycle_hook_turn_count_counts_distinct_user_turns() {
+    let _guard = crate::storage::lock_test_env();
+    let provider: Arc<dyn Provider> = Arc::new(NativeAutoCompactionProvider);
+    let registry = Registry::new(provider.clone()).await;
+    let mut agent = Agent::new(provider, registry);
+
+    assert_eq!(agent.lifecycle_hook_turn_count(), 0);
+
+    push_user_text(&mut agent, "turn 1");
+    push_assistant_tool_use(&mut agent, "bash", serde_json::json!({"command": "true"}));
+    push_user_text(&mut agent, "turn 2");
+    // A reminder injection is not a real turn.
+    push_user_text(
+        &mut agent,
+        "<system-reminder>\ninjected\n</system-reminder>",
+    );
+
+    assert_eq!(
+        agent.lifecycle_hook_turn_count(),
+        2,
+        "system-reminder injections must not bump the user-turn count"
+    );
+}
+
+#[tokio::test]
+async fn lifecycle_hook_session_age_is_non_negative_and_reasonable() {
+    let _guard = crate::storage::lock_test_env();
+    let provider: Arc<dyn Provider> = Arc::new(NativeAutoCompactionProvider);
+    let registry = Registry::new(provider.clone()).await;
+    let agent = Agent::new(provider, registry);
+
+    // Freshly created session: age is < 2 seconds in practice but we only
+    // need to verify it's a sane u64 (no panic on negative duration).
+    let age = agent.lifecycle_hook_session_age_seconds();
+    assert!(age < 120, "fresh session age should be tiny, got {age}");
+}
