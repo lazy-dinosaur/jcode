@@ -194,6 +194,22 @@ load_harness_dir = true
 # Enable memory sidecar extraction/relevance model.
 memory_sidecar_enabled = false
 
+# Lazydino M2 stage 2 — control whether `swarm spawn` opens a visible terminal
+# window for each new worker. Leaving this unset (or `true`) keeps upstream
+# behavior: try a visible terminal first and fall back to headless if no
+# emulator is available. Setting `false` forces every swarm worker to run
+# headless even when a terminal emulator is installed. This avoids the
+# upstream issue #76 failure mode where the coordinator opened 10+ visible
+# windows that the user could not easily control.
+#
+# The `JCODE_SWARM_NO_TERMINAL=1` env var (also `true`/`yes`/`on`) overrides
+# this setting at runtime without rebuilding. `JCODE_SWARM_NO_TERMINAL=0`
+# (also `false`/`no`/`off`) forces visible-first even if config says
+# otherwise. The spawn tool result string includes the active mode so the
+# coordinator agent always knows which mode it spawned under.
+#
+# swarm_spawn_visible = false
+
 # Practical callable agent profiles. Each [agents.profiles.<type>] name becomes a valid
 # subagent_type exposed to the subagent tool. Profiles can carry model, variant/effort,
 # description, when-to-use guidance, and optional prompt instructions.

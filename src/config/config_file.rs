@@ -27,6 +27,7 @@ struct PartialAgentsConfig {
     profiles: std::collections::BTreeMap<String, AgentRouteConfig>,
     memory_model: Option<String>,
     memory_sidecar_enabled: bool,
+    swarm_spawn_visible: Option<bool>,
 }
 
 impl PartialAgentsConfig {
@@ -41,6 +42,9 @@ impl PartialAgentsConfig {
             agents.memory_model = Some(value);
         }
         agents.memory_sidecar_enabled = self.memory_sidecar_enabled;
+        if self.swarm_spawn_visible.is_some() {
+            agents.swarm_spawn_visible = self.swarm_spawn_visible;
+        }
     }
 }
 
