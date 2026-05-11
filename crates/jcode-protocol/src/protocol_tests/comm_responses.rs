@@ -159,6 +159,9 @@ fn test_comm_members_roundtrip_includes_status() -> Result<()> {
             latest_completion_report: Some("Done.".to_string()),
             live_attachments: Some(0),
             status_age_secs: Some(12),
+            last_heartbeat_secs_ago: None,
+            last_tool: None,
+            last_checkpoint: None,
         }],
     };
 
@@ -216,6 +219,9 @@ fn test_comm_status_response_roundtrip() -> Result<()> {
             is_headless: Some(true),
             live_attachments: Some(0),
             status_age_secs: Some(5),
+            last_heartbeat_secs_ago: None,
+            last_tool: None,
+            last_checkpoint: None,
             joined_age_secs: Some(30),
             files_touched: vec!["src/main.rs".to_string()],
             activity: Some(SessionActivitySnapshot {

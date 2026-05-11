@@ -242,6 +242,9 @@ fn test_comm_await_members_response_roundtrip() -> Result<()> {
                 status: "completed".to_string(),
                 done: true,
                 completion_report: None,
+                last_heartbeat_secs_ago: None,
+                last_tool: None,
+                last_checkpoint: None,
             },
             AwaitedMemberStatus {
                 session_id: "sess_b".to_string(),
@@ -249,6 +252,9 @@ fn test_comm_await_members_response_roundtrip() -> Result<()> {
                 status: "stopped".to_string(),
                 done: true,
                 completion_report: None,
+                last_heartbeat_secs_ago: None,
+                last_tool: None,
+                last_checkpoint: None,
             },
         ],
         summary: "All 2 members are done: fox, wolf".to_string(),
@@ -284,6 +290,7 @@ fn test_comm_task_control_roundtrip() -> Result<()> {
         task_id: "task_42".to_string(),
         target_session: Some("sess_replacement".to_string()),
         message: Some("Recover partial progress first.".to_string()),
+        task_timeout_minutes: None,
     };
     let json = serde_json::to_string(&req)?;
     assert!(json.contains("\"type\":\"comm_task_control\""));
@@ -316,6 +323,7 @@ fn test_comm_assign_task_roundtrip_without_explicit_task_id() -> Result<()> {
         target_session: None,
         task_id: None,
         message: Some("Take the next highest-priority runnable task.".to_string()),
+        task_timeout_minutes: None,
     };
     let json = serde_json::to_string(&req)?;
     assert!(json.contains("\"type\":\"comm_assign_task\""));
