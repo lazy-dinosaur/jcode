@@ -1,7 +1,7 @@
 use super::{
     ensure_spawn_coordinator_swarm, prepare_visible_spawn_session, register_visible_spawned_member,
     require_coordinator_swarm, resolve_spawn_working_dir, resolve_stop_target_session,
-    swarm_stop_allowed_by_owner,
+    swarm_force_headless_spawn, swarm_stop_allowed_by_owner,
 };
 use crate::agent::Agent;
 use crate::message::{Message, ToolDefinition};
@@ -490,4 +490,112 @@ async fn coordinator_actions_self_promote_when_recorded_coordinator_is_stale() {
         Some("coordinator")
     );
     assert!(client_event_rx.try_recv().is_err());
+}
+
+mod swarm_force_headless_spawn_tests {
+    //! Lazydino M2 stage 2 — verify env-var override for visible vs headless
+    //! swarm spawn. We only test the env path here; config-path behavior
+    //! depends on global `config::config()` which is process-wide and unsafe
+    //! to mutate from tests. The env path takes precedence over config so
+    //! covering it is sufficient for the M2 user-facing surface.
+
+    use super::swarm_force_headless_spawn;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvGuard {
+        previous: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn set(value: &str) -> Self {
+            let previous = std::env::var("JCODE_SWARM_NO_TERMINAL").ok();
+            // SAFETY: tests are serialized by `env_lock()`; the env var is
+            // only read by `swarm_force_headless_spawn` and the inner test
+            // body. No other thread observes the transient value.
+            unsafe { std::env::set_var("JCODE_SWARM_NO_TERMINAL", value) };
+            Self { previous }
+        }
+
+        fn unset() -> Self {
+            let previous = std::env::var("JCODE_SWARM_NO_TERMINAL").ok();
+            // SAFETY: same as `set`, serialized.
+            unsafe { std::env::remove_var("JCODE_SWARM_NO_TERMINAL") };
+            Self { previous }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            // SAFETY: serialized; restoring to a value seen on entry.
+            unsafe {
+                match self.previous.take() {
+                    Some(prev) => std::env::set_var("JCODE_SWARM_NO_TERMINAL", prev),
+                    None => std::env::remove_var("JCODE_SWARM_NO_TERMINAL"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn env_var_set_to_1_forces_headless() {
+        let _guard = env_lock().lock().unwrap();
+        let _env = EnvGuard::set("1");
+        assert!(
+            swarm_force_headless_spawn(),
+            "JCODE_SWARM_NO_TERMINAL=1 must force headless spawn"
+        );
+    }
+
+    #[test]
+    fn env_var_set_to_true_yes_on_forces_headless() {
+        let _guard = env_lock().lock().unwrap();
+        for value in ["true", "TRUE", "True", "yes", "YES", "on", "ON"] {
+            let _env = EnvGuard::set(value);
+            assert!(
+                swarm_force_headless_spawn(),
+                "JCODE_SWARM_NO_TERMINAL={value:?} must force headless spawn"
+            );
+        }
+    }
+
+    #[test]
+    fn env_var_set_to_0_keeps_visible_attempt() {
+        let _guard = env_lock().lock().unwrap();
+        for value in ["0", "false", "FALSE", "no", "NO", "off", "OFF", ""] {
+            let _env = EnvGuard::set(value);
+            assert!(
+                !swarm_force_headless_spawn(),
+                "JCODE_SWARM_NO_TERMINAL={value:?} must NOT force headless spawn"
+            );
+        }
+    }
+
+    #[test]
+    fn env_var_unset_keeps_upstream_visible_first_default() {
+        let _guard = env_lock().lock().unwrap();
+        let _env = EnvGuard::unset();
+        // Default config has `swarm_spawn_visible = None`, which keeps
+        // upstream visible-first behavior. The function must return false.
+        assert!(
+            !swarm_force_headless_spawn(),
+            "default behavior with no env override must keep visible-first"
+        );
+    }
+
+    #[test]
+    fn env_var_unknown_value_falls_through_to_config_default() {
+        let _guard = env_lock().lock().unwrap();
+        let _env = EnvGuard::set("maybe");
+        // Unknown values neither force nor un-force; we fall through to
+        // config. With default config (`None`), that means visible-first.
+        assert!(
+            !swarm_force_headless_spawn(),
+            "unknown env value must fall through to config default"
+        );
+    }
 }

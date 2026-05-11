@@ -102,6 +102,51 @@ async fn send_spawn_request_with_coordinator_retry(
     Ok(retry_response)
 }
 
+/// Lazydino M2 stage 2 — render a spawn-result message with the requested
+/// `working_dir`, optional `run_id`, and the active swarm-spawn mode
+/// (`headless-only` when forced, `visible-first` otherwise). The coordinator
+/// model sees this string verbatim, so changes here flow directly into the
+/// next agent turn. Keep the format compact and grep-friendly.
+pub(crate) fn format_spawn_telemetry(
+    new_session_id: &str,
+    requested_working_dir: Option<&str>,
+    run_id: Option<&str>,
+) -> String {
+    let mode = if swarm_spawn_telemetry_force_headless() {
+        "headless-only"
+    } else {
+        "visible-first"
+    };
+    let cwd = requested_working_dir
+        .map(|dir| dir.to_string())
+        .unwrap_or_else(|| "(inherit coordinator cwd)".to_string());
+    let run_id_part = match run_id {
+        Some(id) if !id.is_empty() => format!(" run_id={id}"),
+        _ => String::new(),
+    };
+    format!(
+        "Spawned new agent: {new_session_id} (cwd={cwd}, mode={mode}{run_id_part})"
+    )
+}
+
+/// Mirror of `server::comm_session::swarm_force_headless_spawn` for the tool
+/// side. We re-read the same env var + config so the rendered telemetry
+/// matches whatever the server will actually do. Keeping the two helpers
+/// independent avoids leaking server internals into the tool layer.
+fn swarm_spawn_telemetry_force_headless() -> bool {
+    if let Ok(raw) = std::env::var("JCODE_SWARM_NO_TERMINAL") {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => return true,
+            "0" | "false" | "no" | "off" | "" => return false,
+            _ => {}
+        }
+    }
+    matches!(
+        crate::config::config().agents.swarm_spawn_visible,
+        Some(false)
+    )
+}
+
 async fn fetch_plan_status(session_id: &str) -> Result<PlanGraphStatus> {
     let request = Request::CommPlanStatus {
         id: REQUEST_ID,
@@ -1141,9 +1186,10 @@ impl Tool for CommunicateTool {
                     Ok(ServerEvent::CommSpawnResponse { new_session_id, .. })
                         if !new_session_id.is_empty() =>
                     {
-                        Ok(ToolOutput::new(format!(
-                            "Spawned new agent: {}",
-                            new_session_id
+                        Ok(ToolOutput::new(format_spawn_telemetry(
+                            &new_session_id,
+                            params.working_dir.as_deref(),
+                            params.run_id.as_deref(),
                         )))
                     }
                     Ok(response) => {

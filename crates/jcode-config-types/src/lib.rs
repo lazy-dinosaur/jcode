@@ -386,6 +386,14 @@ pub struct AgentsConfig {
     pub memory_model: Option<String>,
     /// Whether memory should use the sidecar for relevance/extraction.
     pub memory_sidecar_enabled: bool,
+    /// Lazydino M2 stage 2 — controls whether `swarm spawn` opens a visible
+    /// terminal window for each new worker. `None` keeps upstream behavior
+    /// (try visible, fall back to headless). `Some(false)` forces
+    /// headless-only spawn even when a terminal emulator is available, which
+    /// avoids the "10+ terminals open" failure mode from upstream issue #76
+    /// and gives a clean reproduction surface. Env var
+    /// `JCODE_SWARM_NO_TERMINAL=1` overrides the config to force headless.
+    pub swarm_spawn_visible: Option<bool>,
 }
 
 /// Rich subagent routing configuration.
