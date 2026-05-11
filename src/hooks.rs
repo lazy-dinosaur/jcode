@@ -13,7 +13,18 @@ use tokio::task::JoinHandle;
 
 pub const TOOL_EXECUTE_BEFORE: &str = "tool.execute.before";
 pub const TOOL_EXECUTE_AFTER: &str = "tool.execute.after";
+/// Deprecated since M11 stage 4. The only call site that currently emits
+/// this event is the client-disconnect cleanup path, which now also emits
+/// the more specific `client.disconnect`. Existing user configurations
+/// listening for `session.stop` continue to work, but new hooks should
+/// listen for `client.disconnect` if they want to react to client teardown,
+/// and `session.stop` will be reserved for a future explicit logical
+/// session-end signal (no producer yet).
 pub const SESSION_STOP: &str = "session.stop";
+/// M11 stage 4: emitted when a client connection is torn down (closed or
+/// crashed). The payload mirrors `SessionStopHookPayload` so users can
+/// migrate by changing only the `event` field they filter on.
+pub const CLIENT_DISCONNECT: &str = "client.disconnect";
 pub const RESPONSE_COMPLETED: &str = "response.completed";
 
 /// M10: tracker for non-blocking hook tasks so single-shot CLI commands
@@ -175,6 +186,15 @@ pub async fn post_tool_use(
 
 pub async fn run_session_hooks(payload: SessionStopHookPayload<'_>) -> Result<Option<String>> {
     run_lifecycle_hooks(SESSION_STOP, payload.working_dir.as_deref(), &payload).await
+}
+
+/// M11 stage 4: fire `client.disconnect` lifecycle hooks. The payload type
+/// is shared with `session.stop` (only the `event` field differs) so users
+/// can filter on either or both event names.
+pub async fn run_client_disconnect_hooks(
+    payload: SessionStopHookPayload<'_>,
+) -> Result<Option<String>> {
+    run_lifecycle_hooks(CLIENT_DISCONNECT, payload.working_dir.as_deref(), &payload).await
 }
 
 pub async fn run_response_hooks(
@@ -551,6 +571,78 @@ mod tests {
                 "message_count": 3,
             })
         );
+    }
+
+    // M11 stage 4 regression tests --------------------------------------------
+
+    #[test]
+    fn client_disconnect_const_has_expected_name() {
+        // Pin the event name so user configurations don't break silently.
+        assert_eq!(CLIENT_DISCONNECT, "client.disconnect");
+        assert_eq!(SESSION_STOP, "session.stop");
+    }
+
+    #[test]
+    fn client_disconnect_payload_uses_distinct_event_field() {
+        // Same payload struct as session.stop but the event constant differs.
+        let payload = SessionStopHookPayload {
+            event: CLIENT_DISCONNECT,
+            session_id: "sess-1",
+            working_dir: Some("/tmp/work".to_string()),
+            reason: "disconnect",
+            message_count: 3,
+        };
+
+        let value = serde_json::to_value(payload).unwrap();
+        assert_eq!(value["event"], "client.disconnect");
+        assert_eq!(value["reason"], "disconnect");
+    }
+
+    #[tokio::test]
+    async fn client_disconnect_hooks_dispatch_under_correct_event_name() {
+        // A hook registered for `client.disconnect` (and only for that event)
+        // must fire when run_client_disconnect_hooks is called and must NOT
+        // fire when run_session_hooks is called.
+        let temp = tempfile::TempDir::new().unwrap();
+        let log = temp.path().join("client-disconnect.log");
+        let commands = vec![
+            crate::config::HookCommandConfig {
+                event: CLIENT_DISCONNECT.to_string(),
+                tool: None,
+                command: format!("cat >> {}", log.display()),
+                blocking: true,
+                timeout_ms: 1000,
+            },
+            crate::config::HookCommandConfig {
+                event: SESSION_STOP.to_string(),
+                tool: None,
+                command: "true".to_string(),
+                blocking: true,
+                timeout_ms: 1000,
+            },
+        ];
+
+        let payload = SessionStopHookPayload {
+            event: CLIENT_DISCONNECT,
+            session_id: "sess-disc",
+            working_dir: None,
+            reason: "disconnect",
+            message_count: 1,
+        };
+
+        let denial = run_lifecycle_hook_commands(
+            matching_lifecycle_hooks(&commands, CLIENT_DISCONNECT),
+            None,
+            &payload,
+        )
+        .await
+        .unwrap();
+        assert!(denial.is_none());
+
+        let written = std::fs::read_to_string(&log).unwrap();
+        let value: Value = serde_json::from_str(&written).unwrap();
+        assert_eq!(value["event"], "client.disconnect");
+        assert_eq!(value["session_id"], "sess-disc");
     }
 
     #[test]
