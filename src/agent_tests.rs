@@ -1141,6 +1141,110 @@ async fn lifecycle_deny_streak_resets_at_new_user_turn_start() {
     assert_eq!(agent.lifecycle_deny_streak_for_tests(), 0);
 }
 
+/// M11 stage 6 fix: continuation must end the conversation with a user message
+/// so the next LLM call is valid (Anthropic API rejects assistant-last). The
+/// reminder is injected as a user-authored `<system-reminder>` block, matching
+/// the claude-code stop-hook pattern.
+#[tokio::test]
+async fn lifecycle_continuation_appends_user_message_with_reminder() {
+    let _guard = crate::storage::lock_test_env();
+    let provider: Arc<dyn Provider> = Arc::new(NativeAutoCompactionProvider);
+    let registry = Registry::new(provider.clone()).await;
+    let mut agent = Agent::new(provider, registry);
+
+    // Simulate a turn that ended with an assistant message (which is what a
+    // real response.completed deny would see at the tail of the transcript).
+    agent.add_message(
+        Role::User,
+        vec![ContentBlock::Text {
+            text: "say hello".to_string(),
+            cache_control: None,
+        }],
+    );
+    agent.add_message(
+        Role::Assistant,
+        vec![ContentBlock::Text {
+            text: "Hello!".to_string(),
+            cache_control: None,
+        }],
+    );
+    let messages_before = agent.session.messages.len();
+
+    // Stage 1+2 path: deny populates pending reminder.
+    agent.handle_lifecycle_hook_deny_with_cap_for_tests(
+        "Update handoff.md before stopping.".to_string(),
+        3,
+    );
+    assert!(agent.pending_lifecycle_system_reminder.is_some());
+
+    // Stage 6 fix: continuation injects reminder as user message.
+    agent.inject_lifecycle_reminder_for_continuation_for_tests();
+
+    assert_eq!(
+        agent.session.messages.len(),
+        messages_before + 1,
+        "continuation must add exactly one user message"
+    );
+
+    let last = agent.session.messages.last().unwrap();
+    assert!(
+        matches!(last.role, Role::User),
+        "last message after continuation injection must be Role::User, got {:?}",
+        last.role
+    );
+    let text = match &last.content[0] {
+        ContentBlock::Text { text, .. } => text.as_str(),
+        other => panic!("expected ContentBlock::Text, got {other:?}"),
+    };
+    assert!(
+        text.contains("<system-reminder>") && text.contains("</system-reminder>"),
+        "injected message should wrap reminder in <system-reminder> tags, got: {text}"
+    );
+    assert!(
+        text.contains("Update handoff.md before stopping."),
+        "injected message should contain the reminder text from the deny reason, got: {text}"
+    );
+    assert!(
+        text.contains("A lifecycle hook denied completion"),
+        "injected message should contain the lifecycle_hook_reminder prefix, got: {text}"
+    );
+
+    // Reminder is consumed (take semantics).
+    assert!(
+        agent.pending_lifecycle_system_reminder.is_none(),
+        "pending reminder must be drained after continuation injection"
+    );
+
+    // System prompt area (`current_turn_system_reminder`) is intentionally
+    // untouched — continuation uses inline user-message channel only.
+    assert!(
+        agent.current_turn_system_reminder.is_none(),
+        "current_turn_system_reminder must NOT be set by continuation path \
+         (it is reserved for the next-user-turn fallback)"
+    );
+}
+
+/// M11 stage 6 fix: guard against edge case where ContinueImmediate fires but
+/// no pending reminder exists (defensive, shouldn't happen in practice).
+#[tokio::test]
+async fn lifecycle_continuation_is_noop_when_no_pending_reminder() {
+    let _guard = crate::storage::lock_test_env();
+    let provider: Arc<dyn Provider> = Arc::new(NativeAutoCompactionProvider);
+    let registry = Registry::new(provider.clone()).await;
+    let mut agent = Agent::new(provider, registry);
+
+    let messages_before = agent.session.messages.len();
+    assert!(agent.pending_lifecycle_system_reminder.is_none());
+
+    agent.inject_lifecycle_reminder_for_continuation_for_tests();
+
+    assert_eq!(
+        agent.session.messages.len(),
+        messages_before,
+        "no message should be added when pending reminder is None"
+    );
+}
+
 #[test]
 fn lifecycle_deny_streak_env_override_beats_config() {
     let _guard = crate::storage::lock_test_env();
