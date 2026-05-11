@@ -59,6 +59,7 @@ impl Agent {
         self.lifecycle_deny_streak
     }
 
+    #[cfg(test)]
     pub(crate) fn handle_lifecycle_hook_deny_with_cap_for_tests(
         &mut self,
         reason: String,
