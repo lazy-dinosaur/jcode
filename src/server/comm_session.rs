@@ -25,8 +25,14 @@ use tokio::sync::{Mutex, RwLock, broadcast, mpsc};
 type SessionAgents = Arc<RwLock<HashMap<String, Arc<Mutex<Agent>>>>>;
 type ChannelSubscriptions = Arc<RwLock<HashMap<String, HashMap<String, HashSet<String>>>>>;
 
-const DEFAULT_MAX_ACTIVE_SPAWNS_PER_COORDINATOR: u32 = 6;
-const DEFAULT_MAX_ACTIVE_SPAWNS_PER_RUN: u32 = 4;
+// Default is 0 (unlimited) to match upstream jcode behavior and follow
+// claude-code's trust model: spawn cap is an opt-in safety harness, not an
+// always-on restriction. Users who want to defend against issue #76 style
+// runaway spawns set a finite value in `.jcode/config.toml [swarm]` or via
+// `JCODE_MAX_ACTIVE_SPAWNS_PER_{COORDINATOR,RUN}` env vars. The cap logic
+// itself (`enforce_spawn_caps`) is unchanged.
+const DEFAULT_MAX_ACTIVE_SPAWNS_PER_COORDINATOR: u32 = 0;
+const DEFAULT_MAX_ACTIVE_SPAWNS_PER_RUN: u32 = 0;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct SpawnActivitySnapshot {
