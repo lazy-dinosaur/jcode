@@ -194,6 +194,20 @@ load_harness_dir = true
 # Enable memory sidecar extraction/relevance model.
 memory_sidecar_enabled = false
 
+# M11 lifecycle hooks: when a blocking response.completed hook prints
+# {"action":"deny","reason":"..."}, jcode immediately continues the turn
+# with that reason as a transient System Reminder. This cap prevents a bad
+# hook from creating an infinite self-correction loop.
+#
+# Default: 3 immediate continuation turns, then leave the reminder pending
+# for the next user prompt and stop the current turn.
+# Set to 0 for unlimited claude-code trust mode, where hook scripts are
+# expected to self-throttle using the response.completed payload field
+# `stop_hook_active = true` on continuation turns.
+# Environment override wins over config:
+#   JCODE_MAX_LIFECYCLE_DENY_STREAK=1 jcode
+# max_lifecycle_deny_streak = 3
+
 # Practical callable agent profiles. Each [agents.profiles.<type>] name becomes a valid
 # subagent_type exposed to the subagent tool. Profiles can carry model, variant/effort,
 # description, when-to-use guidance, and optional prompt instructions.

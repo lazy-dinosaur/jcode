@@ -386,6 +386,10 @@ pub struct AgentsConfig {
     pub memory_model: Option<String>,
     /// Whether memory should use the sidecar for relevance/extraction.
     pub memory_sidecar_enabled: bool,
+    /// Maximum consecutive lifecycle hook denies that may trigger immediate
+    /// continuation turns. `None` uses the default (3). `Some(0)` means
+    /// unlimited / trust hook scripts to self-throttle.
+    pub max_lifecycle_deny_streak: Option<u8>,
 }
 
 /// Rich subagent routing configuration.

@@ -71,6 +71,12 @@ pub struct ResponseCompletedHookPayload<'a> {
     pub stop_reason: Option<&'a str>,
     pub tool_calls_count: usize,
     pub output_chars: usize,
+    /// M11 stage 6: true when this response.completed hook is running from
+    /// an immediate continuation turn caused by a previous lifecycle deny.
+    /// Hook scripts can use this as the claude-code-compatible
+    /// `stop_hook_active` self-throttle signal.
+    #[serde(default)]
+    pub stop_hook_active: bool,
     /// M11 stage 5: optional context fields. Skipped when not provided so
     /// the wire format stays backward compatible with stage 1-4 consumers.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -672,8 +678,9 @@ mod tests {
                 "stop_reason": "end_turn",
                 "tool_calls_count": 0,
                 "output_chars": 42,
+                "stop_hook_active": false,
             }),
-            "M11 stage 5: optional context fields must be omitted (skip_serializing_if) when empty so existing hook scripts see the same wire format they always did"
+            "M11 stage 6: optional context fields stay omitted when empty, while stop_hook_active is always present so hook scripts can self-throttle continuation turns"
         );
     }
 
@@ -690,6 +697,7 @@ mod tests {
             stop_reason: Some("end_turn"),
             tool_calls_count: 2,
             output_chars: 42,
+            stop_hook_active: false,
             last_user_message: Some("commit and push".to_string()),
             recent_tool_calls: vec![
                 LifecycleHookToolCallPreview {
@@ -711,6 +719,24 @@ mod tests {
         assert_eq!(value["recent_tool_calls"][0]["name"], "bash");
         assert_eq!(value["turn_count"], 3);
         assert_eq!(value["session_age_seconds"], 900);
+    }
+
+    #[test]
+    fn response_completed_payload_serializes_stop_hook_active() {
+        let payload = ResponseCompletedHookPayload {
+            event: RESPONSE_COMPLETED,
+            session_id: "sess-1",
+            message_id: "msg-1",
+            working_dir: None,
+            stop_reason: Some("end_turn"),
+            tool_calls_count: 0,
+            output_chars: 42,
+            stop_hook_active: true,
+            ..Default::default()
+        };
+
+        let value = serde_json::to_value(payload).unwrap();
+        assert_eq!(value["stop_hook_active"], true);
     }
 
     #[test]
