@@ -39,6 +39,10 @@ pub(crate) enum PersistedSwarmMutationResponse {
     },
     Spawn {
         new_session_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        active_count: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        active_cap: Option<u32>,
     },
 }
 
@@ -76,10 +80,16 @@ impl PersistedSwarmMutationResponse {
                 message,
                 retry_after_secs,
             },
-            Self::Spawn { new_session_id } => ServerEvent::CommSpawnResponse {
+            Self::Spawn {
+                new_session_id,
+                active_count,
+                active_cap,
+            } => ServerEvent::CommSpawnResponse {
                 id,
                 session_id: session_id.to_string(),
                 new_session_id,
+                active_count,
+                active_cap,
             },
         }
     }

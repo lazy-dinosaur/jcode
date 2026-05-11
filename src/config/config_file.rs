@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 #[serde(default)]
 struct PartialConfig {
     prompt: PartialPromptConfig,
+    swarm: PartialSwarmConfig,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -29,6 +30,13 @@ struct PartialAgentsConfig {
     memory_sidecar_enabled: bool,
     swarm_spawn_visible: Option<bool>,
     max_lifecycle_deny_streak: Option<u8>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct PartialSwarmConfig {
+    max_active_spawns_per_coordinator: Option<u32>,
+    max_active_spawns_per_run: Option<u32>,
 }
 
 impl PartialAgentsConfig {
@@ -69,6 +77,17 @@ impl PartialPromptConfig {
     }
 }
 
+impl PartialSwarmConfig {
+    fn apply_to(self, swarm: &mut SwarmConfig) {
+        if self.max_active_spawns_per_coordinator.is_some() {
+            swarm.max_active_spawns_per_coordinator = self.max_active_spawns_per_coordinator;
+        }
+        if self.max_active_spawns_per_run.is_some() {
+            swarm.max_active_spawns_per_run = self.max_active_spawns_per_run;
+        }
+    }
+}
+
 impl Config {
     /// Get the config file path
     pub fn path() -> Option<PathBuf> {
@@ -97,12 +116,10 @@ impl Config {
         let path = Self::path();
         let mut config = match path {
             Some(ref p) if p.exists() => {
-                let content = std::fs::read_to_string(p).map_err(|e| {
-                    anyhow::anyhow!("failed to read {}: {}", p.display(), e)
-                })?;
-                let mut parsed: Self = toml::from_str(&content).map_err(|e| {
-                    anyhow::anyhow!("failed to parse {}: {}", p.display(), e)
-                })?;
+                let content = std::fs::read_to_string(p)
+                    .map_err(|e| anyhow::anyhow!("failed to read {}: {}", p.display(), e))?;
+                let mut parsed: Self = toml::from_str(&content)
+                    .map_err(|e| anyhow::anyhow!("failed to parse {}: {}", p.display(), e))?;
                 parsed.display.apply_legacy_compat();
                 parsed
             }
@@ -230,6 +247,27 @@ impl Config {
         agents
     }
 
+    /// Build the swarm safety config effective for a working directory.
+    ///
+    /// Global swarm settings come from `~/.jcode/config.toml`. Project-local
+    /// settings in `<project>/.jcode/config.toml` and
+    /// `<project>/.jcode/config.local.toml` override only fields they explicitly
+    /// set. Env vars are applied by the caller so they can stay highest priority.
+    pub fn swarm_for_working_dir(&self, working_dir: Option<&Path>) -> SwarmConfig {
+        let mut swarm = self.swarm.clone();
+        if let Some(project_dir) = working_dir.and_then(Self::find_project_config_dir) {
+            for config_path in [
+                project_dir.join(".jcode").join("config.toml"),
+                project_dir.join(".jcode").join("config.local.toml"),
+            ] {
+                if let Some(project_swarm) = Self::load_partial_swarm_from_file(&config_path) {
+                    project_swarm.apply_to(&mut swarm);
+                }
+            }
+        }
+        swarm
+    }
+
     fn find_project_config_dir(working_dir: &Path) -> Option<PathBuf> {
         let start = if working_dir.is_file() {
             working_dir.parent()?
@@ -296,6 +334,34 @@ impl Config {
             Err(err) => {
                 crate::logging::warn(&format!(
                     "Failed to parse project jcode prompt config {}: {err}",
+                    path.display()
+                ));
+                None
+            }
+        }
+    }
+
+    fn load_partial_swarm_from_file(path: &Path) -> Option<PartialSwarmConfig> {
+        if !path.exists() {
+            return None;
+        }
+
+        let content = match std::fs::read_to_string(path) {
+            Ok(content) => content,
+            Err(err) => {
+                crate::logging::warn(&format!(
+                    "Failed to read project jcode config {}: {err}",
+                    path.display()
+                ));
+                return None;
+            }
+        };
+
+        match toml::from_str::<PartialConfig>(&content) {
+            Ok(config) => Some(config.swarm),
+            Err(err) => {
+                crate::logging::warn(&format!(
+                    "Failed to parse project jcode swarm config {}: {err}",
                     path.display()
                 ));
                 None

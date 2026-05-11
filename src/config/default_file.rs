@@ -224,6 +224,21 @@ memory_sidecar_enabled = false
 #   JCODE_MAX_LIFECYCLE_DENY_STREAK=1 jcode
 # max_lifecycle_deny_streak = 3
 
+[swarm]
+# Lazydino M2 stage 3 — hard caps for concurrently active workers owned by one
+# coordinator. Active means any non-terminal worker status; completed, failed,
+# crashed, closed, and disconnected workers do not count. `0` disables a cap.
+# Env vars override these values:
+#   JCODE_MAX_ACTIVE_SPAWNS_PER_COORDINATOR
+#   JCODE_MAX_ACTIVE_SPAWNS_PER_RUN
+# Defaults when unset are 6 per coordinator and 4 per run.
+# max_active_spawns_per_coordinator = 6
+# max_active_spawns_per_run = 4
+#
+# Spawned worker cwd is pinned under the coordinator's cwd after canonicalizing
+# symlinks. To intentionally bypass for a one-off run, set env var only:
+#   JCODE_SWARM_ALLOW_ANY_CWD=1
+
 # Practical callable agent profiles. Each [agents.profiles.<type>] name becomes a valid
 # subagent_type exposed to the subagent tool. Profiles can carry model, variant/effort,
 # description, when-to-use guidance, and optional prompt instructions.

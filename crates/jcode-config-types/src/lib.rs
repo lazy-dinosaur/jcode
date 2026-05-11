@@ -400,6 +400,18 @@ pub struct AgentsConfig {
     pub max_lifecycle_deny_streak: Option<u8>,
 }
 
+/// Swarm coordination safety limits.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct SwarmConfig {
+    /// Maximum non-terminal workers one coordinator may own concurrently.
+    /// `None` uses the built-in default; `Some(0)` disables the limit.
+    pub max_active_spawns_per_coordinator: Option<u32>,
+    /// Maximum non-terminal workers one orchestration run may own concurrently.
+    /// `None` uses the built-in default; `Some(0)` disables the limit.
+    pub max_active_spawns_per_run: Option<u32>,
+}
+
 /// Rich subagent routing configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]

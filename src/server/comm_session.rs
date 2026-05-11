@@ -16,13 +16,203 @@ use crate::protocol::{NotificationType, ServerEvent};
 use crate::provider::Provider;
 use crate::session::Session;
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::fmt;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{Mutex, RwLock, broadcast, mpsc};
 
 type SessionAgents = Arc<RwLock<HashMap<String, Arc<Mutex<Agent>>>>>;
 type ChannelSubscriptions = Arc<RwLock<HashMap<String, HashMap<String, HashSet<String>>>>>;
+
+const DEFAULT_MAX_ACTIVE_SPAWNS_PER_COORDINATOR: u32 = 6;
+const DEFAULT_MAX_ACTIVE_SPAWNS_PER_RUN: u32 = 4;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct SpawnActivitySnapshot {
+    pub active: u32,
+    pub cap: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct SpawnResult {
+    pub new_session_id: String,
+    pub activity: SpawnActivitySnapshot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum SpawnCapError {
+    Coordinator { active: u32, cap: u32 },
+    Run { active: u32, cap: u32 },
+}
+
+impl fmt::Display for SpawnCapError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Coordinator { active, cap } => write!(
+                f,
+                "spawn cap exceeded for coordinator: active={active}, cap={cap}, scope=coordinator"
+            ),
+            Self::Run { active, cap } => write!(
+                f,
+                "spawn cap exceeded for run: active={active}, cap={cap}, scope=run"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SpawnCapError {}
+
+#[derive(Debug)]
+pub(super) enum SpawnCwdError {
+    Canonicalize {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    OutsideRoot {
+        requested: PathBuf,
+        root: PathBuf,
+    },
+}
+
+impl fmt::Display for SpawnCwdError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Canonicalize { path, source } => write!(
+                f,
+                "failed to resolve spawn working_dir '{}': {source}",
+                path.display()
+            ),
+            Self::OutsideRoot { requested, root } => write!(
+                f,
+                "spawn working_dir '{}' is not under coordinator root '{}'. Set JCODE_SWARM_ALLOW_ANY_CWD=1 to override.",
+                requested.display(),
+                root.display()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SpawnCwdError {}
+
+fn env_truthy(name: &str) -> bool {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
+}
+
+fn parse_u32_env(name: &str) -> Option<u32> {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<u32>().ok())
+}
+
+pub(super) fn resolve_max_active_spawns_per_coordinator(coord_cwd: Option<&Path>) -> u32 {
+    parse_u32_env("JCODE_MAX_ACTIVE_SPAWNS_PER_COORDINATOR").unwrap_or_else(|| {
+        crate::config::config()
+            .swarm_for_working_dir(coord_cwd)
+            .max_active_spawns_per_coordinator
+            .unwrap_or(DEFAULT_MAX_ACTIVE_SPAWNS_PER_COORDINATOR)
+    })
+}
+
+pub(super) fn resolve_max_active_spawns_per_run(coord_cwd: Option<&Path>) -> u32 {
+    parse_u32_env("JCODE_MAX_ACTIVE_SPAWNS_PER_RUN").unwrap_or_else(|| {
+        crate::config::config()
+            .swarm_for_working_dir(coord_cwd)
+            .max_active_spawns_per_run
+            .unwrap_or(DEFAULT_MAX_ACTIVE_SPAWNS_PER_RUN)
+    })
+}
+
+fn is_terminal_swarm_status(status: &str) -> bool {
+    matches!(
+        status,
+        "crashed" | "closed" | "disconnected" | "completed" | "failed"
+    )
+}
+
+pub(super) fn count_active_owned_workers(
+    members: &HashMap<String, SwarmMember>,
+    req_session_id: &str,
+    run_id: Option<&str>,
+) -> u32 {
+    members
+        .values()
+        .filter(|member| member.report_back_to_session_id.as_deref() == Some(req_session_id))
+        .filter(|member| run_id.is_none_or(|run| member.run_id.as_deref() == Some(run)))
+        .filter(|member| !is_terminal_swarm_status(member.status.as_str()))
+        .count() as u32
+}
+
+pub(super) fn enforce_spawn_caps(
+    members: &HashMap<String, SwarmMember>,
+    req_session_id: &str,
+    run_id: Option<&str>,
+    coord_cwd: Option<&Path>,
+) -> Result<SpawnActivitySnapshot, SpawnCapError> {
+    let coord_cap = resolve_max_active_spawns_per_coordinator(coord_cwd);
+    let run_cap = resolve_max_active_spawns_per_run(coord_cwd);
+
+    let active_coord = count_active_owned_workers(members, req_session_id, None);
+    if coord_cap > 0 && active_coord >= coord_cap {
+        return Err(SpawnCapError::Coordinator {
+            active: active_coord,
+            cap: coord_cap,
+        });
+    }
+
+    if let Some(run_id) = run_id
+        && run_cap > 0
+    {
+        let active_run = count_active_owned_workers(members, req_session_id, Some(run_id));
+        if active_run >= run_cap {
+            return Err(SpawnCapError::Run {
+                active: active_run,
+                cap: run_cap,
+            });
+        }
+    }
+
+    Ok(SpawnActivitySnapshot {
+        active: active_coord + 1,
+        cap: coord_cap,
+    })
+}
+
+pub(super) fn validate_spawn_working_dir(
+    coord_cwd: Option<&Path>,
+    requested: &Path,
+) -> Result<PathBuf, SpawnCwdError> {
+    if env_truthy("JCODE_SWARM_ALLOW_ANY_CWD") {
+        return Ok(requested.to_path_buf());
+    }
+
+    let Some(coord_root) = coord_cwd else {
+        return Ok(requested.to_path_buf());
+    };
+
+    let coord_canonical =
+        std::fs::canonicalize(coord_root).map_err(|source| SpawnCwdError::Canonicalize {
+            path: coord_root.to_path_buf(),
+            source,
+        })?;
+    let req_canonical =
+        std::fs::canonicalize(requested).map_err(|source| SpawnCwdError::Canonicalize {
+            path: requested.to_path_buf(),
+            source,
+        })?;
+
+    if !req_canonical.starts_with(&coord_canonical) {
+        return Err(SpawnCwdError::OutsideRoot {
+            requested: req_canonical,
+            root: coord_canonical,
+        });
+    }
+
+    Ok(req_canonical)
+}
 
 fn create_visible_spawn_session(
     working_dir: Option<&str>,
@@ -80,6 +270,30 @@ async fn resolve_spawn_working_dir(
         .and_then(|member| member.working_dir.as_ref())
         .map(|dir| dir.display().to_string())
         .filter(|dir| !dir.trim().is_empty())
+}
+
+async fn resolve_coordinator_working_dir(
+    req_session_id: &str,
+    sessions: &SessionAgents,
+    swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,
+) -> Option<PathBuf> {
+    if let Some(agent_dir) = {
+        let agent_sessions = sessions.read().await;
+        agent_sessions.get(req_session_id).and_then(|agent| {
+            agent
+                .try_lock()
+                .ok()
+                .and_then(|agent_guard| agent_guard.working_dir().map(PathBuf::from))
+        })
+    } {
+        return Some(agent_dir);
+    }
+
+    swarm_members
+        .read()
+        .await
+        .get(req_session_id)
+        .and_then(|member| member.working_dir.clone())
 }
 
 /// Lazydino M2 stage 2 — return `true` when swarm spawn must run headless
@@ -274,9 +488,27 @@ pub(super) async fn spawn_swarm_agent(
     swarm_event_tx: &broadcast::Sender<SwarmEvent>,
     mcp_pool: &Arc<crate::mcp::SharedMcpPool>,
     soft_interrupt_queues: &SessionInterruptQueues,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<SpawnResult> {
     let resolved_working_dir =
         resolve_spawn_working_dir(working_dir, req_session_id, sessions, swarm_members).await;
+    let coord_cwd = resolve_coordinator_working_dir(req_session_id, sessions, swarm_members).await;
+    let resolved_working_dir = match resolved_working_dir {
+        Some(dir) => Some(
+            validate_spawn_working_dir(coord_cwd.as_deref(), Path::new(&dir))?
+                .display()
+                .to_string(),
+        ),
+        None => None,
+    };
+    let pre_spawn_activity = {
+        let members = swarm_members.read().await;
+        enforce_spawn_caps(
+            &members,
+            req_session_id,
+            run_id.as_deref(),
+            coord_cwd.as_deref(),
+        )?
+    };
     let coordinator_model = {
         let agent_sessions = sessions.read().await;
         agent_sessions.get(req_session_id).and_then(|agent| {
@@ -491,7 +723,18 @@ pub(super) async fn spawn_swarm_agent(
         }
     }
 
-    Ok(new_session_id)
+    let activity = {
+        let members = swarm_members.read().await;
+        SpawnActivitySnapshot {
+            active: count_active_owned_workers(&members, req_session_id, None),
+            cap: pre_spawn_activity.cap,
+        }
+    };
+
+    Ok(SpawnResult {
+        new_session_id,
+        activity,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -534,6 +777,46 @@ pub(super) async fn handle_comm_spawn(
         Some(swarm_id) => swarm_id,
         None => return,
     };
+
+    let coord_cwd = resolve_coordinator_working_dir(&req_session_id, sessions, swarm_members).await;
+    let working_dir = match resolve_spawn_working_dir(
+        working_dir,
+        &req_session_id,
+        sessions,
+        swarm_members,
+    )
+    .await
+    {
+        Some(dir) => match validate_spawn_working_dir(coord_cwd.as_deref(), Path::new(&dir)) {
+            Ok(validated) => Some(validated.display().to_string()),
+            Err(error) => {
+                let _ = client_event_tx.send(ServerEvent::Error {
+                    id,
+                    message: format!("Failed to spawn agent: {error}"),
+                    retry_after_secs: None,
+                });
+                return;
+            }
+        },
+        None => None,
+    };
+
+    if let Err(error) = {
+        let members = swarm_members.read().await;
+        enforce_spawn_caps(
+            &members,
+            &req_session_id,
+            run_id.as_deref(),
+            coord_cwd.as_deref(),
+        )
+    } {
+        let _ = client_event_tx.send(ServerEvent::Error {
+            id,
+            message: format!("Failed to spawn agent: {error}"),
+            retry_after_secs: None,
+        });
+        return;
+    }
 
     let mutation_key = request_key(
         &req_session_id,
@@ -580,7 +863,11 @@ pub(super) async fn handle_comm_spawn(
     )
     .await
     {
-        Ok(new_session_id) => PersistedSwarmMutationResponse::Spawn { new_session_id },
+        Ok(result) => PersistedSwarmMutationResponse::Spawn {
+            new_session_id: result.new_session_id,
+            active_count: Some(result.activity.active),
+            active_cap: Some(result.activity.cap),
+        },
         Err(error) => PersistedSwarmMutationResponse::Error {
             message: format!("Failed to spawn agent: {error}"),
             retry_after_secs: None,

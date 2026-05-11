@@ -111,6 +111,8 @@ pub(crate) fn format_spawn_telemetry(
     new_session_id: &str,
     requested_working_dir: Option<&str>,
     run_id: Option<&str>,
+    active_count: Option<u32>,
+    active_cap: Option<u32>,
 ) -> String {
     let mode = if swarm_spawn_telemetry_force_headless() {
         "headless-only"
@@ -124,8 +126,13 @@ pub(crate) fn format_spawn_telemetry(
         Some(id) if !id.is_empty() => format!(" run_id={id}"),
         _ => String::new(),
     };
+    let active_part = match (active_count, active_cap) {
+        (Some(active), Some(0) | None) => format!(" active={active}"),
+        (Some(active), Some(cap)) => format!(" active={active}/{cap}"),
+        _ => String::new(),
+    };
     format!(
-        "Spawned new agent: {new_session_id} (cwd={cwd}, mode={mode}{run_id_part})"
+        "Spawned new agent: {new_session_id} (cwd={cwd}, mode={mode}{run_id_part}{active_part})"
     )
 }
 
@@ -271,7 +278,7 @@ async fn cleanup_swarm_workers_with_run_id(
             .map(|run_id| format!(" for run_id={run_id}"))
             .unwrap_or_default();
         return Ok(format!(
-"No cleanup candidates found{scope_suffix}. Default cleanup only stops terminal/stale sessions spawned by this coordinator with status in [{}].",
+            "No cleanup candidates found{scope_suffix}. Default cleanup only stops terminal/stale sessions spawned by this coordinator with status in [{}].",
             target_status.join(", ")
         ));
     }
@@ -354,10 +361,7 @@ async fn run_swarm_plan_to_terminal(
     let timeout_minutes = params.timeout_minutes.unwrap_or(60).max(1);
     let retain_agents = params.retain_agents.unwrap_or(false);
     let spawn_if_needed = params.spawn_if_needed.or(Some(true));
-    let run_id = params
-        .run_id
-        .clone()
-        .unwrap_or_else(fresh_swarm_run_id);
+    let run_id = params.run_id.clone().unwrap_or_else(fresh_swarm_run_id);
     let mut assignment_count = 0usize;
     let mut loop_count = 0usize;
     let max_loops = 200usize;
@@ -1028,10 +1032,14 @@ impl Tool for CommunicateTool {
                 };
 
                 match send_request(request).await {
-                    Ok(ServerEvent::CommMembers { members, .. }) => match params.run_id.as_deref() {
-                        Some(run_id) => Ok(format_members_for_run(&ctx, &members, Some(run_id))),
-                        None => Ok(format_members(&ctx, &members)),
-                    },
+                    Ok(ServerEvent::CommMembers { members, .. }) => {
+                        match params.run_id.as_deref() {
+                            Some(run_id) => {
+                                Ok(format_members_for_run(&ctx, &members, Some(run_id)))
+                            }
+                            None => Ok(format_members(&ctx, &members)),
+                        }
+                    }
                     Ok(response) => {
                         ensure_success(&response)?;
                         Ok(ToolOutput::new("No agents found."))
@@ -1183,13 +1191,18 @@ impl Tool for CommunicateTool {
 
                 match send_spawn_request_with_coordinator_retry(&ctx, request, "spawn agent").await
                 {
-                    Ok(ServerEvent::CommSpawnResponse { new_session_id, .. })
-                        if !new_session_id.is_empty() =>
-                    {
+                    Ok(ServerEvent::CommSpawnResponse {
+                        new_session_id,
+                        active_count,
+                        active_cap,
+                        ..
+                    }) if !new_session_id.is_empty() => {
                         Ok(ToolOutput::new(format_spawn_telemetry(
                             &new_session_id,
                             params.working_dir.as_deref(),
                             params.run_id.as_deref(),
+                            active_count,
+                            active_cap,
                         )))
                     }
                     Ok(response) => {
@@ -1385,12 +1398,8 @@ impl Tool for CommunicateTool {
                 let prefer_spawn = params.prefer_spawn.unwrap_or(false);
 
                 if prefer_spawn && params.target_session.is_none() {
-                    let spawned_session = spawn_assignment_session(
-                        &ctx,
-                        &params,
-                        params.run_id.clone(),
-                    )
-                    .await?;
+                    let spawned_session =
+                        spawn_assignment_session(&ctx, &params, params.run_id.clone()).await?;
                     return assign_task_to_session(
                         &ctx,
                         &params,
@@ -1426,12 +1435,8 @@ impl Tool for CommunicateTool {
                             && params.target_session.is_none()
                             && auto_assignment_needs_spawn(&response) =>
                     {
-                        let spawned_session = spawn_assignment_session(
-                            &ctx,
-                            &params,
-                            params.run_id.clone(),
-                        )
-                        .await?;
+                        let spawned_session =
+                            spawn_assignment_session(&ctx, &params, params.run_id.clone()).await?;
                         assign_task_to_session(
                             &ctx,
                             &params,
@@ -1506,10 +1511,7 @@ impl Tool for CommunicateTool {
 
                 let mut assignments = Vec::new();
                 let available_slots = concurrency_limit.saturating_sub(active_count);
-                let run_id = params
-                    .run_id
-                    .clone()
-                    .or_else(|| Some(fresh_swarm_run_id()));
+                let run_id = params.run_id.clone().or_else(|| Some(fresh_swarm_run_id()));
                 for _ in 0..available_slots {
                     let request = Request::CommAssignNext {
                         id: REQUEST_ID,
