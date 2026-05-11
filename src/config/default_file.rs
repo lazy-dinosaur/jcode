@@ -324,6 +324,39 @@ enabled = false
 # blocking = false
 # timeout_ms = 3000
 
+# M11 stage 5: lifecycle hook payloads (response.completed, session.stop,
+# client.disconnect) carry these optional context fields. They are omitted
+# from the JSON when empty so existing scripts keep working unchanged:
+#
+#   last_user_message     string  Most recent user-authored input
+#                                 (system reminders skipped, max 500 chars)
+#   recent_tool_calls     array   Up to 5 most-recent tool uses, each:
+#                                   { "name": "bash",
+#                                     "args_preview": "{\"command\":\"git status\"}" }
+#                                 args_preview is one-line and ≤200 chars.
+#   turn_count            number  Distinct user-authored turns so far
+#   session_age_seconds   number  Seconds since session creation
+#
+# Example policy: block "commit and push" requests where the model didn't
+# actually run git. Save as .jcode/hooks/require-git-on-commit.sh:
+#
+#   #!/usr/bin/env bash
+#   read -r payload
+#   msg=$(printf '%s' "$payload" | jq -r '.last_user_message // ""')
+#   tools=$(printf '%s' "$payload" | jq -r '.recent_tool_calls[].name // ""')
+#   if printf '%s' "$msg" | grep -qiE "commit|push|커밋"; then
+#     if ! printf '%s' "$tools" | grep -qE '^bash$'; then
+#       printf '{"action":"deny","reason":"commit was requested but no git tool ran"}'
+#     fi
+#   fi
+#
+# Wire it up with:
+# [[hooks.commands]]
+# event = "response.completed"
+# command = ".jcode/hooks/require-git-on-commit.sh"
+# blocking = true
+# timeout_ms = 3000
+
 [safety]
 # Notification settings for ambient mode events
 
