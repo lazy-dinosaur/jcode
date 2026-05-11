@@ -11,7 +11,7 @@ self-contained handoff card. 다음 세션 시작 시 사용 패턴:
 
 | 순위 | ID | 우선도 | 추정 작업량 | 카드 |
 |---|---|---|---|---|
-| 1 | M11 | **High** (framework 게이트) | 5 stage × ~2-4h | [M11.md](./M11.md) |
+| 1 | M11 | ✅ DONE (framework 게이트) | 6 stages complete, latest Stage 6 deployed | [M11.md](./M11.md) |
 | 2 | M17 | **High** (사용자 워크플로우) | A vs B1 결정 + ~50줄 ~ 수백줄 | [M17.md](./M17.md) |
 | 3 | M16 | Medium-High (구조 개선) | 4 sub-step | [M16.md](./M16.md) |
 | 4 | M2  | Medium-High | 재현부터 | [M2.md](./M2.md) |
