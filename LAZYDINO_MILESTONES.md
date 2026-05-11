@@ -17,7 +17,7 @@
 | ID  | 제목                                               | 상태   | 우선순위    |
 |-----|----------------------------------------------------|--------|-------------|
 | M1  | Background task delivery 가 parent/report-back chain 을 안 따라감 | ✅ **DONE** (commit `1387e77e` + `b9085898`, binary `b9085898`) | — |
-| M2  | Swarm 버그 (phase C diagnostics + upstream #76)    | 🟡 Stage 1 ✅ (이미 deploy: `e945d19c` / `dbfc339f` / `26a5ccab` / `24b7eaa9`) — Stage 2 (cwd / hard cap / transport) 보류 | Medium-High |
+| M2  | Swarm 버그 (phase C diagnostics + upstream #76)    | 🟡 Stage 1 ✅ + Stage 2 ✅ (`b4608729` `JCODE_SWARM_NO_TERMINAL` + telemetry) — Stage 3 (hard cap / cwd validation / heartbeat) 보류 | Medium-High |
 | M3  | Hook 시스템 확장 (`session.stop`, `response.completed`) | ✅ **DONE** (commit `003fcf65` + `1c97ef70`, binary `1c97ef70`) | — |
 | M4  | TUI interleave 가 tool 완료 후에야 흡수됨 (jcode 원설계) | 🟡 BY-DESIGN with caveats — UX 개선 가치 | Medium |
 | M5  | Alt+B early race — `background_tool_signal.reset()` 이 너무 늦음 | ✅ **DONE** (commit `52375aac` + `f76dfdda`, binary `f76dfdda`) | — |
