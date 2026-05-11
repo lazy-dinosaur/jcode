@@ -54,6 +54,46 @@ impl Agent {
         self.lifecycle_deny_streak = 0;
     }
 
+    /// M11 stage 6 fix: continuation requires the conversation to end with a
+    /// `Role::User` message. The previous turn's last message is the assistant
+    /// response that just got denied, so a bare `continue` would leave the
+    /// conversation ending with assistant and Anthropic (and other providers)
+    /// will reject the next call with "must end with user message".
+    ///
+    /// We inject the lifecycle reminder as a user-authored `<system-reminder>`
+    /// block. This matches the claude-code stop-hook pattern: reminders live
+    /// inline inside the conversation (not in the system prompt) so the model
+    /// sees them as part of the dialogue. The system-prompt-area
+    /// `current_turn_system_reminder` is intentionally left alone — that
+    /// channel is for the "next user turn" pathway (Stage 1+2 fallback when
+    /// the deny streak cap is hit), not for in-place continuations.
+    pub(super) fn inject_lifecycle_reminder_for_continuation(&mut self) {
+        let Some(reminder) = self.take_pending_lifecycle_system_reminder() else {
+            return;
+        };
+        let trimmed = reminder.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        self.add_message(
+            Role::User,
+            vec![ContentBlock::Text {
+                text: format!("<system-reminder>\n{trimmed}\n</system-reminder>"),
+                cache_control: None,
+            }],
+        );
+        if let Err(err) = self.session.save() {
+            logging::warn(&format!(
+                "[m11-stage6] failed to save session after continuation reminder inject: {err:#}"
+            ));
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn inject_lifecycle_reminder_for_continuation_for_tests(&mut self) {
+        self.inject_lifecycle_reminder_for_continuation();
+    }
+
     #[cfg(test)]
     pub(crate) fn lifecycle_deny_streak_for_tests(&self) -> u8 {
         self.lifecycle_deny_streak
@@ -893,8 +933,7 @@ impl Agent {
                         break;
                     }
                     LifecycleHookOutcome::ContinueImmediate => {
-                        self.current_turn_system_reminder =
-                            self.take_pending_lifecycle_system_reminder();
+                        self.inject_lifecycle_reminder_for_continuation();
                         continue;
                     }
                 }
@@ -931,8 +970,7 @@ impl Agent {
                     {
                         LifecycleHookOutcome::Stop => break,
                         LifecycleHookOutcome::ContinueImmediate => {
-                            self.current_turn_system_reminder =
-                                self.take_pending_lifecycle_system_reminder();
+                            self.inject_lifecycle_reminder_for_continuation();
                             continue;
                         }
                     }

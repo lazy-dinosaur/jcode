@@ -674,8 +674,7 @@ impl Agent {
                         {
                             LifecycleHookOutcome::Stop => break,
                             LifecycleHookOutcome::ContinueImmediate => {
-                                self.current_turn_system_reminder =
-                                    self.take_pending_lifecycle_system_reminder();
+                                self.inject_lifecycle_reminder_for_continuation();
                                 continue;
                             }
                         }
@@ -740,8 +739,7 @@ impl Agent {
                     {
                         LifecycleHookOutcome::Stop => break,
                         LifecycleHookOutcome::ContinueImmediate => {
-                            self.current_turn_system_reminder =
-                                self.take_pending_lifecycle_system_reminder();
+                            self.inject_lifecycle_reminder_for_continuation();
                             continue;
                         }
                     }
