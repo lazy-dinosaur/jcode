@@ -508,6 +508,7 @@ async fn assign_task_to_session(
         target_session: Some(target_session.clone()),
         task_id: params.task_id.clone(),
         message: params.message.clone(),
+        task_timeout_minutes: params.task_timeout_minutes,
     };
 
     match send_request(retry_request).await {
@@ -711,6 +712,8 @@ struct CommunicateInput {
     #[serde(default)]
     timeout_minutes: Option<u64>,
     #[serde(default)]
+    task_timeout_minutes: Option<u32>,
+    #[serde(default)]
     wake: Option<bool>,
     #[serde(default)]
     delivery: Option<CommDeliveryMode>,
@@ -847,6 +850,11 @@ impl Tool for CommunicateTool {
                     "type": "integer",
                     "minimum": 1,
                     "description": "Optional timeout for await_members."
+                },
+                "task_timeout_minutes": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Optional hard timeout in minutes for assign_task/start_task execution. Defaults to unlimited unless swarm.default_task_timeout_minutes is configured."
                 },
                 "concurrency_limit": {
                     "type": "integer",
@@ -1415,6 +1423,7 @@ impl Tool for CommunicateTool {
                     target_session: params.target_session.clone(),
                     task_id: params.task_id.clone(),
                     message: params.message.clone(),
+                    task_timeout_minutes: params.task_timeout_minutes,
                 };
 
                 match send_request(request).await {
@@ -1603,6 +1612,7 @@ impl Tool for CommunicateTool {
                     task_id: task_id.clone(),
                     target_session: params.target_session.clone(),
                     message: params.message.clone(),
+                    task_timeout_minutes: params.task_timeout_minutes,
                 };
 
                 match send_request(request).await {

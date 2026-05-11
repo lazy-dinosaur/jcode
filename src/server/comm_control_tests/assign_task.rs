@@ -49,6 +49,7 @@ async fn assign_task_without_task_id_picks_highest_priority_runnable_task() {
         Some(worker.to_string()),
         None,
         Some("Pick the next task".to_string()),
+        None,
         &client_tx,
         &sessions,
         &soft_interrupt_queues,

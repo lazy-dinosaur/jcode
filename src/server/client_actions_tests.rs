@@ -161,6 +161,9 @@ async fn enabling_swarm_does_not_auto_elect_coordinator() {
             role: "agent".to_string(),
             joined_at: now,
             last_status_change: now,
+            last_heartbeat_at: Some(now),
+            last_tool: None,
+            last_checkpoint: None,
             is_headless: false,
         },
     )])));
@@ -280,6 +283,9 @@ async fn notify_session_runs_scheduled_task_immediately_for_idle_live_session() 
             role: "agent".to_string(),
             joined_at: Instant::now(),
             last_status_change: Instant::now(),
+            last_heartbeat_at: Some(Instant::now()),
+            last_tool: None,
+            last_checkpoint: None,
             is_headless: false,
         },
     )])));
@@ -387,6 +393,9 @@ async fn notify_session_queues_soft_interrupt_when_live_session_is_busy() {
             role: "agent".to_string(),
             joined_at: Instant::now(),
             last_status_change: Instant::now(),
+            last_heartbeat_at: Some(Instant::now()),
+            last_tool: None,
+            last_checkpoint: None,
             is_headless: false,
         },
     )])));

@@ -86,6 +86,9 @@ fn persisted_swarm_state_round_trips_and_marks_running_stale() {
         role: "agent".to_string(),
         joined_at: Instant::now(),
         last_status_change: Instant::now(),
+        last_heartbeat_at: Some(Instant::now()),
+        last_tool: None,
+        last_checkpoint: None,
         is_headless: true,
     }];
 
@@ -176,6 +179,9 @@ fn persisted_swarm_state_without_plan_still_restores_coordinator_and_members() {
         role: "coordinator".to_string(),
         joined_at: Instant::now(),
         last_status_change: Instant::now(),
+        last_heartbeat_at: Some(Instant::now()),
+        last_tool: None,
+        last_checkpoint: None,
         is_headless: false,
     }];
 

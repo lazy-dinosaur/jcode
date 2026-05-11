@@ -17,7 +17,7 @@
 | ID  | 제목                                               | 상태   | 우선순위    |
 |-----|----------------------------------------------------|--------|-------------|
 | M1  | Background task delivery 가 parent/report-back chain 을 안 따라감 | ✅ **DONE** (commit `1387e77e` + `b9085898`, binary `b9085898`) | — |
-| M2  | Swarm 버그 (phase C diagnostics + upstream #76)    | 🟡 PARTIAL — Stages 1-3 DONE (Stage 3: spawn hard cap + cwd root pinning), Stage 4 heartbeat/timeout 남음 | Medium-High |
+| M2  | Swarm 버그 (phase C diagnostics + upstream #76)    | ✅ DONE — Stages 1-4 complete (Stage 4: worker heartbeat, reversible running_stale, opt-in per-task timeout) | — |
 | M3  | Hook 시스템 확장 (`session.stop`, `response.completed`) | ✅ **DONE** (commit `003fcf65` + `1c97ef70`, binary `1c97ef70`) | — |
 | M4  | TUI interleave 가 tool 완료 후에야 흡수됨 (jcode 원설계) | 🟡 BY-DESIGN with caveats — UX 개선 가치 | Medium |
 | M5  | Alt+B early race — `background_tool_signal.reset()` 이 너무 늦음 | ✅ **DONE** (commit `52375aac` + `f76dfdda`, binary `f76dfdda`) | — |
@@ -132,7 +132,7 @@ B. **"Moving tool to background..." 가 풀리지 않음**: Alt+B 직후 status 
 
 ## 📍 Milestone M2 — Swarm 버그 수정
 
-상태: **🔴 OPEN — 증상/원인 일부만 정리, 추가 재현 필요**
+상태: **✅ DONE — Stages 1-4 complete (worker heartbeat + opt-in timeout까지 적용)**
 우선순위: **Medium-High**
 
 ### 알려진 단서

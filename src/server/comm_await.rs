@@ -2,6 +2,7 @@ use super::await_members_state::{
     PersistedAwaitMembersState, ensure_pending_state, load_state, persist_final_response,
     request_key,
 };
+use super::swarm::{heartbeat_age_secs, refresh_member_staleness};
 use super::{AwaitMembersRuntime, SwarmEvent, SwarmMember};
 use crate::protocol::{AwaitedMemberStatus, ServerEvent};
 use std::collections::{HashMap, HashSet};
@@ -51,16 +52,26 @@ pub(super) async fn awaited_member_statuses(
     watch_ids
         .iter()
         .map(|session_id| {
-            let (name, status, completion_report) = members
+            let (
+                name,
+                status,
+                completion_report,
+                last_heartbeat_secs_ago,
+                last_tool,
+                last_checkpoint,
+            ) = members
                 .get(session_id)
                 .map(|member| {
                     (
                         member.friendly_name.clone(),
                         member.status.clone(),
                         member.latest_completion_report.clone(),
+                        heartbeat_age_secs(member),
+                        member.last_tool.clone(),
+                        member.last_checkpoint.clone(),
                     )
                 })
-                .unwrap_or((None, "unknown".to_string(), None));
+                .unwrap_or((None, "unknown".to_string(), None, None, None, None));
             let done = target_status.contains(&status)
                 || (status == "unknown"
                     && (target_status.contains(&"stopped".to_string())
@@ -71,6 +82,9 @@ pub(super) async fn awaited_member_statuses(
                 status,
                 done,
                 completion_report,
+                last_heartbeat_secs_ago,
+                last_tool,
+                last_checkpoint,
             }
         })
         .collect()
@@ -129,7 +143,16 @@ pub(super) fn timeout_summary(member_statuses: &[AwaitedMemberStatus]) -> String
     let pending: Vec<String> = member_statuses
         .iter()
         .filter(|member| !member.done)
-        .map(|member| format!("{} ({})", short_member_name(member), member.status))
+        .map(|member| {
+            let mut detail = format!("{} ({})", short_member_name(member), member.status);
+            if let Some(age) = member.last_heartbeat_secs_ago {
+                detail.push_str(&format!(", last_heartbeat={}s ago", age));
+            }
+            if let Some(tool) = member.last_tool.as_deref() {
+                detail.push_str(&format!(", last_tool={}", tool));
+            }
+            detail
+        })
         .collect();
     format!("Timed out. Still waiting on: {}", pending.join(", "))
 }
@@ -223,6 +246,7 @@ pub(super) async fn spawn_or_resume_await_members(
         let deadline = deadline_to_instant(state.deadline_unix_ms);
 
         loop {
+            let _ = refresh_member_staleness(&swarm_members, &swarms_by_id).await;
             let member_statuses = awaited_member_statuses(
                 &req_session_id,
                 &swarm_id,
@@ -279,6 +303,7 @@ pub(super) async fn spawn_or_resume_await_members(
                         }
                     }
                 }
+                _ = tokio::time::sleep(Duration::from_secs(5)) => {}
             }
         }
     });

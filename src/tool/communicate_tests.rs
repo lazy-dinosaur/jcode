@@ -89,6 +89,9 @@ fn format_awaited_members_includes_completion_reports() {
         status: "ready".to_string(),
         done: true,
         completion_report: Some("Structured report wins.".to_string()),
+        last_heartbeat_secs_ago: None,
+        last_tool: None,
+        last_checkpoint: None,
     }];
     let reports = HashMap::from([(
         "session_worker".to_string(),

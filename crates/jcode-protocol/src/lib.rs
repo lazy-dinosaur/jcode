@@ -533,6 +533,9 @@ pub enum Request {
         task_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         message: Option<String>,
+        /// Optional hard timeout for this task execution in minutes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task_timeout_minutes: Option<u32>,
     },
 
     /// Assign the next runnable unassigned task from the plan (coordinator only)
@@ -566,6 +569,9 @@ pub enum Request {
         target_session: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         message: Option<String>,
+        /// Optional hard timeout for this task execution in minutes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task_timeout_minutes: Option<u32>,
     },
 
     /// Subscribe to a named channel in the swarm
@@ -1282,6 +1288,15 @@ pub struct AgentInfo {
     /// Seconds since the last status change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_age_secs: Option<u64>,
+    /// Seconds since the last member heartbeat/activity event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_heartbeat_secs_ago: Option<u64>,
+    /// Last tool name observed for this member. Tool args are not exposed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_tool: Option<String>,
+    /// Last short checkpoint/status summary observed for this member.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_checkpoint: Option<String>,
 }
 
 /// Lightweight status snapshot for a swarm member.
@@ -1304,6 +1319,15 @@ pub struct AgentStatusSnapshot {
     pub live_attachments: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_age_secs: Option<u64>,
+    /// Seconds since the last member heartbeat/activity event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_heartbeat_secs_ago: Option<u64>,
+    /// Last tool name observed for this member. Tool args are not exposed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_tool: Option<String>,
+    /// Last short checkpoint/status summary observed for this member.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_checkpoint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub joined_age_secs: Option<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1404,6 +1428,15 @@ pub struct SwarmMemberStatus {
     /// Seconds since the last status change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_age_secs: Option<u64>,
+    /// Seconds since the last member heartbeat/activity event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_heartbeat_secs_ago: Option<u64>,
+    /// Last tool name observed for this member. Tool args are not exposed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_tool: Option<String>,
+    /// Last short checkpoint/status summary observed for this member.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_checkpoint: Option<String>,
 }
 
 /// Status of a member being awaited by comm_await_members
@@ -1418,6 +1451,15 @@ pub struct AwaitedMemberStatus {
     /// Latest structured completion report submitted by this member, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion_report: Option<String>,
+    /// Seconds since the last member heartbeat/activity event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_heartbeat_secs_ago: Option<u64>,
+    /// Last tool name observed for this member. Tool args are not exposed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_tool: Option<String>,
+    /// Last short checkpoint/status summary observed for this member.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_checkpoint: Option<String>,
 }
 
 pub fn format_comm_plan_followup(summary: &PlanGraphStatus) -> String {

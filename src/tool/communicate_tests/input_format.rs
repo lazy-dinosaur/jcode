@@ -114,6 +114,9 @@ fn cleanup_candidates_default_to_owned_terminal_workers() {
             latest_completion_report: None,
             live_attachments: None,
             status_age_secs: None,
+            last_heartbeat_secs_ago: None,
+            last_tool: None,
+            last_checkpoint: None,
         },
         AgentInfo {
             session_id: "owned-done".to_string(),
@@ -128,6 +131,9 @@ fn cleanup_candidates_default_to_owned_terminal_workers() {
             latest_completion_report: None,
             live_attachments: None,
             status_age_secs: None,
+            last_heartbeat_secs_ago: None,
+            last_tool: None,
+            last_checkpoint: None,
         },
         AgentInfo {
             session_id: "user-created".to_string(),
@@ -142,6 +148,9 @@ fn cleanup_candidates_default_to_owned_terminal_workers() {
             latest_completion_report: None,
             live_attachments: None,
             status_age_secs: None,
+            last_heartbeat_secs_ago: None,
+            last_tool: None,
+            last_checkpoint: None,
         },
         AgentInfo {
             session_id: "owned-running".to_string(),
@@ -156,6 +165,9 @@ fn cleanup_candidates_default_to_owned_terminal_workers() {
             latest_completion_report: None,
             live_attachments: None,
             status_age_secs: None,
+            last_heartbeat_secs_ago: None,
+            last_tool: None,
+            last_checkpoint: None,
         },
     ];
     let statuses = default_cleanup_target_statuses();
@@ -185,6 +197,9 @@ fn cleanup_candidates_can_be_scoped_by_run_id() {
             latest_completion_report: None,
             live_attachments: None,
             status_age_secs: None,
+            last_heartbeat_secs_ago: None,
+            last_tool: None,
+            last_checkpoint: None,
         },
         AgentInfo {
             session_id: "current-run".to_string(),
@@ -199,6 +214,9 @@ fn cleanup_candidates_can_be_scoped_by_run_id() {
             latest_completion_report: None,
             live_attachments: None,
             status_age_secs: None,
+            last_heartbeat_secs_ago: None,
+            last_tool: None,
+            last_checkpoint: None,
         },
         AgentInfo {
             session_id: "old-run".to_string(),
@@ -213,6 +231,9 @@ fn cleanup_candidates_can_be_scoped_by_run_id() {
             latest_completion_report: None,
             live_attachments: None,
             status_age_secs: None,
+            last_heartbeat_secs_ago: None,
+            last_tool: None,
+            last_checkpoint: None,
         },
     ];
     let statuses = default_cleanup_target_statuses();
@@ -246,6 +267,9 @@ fn cleanup_candidates_include_owned_stale_workers_by_default() {
             latest_completion_report: None,
             live_attachments: None,
             status_age_secs: None,
+            last_heartbeat_secs_ago: None,
+            last_tool: None,
+            last_checkpoint: None,
         },
         AgentInfo {
             session_id: "owned-crashed".to_string(),
@@ -260,6 +284,9 @@ fn cleanup_candidates_include_owned_stale_workers_by_default() {
             latest_completion_report: None,
             live_attachments: None,
             status_age_secs: Some(900),
+            last_heartbeat_secs_ago: Some(900),
+            last_tool: None,
+            last_checkpoint: None,
         },
         AgentInfo {
             session_id: "owned-running-stale".to_string(),
@@ -274,6 +301,9 @@ fn cleanup_candidates_include_owned_stale_workers_by_default() {
             latest_completion_report: None,
             live_attachments: None,
             status_age_secs: Some(600),
+            last_heartbeat_secs_ago: Some(600),
+            last_tool: None,
+            last_checkpoint: None,
         },
         AgentInfo {
             session_id: "foreign-crashed".to_string(),
@@ -288,6 +318,9 @@ fn cleanup_candidates_include_owned_stale_workers_by_default() {
             latest_completion_report: None,
             live_attachments: None,
             status_age_secs: Some(1200),
+            last_heartbeat_secs_ago: Some(1200),
+            last_tool: None,
+            last_checkpoint: None,
         },
     ];
     let statuses = default_cleanup_target_statuses();
@@ -363,6 +396,9 @@ fn format_members_includes_status_and_detail() {
             latest_completion_report: None,
             live_attachments: Some(0),
             status_age_secs: Some(12),
+            last_heartbeat_secs_ago: Some(12),
+            last_tool: None,
+            last_checkpoint: None,
         }],
     );
 
@@ -392,6 +428,9 @@ fn format_members_can_be_scoped_to_one_run_id() {
             latest_completion_report: None,
             live_attachments: Some(0),
             status_age_secs: Some(3),
+            last_heartbeat_secs_ago: Some(3),
+            last_tool: None,
+            last_checkpoint: None,
         },
         AgentInfo {
             session_id: "old-worker".to_string(),
@@ -406,6 +445,9 @@ fn format_members_can_be_scoped_to_one_run_id() {
             latest_completion_report: None,
             live_attachments: Some(0),
             status_age_secs: Some(10),
+            last_heartbeat_secs_ago: Some(10),
+            last_tool: None,
+            last_checkpoint: None,
         },
     ];
 
@@ -450,6 +492,9 @@ fn format_members_disambiguates_duplicate_friendly_names() {
                 latest_completion_report: None,
                 live_attachments: None,
                 status_age_secs: None,
+                last_heartbeat_secs_ago: None,
+                last_tool: None,
+                last_checkpoint: None,
             },
             AgentInfo {
                 session_id: "session_shark_1234567890_bbbbbbbbbbbb0002".to_string(),
@@ -464,6 +509,9 @@ fn format_members_disambiguates_duplicate_friendly_names() {
                 latest_completion_report: None,
                 live_attachments: None,
                 status_age_secs: None,
+                last_heartbeat_secs_ago: None,
+                last_tool: None,
+                last_checkpoint: None,
             },
         ],
     );
@@ -484,6 +532,9 @@ fn format_awaited_members_disambiguates_duplicate_friendly_names() {
                 status: "ready".to_string(),
                 done: true,
                 completion_report: None,
+                last_heartbeat_secs_ago: None,
+                last_tool: None,
+                last_checkpoint: None,
             },
             AwaitedMemberStatus {
                 session_id: "session_shark_1234567890_bbbbbbbbbbbb0002".to_string(),
@@ -491,6 +542,9 @@ fn format_awaited_members_disambiguates_duplicate_friendly_names() {
                 status: "ready".to_string(),
                 done: true,
                 completion_report: None,
+                last_heartbeat_secs_ago: None,
+                last_tool: None,
+                last_checkpoint: None,
             },
         ],
     );
@@ -511,6 +565,9 @@ fn format_status_snapshot_includes_activity_and_metadata() {
         is_headless: Some(true),
         live_attachments: Some(0),
         status_age_secs: Some(7),
+        last_heartbeat_secs_ago: Some(3),
+        last_tool: Some("bash".to_string()),
+        last_checkpoint: Some("working".to_string()),
         joined_age_secs: Some(42),
         files_touched: vec!["src/server/comm_sync.rs".to_string()],
         activity: Some(SessionActivitySnapshot {

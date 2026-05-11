@@ -37,6 +37,8 @@ struct PartialAgentsConfig {
 struct PartialSwarmConfig {
     max_active_spawns_per_coordinator: Option<u32>,
     max_active_spawns_per_run: Option<u32>,
+    heartbeat_stale_secs: Option<u32>,
+    default_task_timeout_minutes: Option<u32>,
 }
 
 impl PartialAgentsConfig {
@@ -84,6 +86,12 @@ impl PartialSwarmConfig {
         }
         if self.max_active_spawns_per_run.is_some() {
             swarm.max_active_spawns_per_run = self.max_active_spawns_per_run;
+        }
+        if self.heartbeat_stale_secs.is_some() {
+            swarm.heartbeat_stale_secs = self.heartbeat_stale_secs;
+        }
+        if self.default_task_timeout_minutes.is_some() {
+            swarm.default_task_timeout_minutes = self.default_task_timeout_minutes;
         }
     }
 }

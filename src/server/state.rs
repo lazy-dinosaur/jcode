@@ -165,6 +165,12 @@ pub struct SwarmMember {
     pub joined_at: Instant,
     /// When status was last changed
     pub last_status_change: Instant,
+    /// Last observed activity heartbeat for this member.
+    pub last_heartbeat_at: Option<Instant>,
+    /// Last tool name observed for this member. Tool args are intentionally not stored.
+    pub last_tool: Option<String>,
+    /// Last short checkpoint/status summary observed for this member.
+    pub last_checkpoint: Option<String>,
     /// Whether this is a headless (spawned) session vs a TUI-connected session.
     /// Headless sessions should not be automatically elected as coordinator.
     pub is_headless: bool,
@@ -218,6 +224,9 @@ impl SwarmMember {
             role: record.role.as_str().into_owned(),
             joined_at: Instant::now(),
             last_status_change: Instant::now(),
+            last_heartbeat_at: Some(Instant::now()),
+            last_tool: None,
+            last_checkpoint: None,
             is_headless: record.is_headless,
         }
     }
