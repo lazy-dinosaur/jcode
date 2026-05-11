@@ -1,6 +1,6 @@
 # Lazydino Jcode — Outstanding Milestones
 
-마지막 업데이트: 2026-05-11
+마지막 업데이트: 2026-05-11 (M2 Stage 3 cap default 0 으로 환원)
 관련 문서: `LAZYDINO_MAINTENANCE.md` (커밋된 패치 이력)
 
 이 문서는 **아직 미해결이거나 계획된 큰 작업** 들을 추적합니다. 완료되면 `LAZYDINO_MAINTENANCE.md` 로 이동시키고 여기에서 제거 또는 "DONE" 표시합니다.
@@ -17,7 +17,7 @@
 | ID  | 제목                                               | 상태   | 우선순위    |
 |-----|----------------------------------------------------|--------|-------------|
 | M1  | Background task delivery 가 parent/report-back chain 을 안 따라감 | ✅ **DONE** (commit `1387e77e` + `b9085898`, binary `b9085898`) | — |
-| M2  | Swarm 버그 (phase C diagnostics + upstream #76)    | ✅ DONE — Stages 1-4 complete (Stage 4: worker heartbeat, reversible running_stale, opt-in per-task timeout) | — |
+| M2  | Swarm 버그 (phase C diagnostics + upstream #76)    | ✅ **DONE** — Stages 1-4 complete (Stage 4: worker heartbeat, reversible running_stale, opt-in per-task timeout). Stage 3 의 spawn hard cap default 는 후속 결정으로 `0` (unlimited, upstream 동작 동일) 으로 변경 — opt-in safety harness 로 유지 (commit `4f90de73`). #76 의 진짜 fix 는 Stage 4 의 heartbeat + cwd validation (Stage 3) + force-headless (Stage 2). | — |
 | M3  | Hook 시스템 확장 (`session.stop`, `response.completed`) | ✅ **DONE** (commit `003fcf65` + `1c97ef70`, binary `1c97ef70`) | — |
 | M4  | TUI interleave 가 tool 완료 후에야 흡수됨 (jcode 원설계) | 🟡 BY-DESIGN with caveats — UX 개선 가치 | Medium |
 | M5  | Alt+B early race — `background_tool_signal.reset()` 이 너무 늦음 | ✅ **DONE** (commit `52375aac` + `f76dfdda`, binary `f76dfdda`) | — |
