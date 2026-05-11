@@ -107,14 +107,11 @@ pub struct Agent {
     /// Lifecycle hook deny reason to inject into the next user turn.
     /// Not persisted to session history.
     pending_lifecycle_system_reminder: Option<String>,
-    /// M11 stage 3: consecutive lifecycle deny counter to break runaway hook loops.
-    /// Increments whenever a lifecycle hook deny inject reminder is consumed by a
-    /// turn that itself fires another lifecycle deny. Reset whenever the agent
-    /// completes a turn without a lifecycle deny. Once the streak reaches
-    /// `LIFECYCLE_HOOK_DENY_STREAK_LIMIT`, the loop guard suppresses further
-    /// reminder injection and emits a single guard notice instead, allowing the
-    /// session to stop even if the user hook keeps denying.
-    lifecycle_deny_streak: u32,
+    /// M11 stage 6: consecutive lifecycle denies within an immediate
+    /// continuation chain. Reset at the start of each new user turn. Compared
+    /// against `agents.max_lifecycle_deny_streak` (or env override) to prevent
+    /// runaway self-correction loops.
+    lifecycle_deny_streak: u8,
     /// Tool call ids observed in the current session transcript.
     tool_call_ids: HashSet<String>,
     /// Tool result ids observed in the current session transcript.

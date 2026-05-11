@@ -394,6 +394,10 @@ pub struct AgentsConfig {
     /// and gives a clean reproduction surface. Env var
     /// `JCODE_SWARM_NO_TERMINAL=1` overrides the config to force headless.
     pub swarm_spawn_visible: Option<bool>,
+    /// Maximum consecutive lifecycle hook denies that may trigger immediate
+    /// continuation turns. `None` uses the default (3). `Some(0)` means
+    /// unlimited / trust hook scripts to self-throttle.
+    pub max_lifecycle_deny_streak: Option<u8>,
 }
 
 /// Rich subagent routing configuration.

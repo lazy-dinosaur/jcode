@@ -28,6 +28,7 @@ struct PartialAgentsConfig {
     memory_model: Option<String>,
     memory_sidecar_enabled: bool,
     swarm_spawn_visible: Option<bool>,
+    max_lifecycle_deny_streak: Option<u8>,
 }
 
 impl PartialAgentsConfig {
@@ -44,6 +45,9 @@ impl PartialAgentsConfig {
         agents.memory_sidecar_enabled = self.memory_sidecar_enabled;
         if self.swarm_spawn_visible.is_some() {
             agents.swarm_spawn_visible = self.swarm_spawn_visible;
+        }
+        if let Some(value) = self.max_lifecycle_deny_streak {
+            agents.max_lifecycle_deny_streak = Some(value);
         }
     }
 }

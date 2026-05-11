@@ -1076,93 +1076,111 @@ fn lifecycle_hook_reminder_merges_with_existing_turn_reminder() {
     assert_eq!(merged, "existing reminder\n\nlifecycle reminder");
 }
 
-// --- M11 stage 3: loop guard regression tests --------------------------------
+// --- M11 stage 6: immediate continuation regression tests -------------------
 
 #[tokio::test]
-async fn lifecycle_deny_streak_starts_zero_and_increments_per_deny() {
+async fn lifecycle_deny_cap_three_allows_three_immediate_continuations_then_stops() {
     let _guard = crate::storage::lock_test_env();
     let provider: Arc<dyn Provider> = Arc::new(NativeAutoCompactionProvider);
     let registry = Registry::new(provider.clone()).await;
     let mut agent = Agent::new(provider, registry);
 
-    assert_eq!(agent.lifecycle_deny_streak_for_tests(), 0);
+    for expected_streak in 1..=3 {
+        let outcome = agent
+            .handle_lifecycle_hook_deny_with_cap_for_tests(format!("deny {expected_streak}"), 3);
+        assert!(matches!(
+            outcome,
+            super::turn_loops::LifecycleHookOutcome::ContinueImmediate
+        ));
+        assert_eq!(agent.lifecycle_deny_streak_for_tests(), expected_streak);
+        assert!(agent.take_pending_lifecycle_system_reminder().is_some());
+    }
 
-    agent.set_pending_lifecycle_system_reminder("forgot to commit".to_string());
-    assert_eq!(agent.lifecycle_deny_streak_for_tests(), 1);
-    let _ = agent.take_pending_lifecycle_system_reminder();
-
-    agent.set_pending_lifecycle_system_reminder("forgot to commit".to_string());
-    assert_eq!(agent.lifecycle_deny_streak_for_tests(), 2);
+    let outcome = agent.handle_lifecycle_hook_deny_with_cap_for_tests("deny 4".to_string(), 3);
+    assert!(matches!(
+        outcome,
+        super::turn_loops::LifecycleHookOutcome::Stop
+    ));
+    assert_eq!(agent.lifecycle_deny_streak_for_tests(), 3);
+    let pending = agent.take_pending_lifecycle_system_reminder().unwrap();
+    assert!(pending.contains("deny 4"));
 }
 
 #[tokio::test]
-async fn lifecycle_deny_streak_resets_after_passing_turn() {
+async fn lifecycle_deny_cap_zero_allows_unlimited_immediate_continuations() {
     let _guard = crate::storage::lock_test_env();
     let provider: Arc<dyn Provider> = Arc::new(NativeAutoCompactionProvider);
     let registry = Registry::new(provider.clone()).await;
     let mut agent = Agent::new(provider, registry);
 
-    agent.set_pending_lifecycle_system_reminder("first deny".to_string());
-    agent.set_pending_lifecycle_system_reminder("second deny".to_string());
-    assert_eq!(agent.lifecycle_deny_streak_for_tests(), 2);
-
-    // Turn finishes without the hook denying -> caller resets streak.
-    agent.note_turn_completed_without_lifecycle_deny();
-    assert_eq!(agent.lifecycle_deny_streak_for_tests(), 0);
-
-    // Next deny starts counting from one again.
-    agent.set_pending_lifecycle_system_reminder("post-reset deny".to_string());
-    assert_eq!(agent.lifecycle_deny_streak_for_tests(), 1);
+    for expected_streak in 1..=5 {
+        let outcome = agent
+            .handle_lifecycle_hook_deny_with_cap_for_tests(format!("deny {expected_streak}"), 0);
+        assert!(matches!(
+            outcome,
+            super::turn_loops::LifecycleHookOutcome::ContinueImmediate
+        ));
+        assert_eq!(agent.lifecycle_deny_streak_for_tests(), expected_streak);
+        assert!(agent.take_pending_lifecycle_system_reminder().is_some());
+    }
 }
 
 #[tokio::test]
-async fn lifecycle_deny_streak_triggers_loop_guard_notice_at_limit() {
+async fn lifecycle_deny_streak_resets_at_new_user_turn_start() {
     let _guard = crate::storage::lock_test_env();
     let provider: Arc<dyn Provider> = Arc::new(NativeAutoCompactionProvider);
     let registry = Registry::new(provider.clone()).await;
     let mut agent = Agent::new(provider, registry);
 
-    // Denies 1 and 2 are still normal reminders.
-    agent.set_pending_lifecycle_system_reminder("still denying".to_string());
-    let r1 = agent.take_pending_lifecycle_system_reminder().unwrap();
-    assert!(r1.contains("lifecycle hook denied completion"));
-    assert!(!r1.contains("loop guard"));
+    agent.handle_lifecycle_hook_deny_with_cap_for_tests("first".to_string(), 3);
+    agent.handle_lifecycle_hook_deny_with_cap_for_tests("second".to_string(), 3);
+    assert_eq!(agent.lifecycle_deny_streak_for_tests(), 2);
 
-    agent.set_pending_lifecycle_system_reminder("still denying".to_string());
-    let r2 = agent.take_pending_lifecycle_system_reminder().unwrap();
-    assert!(r2.contains("lifecycle hook denied completion"));
-    assert!(!r2.contains("loop guard"));
+    agent.reset_lifecycle_deny_streak_for_user_turn();
 
-    // Deny 3 hits LIFECYCLE_HOOK_DENY_STREAK_LIMIT and trips the loop guard.
-    agent.set_pending_lifecycle_system_reminder("still denying".to_string());
-    let guard = agent.take_pending_lifecycle_system_reminder().unwrap();
-    assert!(
-        guard.contains("loop guard is now suppressing"),
-        "expected loop guard notice, got: {guard}"
+    assert_eq!(agent.lifecycle_deny_streak_for_tests(), 0);
+}
+
+#[test]
+fn lifecycle_deny_streak_env_override_beats_config() {
+    let _guard = crate::storage::lock_test_env();
+    let previous = std::env::var("JCODE_MAX_LIFECYCLE_DENY_STREAK").ok();
+    crate::env::set_var("JCODE_MAX_LIFECYCLE_DENY_STREAK", "1");
+
+    assert_eq!(
+        Agent::resolve_max_lifecycle_deny_streak_with_config(Some(10)),
+        1
     );
-    assert!(guard.contains("still denying"));
-    assert!(guard.contains("3 times in a row"));
 
-    // After the notice fires the streak is cleared so the very next deny
-    // (after the user resets the hook script) starts from one again.
-    assert_eq!(agent.lifecycle_deny_streak_for_tests(), 0);
+    match previous {
+        Some(value) => crate::env::set_var("JCODE_MAX_LIFECYCLE_DENY_STREAK", value),
+        None => crate::env::remove_var("JCODE_MAX_LIFECYCLE_DENY_STREAK"),
+    }
 }
 
-#[tokio::test]
-async fn lifecycle_deny_streak_empty_reason_does_not_count() {
+#[test]
+fn lifecycle_deny_streak_config_and_default_resolution() {
     let _guard = crate::storage::lock_test_env();
-    let provider: Arc<dyn Provider> = Arc::new(NativeAutoCompactionProvider);
-    let registry = Registry::new(provider.clone()).await;
-    let mut agent = Agent::new(provider, registry);
+    let previous = std::env::var("JCODE_MAX_LIFECYCLE_DENY_STREAK").ok();
+    crate::env::remove_var("JCODE_MAX_LIFECYCLE_DENY_STREAK");
 
-    agent.set_pending_lifecycle_system_reminder("real deny".to_string());
-    agent.set_pending_lifecycle_system_reminder("   ".to_string()); // whitespace only
-    agent.set_pending_lifecycle_system_reminder("".to_string()); // empty
+    assert_eq!(
+        Agent::resolve_max_lifecycle_deny_streak_with_config(Some(0)),
+        0
+    );
+    assert_eq!(
+        Agent::resolve_max_lifecycle_deny_streak_with_config(Some(9)),
+        9
+    );
+    assert_eq!(
+        Agent::resolve_max_lifecycle_deny_streak_with_config(None),
+        Agent::DEFAULT_MAX_LIFECYCLE_DENY_STREAK
+    );
 
-    // Only the first deny incremented the streak; the whitespace/empty
-    // entries are treated as "hook fired but didn't actually deny" so they
-    // must not bump the counter toward the loop guard trigger.
-    assert_eq!(agent.lifecycle_deny_streak_for_tests(), 1);
+    match previous {
+        Some(value) => crate::env::set_var("JCODE_MAX_LIFECYCLE_DENY_STREAK", value),
+        None => crate::env::remove_var("JCODE_MAX_LIFECYCLE_DENY_STREAK"),
+    }
 }
 
 #[tokio::test]
@@ -1446,7 +1464,10 @@ async fn lifecycle_hook_recent_tool_calls_keeps_last_n_in_chronological_order() 
     }
 
     let recent = agent.lifecycle_hook_recent_tool_calls();
-    assert_eq!(recent.len(), crate::hooks::LIFECYCLE_HOOK_RECENT_TOOL_CALLS_MAX);
+    assert_eq!(
+        recent.len(),
+        crate::hooks::LIFECYCLE_HOOK_RECENT_TOOL_CALLS_MAX
+    );
     // First kept entry must be index=2 (the first 2 were dropped); last
     // must be the most recent one we pushed (max+1).
     assert!(recent.first().unwrap().args_preview.contains("echo 2"));

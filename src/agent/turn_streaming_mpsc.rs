@@ -1,3 +1,4 @@
+use super::turn_loops::LifecycleHookOutcome;
 use super::*;
 
 impl Agent {
@@ -662,14 +663,22 @@ impl Agent {
                     &mut incomplete_continuations,
                 )? {
                     NoToolCallOutcome::Break => {
-                        self.fire_response_completed_hook(
-                            assistant_message_id.as_deref(),
-                            stop_reason.as_deref(),
-                            assistant_tool_calls_count,
-                            text_content.chars().count(),
-                        )
-                        .await;
-                        break;
+                        match self
+                            .fire_response_completed_hook(
+                                assistant_message_id.as_deref(),
+                                stop_reason.as_deref(),
+                                assistant_tool_calls_count,
+                                text_content.chars().count(),
+                            )
+                            .await
+                        {
+                            LifecycleHookOutcome::Stop => break,
+                            LifecycleHookOutcome::ContinueImmediate => {
+                                self.current_turn_system_reminder =
+                                    self.take_pending_lifecycle_system_reminder();
+                                continue;
+                            }
+                        }
                     }
                     NoToolCallOutcome::ContinueWithoutEvent => continue,
                     NoToolCallOutcome::ContinueWithSoftInterrupt { injected, point } => {
@@ -720,14 +729,22 @@ impl Agent {
                         // Don't break - continue loop to process injected message
                         continue;
                     }
-                    self.fire_response_completed_hook(
-                        assistant_message_id.as_deref(),
-                        stop_reason.as_deref(),
-                        assistant_tool_calls_count,
-                        text_content.chars().count(),
-                    )
-                    .await;
-                    break;
+                    match self
+                        .fire_response_completed_hook(
+                            assistant_message_id.as_deref(),
+                            stop_reason.as_deref(),
+                            assistant_tool_calls_count,
+                            text_content.chars().count(),
+                        )
+                        .await
+                    {
+                        LifecycleHookOutcome::Stop => break,
+                        LifecycleHookOutcome::ContinueImmediate => {
+                            self.current_turn_system_reminder =
+                                self.take_pending_lifecycle_system_reminder();
+                            continue;
+                        }
+                    }
                 }
             }
 

@@ -14,6 +14,7 @@ impl Agent {
         if trace_enabled() {
             eprintln!("[trace] session_id {}", self.session.id);
         }
+        self.reset_lifecycle_deny_streak_for_user_turn();
         self.current_turn_system_reminder = self.take_pending_lifecycle_system_reminder();
         let _ = self.run_turn(true).await?;
         self.current_turn_system_reminder = None;
@@ -32,6 +33,7 @@ impl Agent {
         if trace_enabled() {
             eprintln!("[trace] session_id {}", self.session.id);
         }
+        self.reset_lifecycle_deny_streak_for_user_turn();
         self.current_turn_system_reminder = self.take_pending_lifecycle_system_reminder();
         let result = self.run_turn(false).await;
         self.current_turn_system_reminder = None;
@@ -69,6 +71,7 @@ impl Agent {
             }],
         );
         self.session.save()?;
+        self.reset_lifecycle_deny_streak_for_user_turn();
         self.current_turn_system_reminder = self.take_pending_lifecycle_system_reminder();
         let result = self.run_turn_streaming(event_tx).await;
         self.current_turn_system_reminder = None;
@@ -100,6 +103,7 @@ impl Agent {
             );
         }
 
+        self.reset_lifecycle_deny_streak_for_user_turn();
         let pending_lifecycle_reminder = self.take_pending_lifecycle_system_reminder();
         self.current_turn_system_reminder = Self::merge_current_and_pending_system_reminders(
             system_reminder,
