@@ -225,15 +225,17 @@ memory_sidecar_enabled = false
 # max_lifecycle_deny_streak = 3
 
 [swarm]
-# Lazydino M2 stage 3 — hard caps for concurrently active workers owned by one
-# coordinator. Active means any non-terminal worker status; completed, failed,
-# crashed, closed, and disconnected workers do not count. `0` disables a cap.
-# Env vars override these values:
+# Lazydino M2 stage 3 — opt-in hard caps for concurrently active workers
+# owned by one coordinator. Active means any non-terminal worker status;
+# completed, failed, crashed, closed, and disconnected workers do not count.
+# `0` (the default) disables the cap entirely, matching upstream jcode
+# behavior. Set a positive value to defend against runaway spawn patterns
+# (see issue #76). Env vars override these values:
 #   JCODE_MAX_ACTIVE_SPAWNS_PER_COORDINATOR
 #   JCODE_MAX_ACTIVE_SPAWNS_PER_RUN
-# Defaults when unset are 6 per coordinator and 4 per run.
-# max_active_spawns_per_coordinator = 6
-# max_active_spawns_per_run = 4
+# Defaults when unset are 0 (unlimited) for both.
+# max_active_spawns_per_coordinator = 0
+# max_active_spawns_per_run = 0
 #
 # Lazydino M2 stage 4 — worker heartbeat stale surfacing. A running worker
 # that emits no text/tool/status heartbeat for this many seconds is marked
