@@ -51,14 +51,35 @@ async fn fire_session_stop_hook(
     reason: &'static str,
     message_count: usize,
 ) {
-    let payload = crate::hooks::SessionStopHookPayload {
+    // M11 stage 4: fire both the new `client.disconnect` event and the
+    // legacy `session.stop` event. Existing user configurations listening
+    // for `session.stop` continue to work; new configurations should listen
+    // for `client.disconnect` for accurate semantics. `session.stop` is
+    // reserved for a future explicit logical session-end producer.
+    //
+    // Order is intentional: `client.disconnect` fires first so a single
+    // blocking hook subscribed to both events sees the new event first.
+    // Deny reasons from either path are warn-logged but do not abort
+    // cleanup (a denial here has no next turn to inject into).
+    let new_event_payload = crate::hooks::SessionStopHookPayload {
+        event: crate::hooks::CLIENT_DISCONNECT,
+        session_id,
+        working_dir: working_dir.clone(),
+        reason,
+        message_count,
+    };
+    if let Err(err) = crate::hooks::run_client_disconnect_hooks(new_event_payload).await {
+        crate::logging::warn(&format!("client.disconnect hook failed: {err:#}"));
+    }
+
+    let legacy_payload = crate::hooks::SessionStopHookPayload {
         event: crate::hooks::SESSION_STOP,
         session_id,
         working_dir,
         reason,
         message_count,
     };
-    if let Err(err) = crate::hooks::run_session_hooks(payload).await {
+    if let Err(err) = crate::hooks::run_session_hooks(legacy_payload).await {
         crate::logging::warn(&format!("session.stop hook failed: {err:#}"));
     }
 }

@@ -278,7 +278,10 @@ bind_addr = "0.0.0.0"
 # Project/local hook commands are appended to global hook commands.
 # Hooks receive a JSON payload on stdin.
 # Blocking tool.execute.before hooks may return {"action":"allow"} or {"action":"deny","reason":"..."}.
-# Lifecycle hooks (session.stop, response.completed) ignore deny decisions and never block progress.
+# Blocking lifecycle hooks (response.completed, session.stop, client.disconnect) may also return
+# {"action":"deny","reason":"..."}; the reason is injected as a system reminder into the next user
+# turn. After 3 consecutive denies a loop guard surfaces a single notice telling the model to stop
+# and clears the streak (see M11 stage 3).
 enabled = false
 
 # Example: block or allow tool calls before execution.
@@ -296,7 +299,18 @@ enabled = false
 # blocking = false
 # timeout_ms = 3000
 
-# Example: notify when a session truly stops (not during reload detach).
+# Example: react to client teardown (M11 stage 4). Fires when a client connection
+# closes or crashes. Preferred over `session.stop` for client-disconnect semantics.
+# [[hooks.commands]]
+# event = "client.disconnect"
+# command = ".jcode/hooks/client-disconnect.sh"
+# blocking = false
+# timeout_ms = 3000
+
+# Example: notify when a session truly stops. Currently `session.stop` is also
+# emitted on client disconnect for backward compatibility; new hooks should
+# prefer `client.disconnect` above. `session.stop` will be reserved for a
+# future explicit logical session-end signal.
 # [[hooks.commands]]
 # event = "session.stop"
 # command = ".jcode/hooks/session-stop.sh"
