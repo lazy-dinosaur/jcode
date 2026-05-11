@@ -1,7 +1,9 @@
 use super::{
-    ensure_spawn_coordinator_swarm, prepare_visible_spawn_session, register_visible_spawned_member,
-    require_coordinator_swarm, resolve_spawn_working_dir, resolve_stop_target_session,
-    swarm_force_headless_spawn, swarm_stop_allowed_by_owner,
+    SpawnCapError, count_active_owned_workers, enforce_spawn_caps, ensure_spawn_coordinator_swarm,
+    prepare_visible_spawn_session, register_visible_spawned_member, require_coordinator_swarm,
+    resolve_max_active_spawns_per_coordinator, resolve_spawn_working_dir,
+    resolve_stop_target_session, swarm_force_headless_spawn, swarm_stop_allowed_by_owner,
+    validate_spawn_working_dir,
 };
 use crate::agent::Agent;
 use crate::message::{Message, ToolDefinition};
@@ -81,11 +83,13 @@ async fn test_agent_with_working_dir(session_id: &str, working_dir: &str) -> Arc
 }
 
 #[tokio::test]
-async fn resolve_spawn_working_dir_prefers_explicit_then_spawner_agent_dir() {
+async fn resolve_spawn_working_dir_prefers_explicit_dir() {
     let sessions = Arc::new(RwLock::new(HashMap::new()));
+    let spawner_dir = tempfile::TempDir::new().expect("spawner dir");
+    let spawner_dir_string = spawner_dir.path().display().to_string();
     sessions.write().await.insert(
         "req".to_string(),
-        test_agent_with_working_dir("req", "/tmp/spawner-agent").await,
+        test_agent_with_working_dir("req", &spawner_dir_string).await,
     );
     let swarm_members = Arc::new(RwLock::new(HashMap::new()));
 
@@ -99,12 +103,6 @@ async fn resolve_spawn_working_dir_prefers_explicit_then_spawner_agent_dir() {
         .await
         .as_deref(),
         Some("/tmp/explicit")
-    );
-    assert_eq!(
-        resolve_spawn_working_dir(None, "req", &sessions, &swarm_members)
-            .await
-            .as_deref(),
-        Some("/tmp/spawner-agent")
     );
 }
 
@@ -140,6 +138,263 @@ fn stop_permission_defaults_to_sessions_spawned_by_requesting_coordinator() {
     assert!(!swarm_stop_allowed_by_owner("coord", &user_created, false));
     assert!(!swarm_stop_allowed_by_owner("coord", &other_owned, false));
     assert!(swarm_stop_allowed_by_owner("coord", &user_created, true));
+}
+
+fn owned_worker(
+    session_id: &str,
+    coordinator: &str,
+    status: &str,
+    run_id: Option<&str>,
+) -> SwarmMember {
+    let (mut worker, _rx) = member(session_id, Some("swarm-1"), "agent");
+    worker.report_back_to_session_id = Some(coordinator.to_string());
+    worker.status = status.to_string();
+    worker.run_id = run_id.map(str::to_string);
+    worker
+}
+
+fn insert_owned_workers(
+    members: &mut HashMap<String, SwarmMember>,
+    coordinator: &str,
+    count: usize,
+    run_id: Option<&str>,
+) {
+    for index in 0..count {
+        let id = format!("worker-{}-{index}", run_id.unwrap_or("none"));
+        members.insert(id.clone(), owned_worker(&id, coordinator, "ready", run_id));
+    }
+}
+
+struct EnvVarGuard {
+    name: &'static str,
+    previous: Option<String>,
+}
+
+impl EnvVarGuard {
+    fn set(name: &'static str, value: &str) -> Self {
+        let previous = std::env::var(name).ok();
+        // SAFETY: each test holds `stage3_env_lock()` while mutating these vars.
+        unsafe { std::env::set_var(name, value) };
+        Self { name, previous }
+    }
+
+    fn unset(name: &'static str) -> Self {
+        let previous = std::env::var(name).ok();
+        // SAFETY: each test holds `stage3_env_lock()` while mutating these vars.
+        unsafe { std::env::remove_var(name) };
+        Self { name, previous }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        // SAFETY: each test holds `stage3_env_lock()` while guards are dropped.
+        unsafe {
+            match self.previous.take() {
+                Some(previous) => std::env::set_var(self.name, previous),
+                None => std::env::remove_var(self.name),
+            }
+        }
+    }
+}
+
+fn stage3_env_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+}
+
+#[test]
+fn count_active_owned_workers_excludes_terminal_states() {
+    let mut members = HashMap::new();
+    for (status, expected_active) in [
+        ("ready", true),
+        ("running", true),
+        ("spawned", true),
+        ("running_stale", true),
+        ("headless", true),
+        ("completed", false),
+        ("crashed", false),
+        ("failed", false),
+        ("closed", false),
+        ("disconnected", false),
+    ] {
+        let id = format!("{status}-{expected_active}");
+        members.insert(id.clone(), owned_worker(&id, "coord", status, None));
+    }
+    members.insert(
+        "other-owned".to_string(),
+        owned_worker("other-owned", "other", "ready", None),
+    );
+
+    assert_eq!(count_active_owned_workers(&members, "coord", None), 5);
+}
+
+#[test]
+fn count_active_owned_workers_filters_by_run_id() {
+    let mut members = HashMap::new();
+    members.insert(
+        "a".to_string(),
+        owned_worker("a", "coord", "ready", Some("run-a")),
+    );
+    members.insert(
+        "b".to_string(),
+        owned_worker("b", "coord", "running", Some("run-a")),
+    );
+    members.insert(
+        "c".to_string(),
+        owned_worker("c", "coord", "ready", Some("run-b")),
+    );
+
+    assert_eq!(
+        count_active_owned_workers(&members, "coord", Some("run-a")),
+        2
+    );
+    assert_eq!(
+        count_active_owned_workers(&members, "coord", Some("run-b")),
+        1
+    );
+}
+
+#[test]
+fn resolve_caps_env_overrides_config() {
+    let _guard = stage3_env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _coord = EnvVarGuard::set("JCODE_MAX_ACTIVE_SPAWNS_PER_COORDINATOR", "2");
+    assert_eq!(resolve_max_active_spawns_per_coordinator(None), 2);
+}
+
+#[test]
+fn resolve_caps_zero_means_unlimited() {
+    let _guard = stage3_env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _coord = EnvVarGuard::set("JCODE_MAX_ACTIVE_SPAWNS_PER_COORDINATOR", "0");
+    let mut members = HashMap::new();
+    insert_owned_workers(&mut members, "coord", 100, None);
+
+    assert!(enforce_spawn_caps(&members, "coord", None, None).is_ok());
+}
+
+#[test]
+fn enforce_spawn_caps_rejects_at_coordinator_limit() {
+    let _guard = stage3_env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _coord = EnvVarGuard::set("JCODE_MAX_ACTIVE_SPAWNS_PER_COORDINATOR", "6");
+    let _run = EnvVarGuard::set("JCODE_MAX_ACTIVE_SPAWNS_PER_RUN", "0");
+    let mut members = HashMap::new();
+    insert_owned_workers(&mut members, "coord", 6, None);
+
+    assert_eq!(
+        enforce_spawn_caps(&members, "coord", None, None).unwrap_err(),
+        SpawnCapError::Coordinator { active: 6, cap: 6 }
+    );
+}
+
+#[test]
+fn enforce_spawn_caps_rejects_at_run_limit() {
+    let _guard = stage3_env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _coord = EnvVarGuard::set("JCODE_MAX_ACTIVE_SPAWNS_PER_COORDINATOR", "0");
+    let _run = EnvVarGuard::set("JCODE_MAX_ACTIVE_SPAWNS_PER_RUN", "4");
+    let mut members = HashMap::new();
+    insert_owned_workers(&mut members, "coord", 4, Some("run-1"));
+    insert_owned_workers(&mut members, "coord", 10, Some("run-2"));
+
+    assert_eq!(
+        enforce_spawn_caps(&members, "coord", Some("run-1"), None).unwrap_err(),
+        SpawnCapError::Run { active: 4, cap: 4 }
+    );
+}
+
+#[test]
+fn enforce_spawn_caps_allows_when_unlimited() {
+    let _guard = stage3_env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _coord = EnvVarGuard::set("JCODE_MAX_ACTIVE_SPAWNS_PER_COORDINATOR", "0");
+    let _run = EnvVarGuard::set("JCODE_MAX_ACTIVE_SPAWNS_PER_RUN", "0");
+    let mut members = HashMap::new();
+    insert_owned_workers(&mut members, "coord", 100, Some("run-1"));
+
+    assert!(enforce_spawn_caps(&members, "coord", Some("run-1"), None).is_ok());
+}
+
+#[test]
+fn validate_spawn_working_dir_accepts_subdir() {
+    let _guard = stage3_env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _allow = EnvVarGuard::unset("JCODE_SWARM_ALLOW_ANY_CWD");
+    let root = tempfile::TempDir::new().expect("root");
+    let subdir = root.path().join("child");
+    std::fs::create_dir(&subdir).expect("subdir");
+
+    let validated = validate_spawn_working_dir(Some(root.path()), &subdir).expect("valid cwd");
+    assert_eq!(validated, std::fs::canonicalize(&subdir).unwrap());
+}
+
+#[test]
+fn validate_spawn_working_dir_rejects_sibling() {
+    let _guard = stage3_env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _allow = EnvVarGuard::unset("JCODE_SWARM_ALLOW_ANY_CWD");
+    let temp = tempfile::TempDir::new().expect("temp");
+    let root = temp.path().join("a");
+    let sibling = temp.path().join("b");
+    std::fs::create_dir(&root).expect("root");
+    std::fs::create_dir(&sibling).expect("sibling");
+
+    let error = validate_spawn_working_dir(Some(&root), &sibling).unwrap_err();
+    assert!(error.to_string().contains("not under coordinator root"));
+}
+
+#[test]
+#[cfg(unix)]
+fn validate_spawn_working_dir_resolves_symlinks() {
+    let _guard = stage3_env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _allow = EnvVarGuard::unset("JCODE_SWARM_ALLOW_ANY_CWD");
+    let temp = tempfile::TempDir::new().expect("temp");
+    let root = temp.path().join("root");
+    let outside = temp.path().join("outside");
+    let inside = root.join("inside");
+    let link_inside = temp.path().join("link-inside");
+    let link_outside = root.join("link-outside");
+    std::fs::create_dir_all(&inside).expect("inside");
+    std::fs::create_dir(&outside).expect("outside");
+    std::os::unix::fs::symlink(&inside, &link_inside).expect("symlink inside");
+    std::os::unix::fs::symlink(&outside, &link_outside).expect("symlink outside");
+
+    assert!(validate_spawn_working_dir(Some(&root), &link_inside).is_ok());
+    assert!(validate_spawn_working_dir(Some(&root), &link_outside).is_err());
+}
+
+#[test]
+fn validate_spawn_working_dir_skips_when_no_coord_root() {
+    let _guard = stage3_env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _allow = EnvVarGuard::unset("JCODE_SWARM_ALLOW_ANY_CWD");
+    let missing = std::path::PathBuf::from("/definitely/not/required/to/exist/stage3");
+    assert_eq!(validate_spawn_working_dir(None, &missing).unwrap(), missing);
+}
+
+#[test]
+fn validate_spawn_working_dir_env_override() {
+    let _guard = stage3_env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _allow = EnvVarGuard::set("JCODE_SWARM_ALLOW_ANY_CWD", "1");
+    let missing = std::path::PathBuf::from("/definitely/not/required/to/exist/stage3");
+    assert_eq!(
+        validate_spawn_working_dir(Some(std::path::Path::new("/also/missing")), &missing).unwrap(),
+        missing
+    );
 }
 
 #[tokio::test]

@@ -10,7 +10,7 @@ pub use jcode_config_types::{
     GatewayConfig, HookCommandConfig, HooksConfig, KeybindingsConfig, MarkdownSpacingMode,
     NamedProviderAuth, NamedProviderConfig, NamedProviderModelConfig, NamedProviderType,
     NativeScrollbarConfig, PromptConfig, ProviderConfig, ReloadConfig, SafetyConfig,
-    SessionPickerResumeAction, ToolConfig, UpdateChannel,
+    SessionPickerResumeAction, SwarmConfig, ToolConfig, UpdateChannel,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -207,6 +207,9 @@ pub struct Config {
 
     /// Agent-specific model defaults
     pub agents: AgentsConfig,
+
+    /// Swarm coordination safety configuration
+    pub swarm: SwarmConfig,
 
     /// Prompt and project instruction loading configuration
     pub prompt: PromptConfig,

@@ -1171,6 +1171,10 @@ pub enum ServerEvent {
         id: u64,
         session_id: String,
         new_session_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        active_count: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        active_cap: Option<u32>,
     },
 
     /// Response to comm_await_members request

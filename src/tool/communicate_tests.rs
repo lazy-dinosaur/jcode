@@ -1,10 +1,10 @@
 use super::{
     CommunicateInput, CommunicateTool, cleanup_candidate_session_ids,
     default_await_target_statuses, default_cleanup_target_statuses, format_awaited_members,
-    format_awaited_members_with_reports, format_members, format_members_for_run, format_plan_status,
-    format_spawn_telemetry, latest_assistant_report, resolve_optional_target_session,
-    send_spawn_request_with_coordinator_retry, spawn_requires_coordinator,
-    spawn_self_promote_failure_message,
+    format_awaited_members_with_reports, format_members, format_members_for_run,
+    format_plan_status, format_spawn_telemetry, latest_assistant_report,
+    resolve_optional_target_session, send_spawn_request_with_coordinator_retry,
+    spawn_requires_coordinator, spawn_self_promote_failure_message,
 };
 use crate::message::{Message, StreamEvent, ToolDefinition};
 use crate::protocol::{
@@ -636,8 +636,13 @@ mod format_spawn_telemetry_tests {
         let _guard = env_lock().lock().unwrap();
         let _env = EnvGuard::set("0");
 
-        let rendered =
-            format_spawn_telemetry("sess-1234", Some("/repo/project"), Some("run-abc"));
+        let rendered = format_spawn_telemetry(
+            "sess-1234",
+            Some("/repo/project"),
+            Some("run-abc"),
+            Some(3),
+            Some(6),
+        );
 
         assert!(rendered.contains("sess-1234"));
         assert!(rendered.contains("/repo/project"));
@@ -651,7 +656,7 @@ mod format_spawn_telemetry_tests {
         let _guard = env_lock().lock().unwrap();
         let _env = EnvGuard::set("1");
 
-        let rendered = format_spawn_telemetry("s-1", Some("/tmp/repo"), None);
+        let rendered = format_spawn_telemetry("s-1", Some("/tmp/repo"), None, None, None);
 
         assert!(rendered.contains("s-1"));
         assert!(rendered.contains("/tmp/repo"));
@@ -664,7 +669,7 @@ mod format_spawn_telemetry_tests {
         let _guard = env_lock().lock().unwrap();
         let _env = EnvGuard::unset();
 
-        let rendered = format_spawn_telemetry("s-2", Some("/tmp/repo"), None);
+        let rendered = format_spawn_telemetry("s-2", Some("/tmp/repo"), None, None, None);
 
         assert!(!rendered.contains("run_id="));
     }
@@ -674,7 +679,7 @@ mod format_spawn_telemetry_tests {
         let _guard = env_lock().lock().unwrap();
         let _env = EnvGuard::unset();
 
-        let rendered = format_spawn_telemetry("s-3", None, None);
+        let rendered = format_spawn_telemetry("s-3", None, None, None, None);
 
         assert!(rendered.contains("inherit coordinator cwd"));
     }
@@ -684,7 +689,7 @@ mod format_spawn_telemetry_tests {
         let _guard = env_lock().lock().unwrap();
         let _env = EnvGuard::unset();
 
-        let rendered = format_spawn_telemetry("s-4", Some("/tmp"), Some(""));
+        let rendered = format_spawn_telemetry("s-4", Some("/tmp"), Some(""), Some(10), Some(0));
 
         assert!(
             !rendered.contains("run_id="),
