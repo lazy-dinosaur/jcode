@@ -17,19 +17,16 @@
 
 ## 운영 중인 알려진 버그 (요약 — 자세한 건 카드)
 
-- **M43 — subagent 에서 `bg` 도구 접근 불일치** (2026-05-13 00:14 라이브)
-  - subagent 에 위임한 `bg action="output"` 이 "도구 없음" 으로 실패.
-  - 진단 1차 완료 (2026-05-13 07:30): **가설 A 확정**. quick subagent
-    (Haiku, OAuth) dump 결과 `bg` 가 LLM 한테 안 보임. 노출된 이름은
-    PascalCase Claude-Code 스타일 (`Bash`, `Read`, `Edit`, ...) →
-    OAuth tool advertisement 단에서 Claude-Code alias map 못 매기는
-    jcode-only tool 들 (`bg`, `bash_output`, `bash_kill` 등) 이
-    광고 자체에서 drop 되는 게 가장 유력. 추가 발견: `Agent`
-    (subagent alias) 가 노출됨 → `task.rs:431` recursion 차단이
-    내부 이름 기준이라 alias path 로 새는 중.
-  - Fix 미착수. 별도 swarm worker 에 위임 예정.
-  - **workaround**: bg/output/wait 같은 task lookup 류는 메인 세션에서
-    직접 호출. subagent 위임 금지.
+- **M43 — subagent 에서 `bg`/`swarm` tool 광고 누락** (2026-05-13 fix)
+  - ✅ DONE (2026-05-13). deploy `lazydino-07905799`.
+  - Root cause: Anthropic OAuth `format_tools(..., is_oauth=true)` 가
+    hardcoded 10개 Claude-Code tool 만 광고하고 `tools` 인자를 무시.
+  - Fix: OAuth path 도 실제 allowed `tools` 를 순회한다. KNOWN OAuth
+    tool 은 schema-only source 로 쓰고, jcode-only tool (`bg`, `swarm` 등)
+    은 raw name + local schema 로 광고. `Agent` 는 local `subagent` 가
+    allowed 일 때만 광고되어 recursion guard 누수도 회복.
+  - Canary: isolated socket 에서 Claude `bg action=list`, `swarm action=list`
+    tool_start/tool_exec 확인. server-side unknown-tool 4xx 없음.
 
 - **M42 — `checking websocket` stale label** (2026-05-13 fix)
   - ✅ DONE (2026-05-13). deploy `lazydino-6d81399a`.
