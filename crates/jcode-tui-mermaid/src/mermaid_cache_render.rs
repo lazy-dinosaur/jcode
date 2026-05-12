@@ -478,82 +478,83 @@ fn render_mermaid_deferred_inner(
     }
 
     let render_key = (hash, target_width_u32, render_profile);
-    let should_enqueue =
-        match PENDING_RENDER_REQUESTS.lock() {
-            Ok(mut pending) => {
-                let mut superseded = 0u64;
-                pending.retain(|(_, pending_width, pending_profile), request| {
-                    let same_stream_scope =
-                        request.stream_scope.is_some() && request.stream_scope == stream_scope;
-                    let same_profile = *pending_profile == render_profile;
-                    let same_terminal_width = request.terminal_width == terminal_width;
-                    let compatible_width =
-                        cached_width_satisfies(*pending_width, Some(target_width_u32))
-                            || cached_width_satisfies(target_width_u32, Some(*pending_width));
-                    let supersede = same_stream_scope
-                        && same_profile
-                        && same_terminal_width
-                        && compatible_width
-                        && is_likely_stream_update(&request.content, content);
-                    if supersede {
-                        superseded = superseded.saturating_add(1);
-                    }
-                    !supersede
-                });
-                if superseded > 0
-                    && let Ok(mut state) = MERMAID_DEBUG.lock()
-                {
-                    state.stats.deferred_superseded =
-                        state.stats.deferred_superseded.saturating_add(superseded);
+    let should_enqueue = match PENDING_RENDER_REQUESTS.lock() {
+        Ok(mut pending) => {
+            let mut superseded = 0u64;
+            pending.retain(|(_, pending_width, pending_profile), request| {
+                let same_stream_scope =
+                    request.stream_scope.is_some() && request.stream_scope == stream_scope;
+                let same_profile = *pending_profile == render_profile;
+                let same_terminal_width = request.terminal_width == terminal_width;
+                let compatible_width =
+                    cached_width_satisfies(*pending_width, Some(target_width_u32))
+                        || cached_width_satisfies(target_width_u32, Some(*pending_width));
+                let supersede = same_stream_scope
+                    && same_profile
+                    && same_terminal_width
+                    && compatible_width
+                    && is_likely_stream_update(&request.content, content);
+                if supersede {
+                    superseded = superseded.saturating_add(1);
                 }
+                !supersede
+            });
+            if superseded > 0
+                && let Ok(mut state) = MERMAID_DEBUG.lock()
+            {
+                state.stats.deferred_superseded =
+                    state.stats.deferred_superseded.saturating_add(superseded);
+            }
 
-                if let Some((_, existing_request)) = pending.iter_mut().find(
-                    |((pending_hash, pending_width, pending_profile), _)| {
+            if let Some((_, existing_request)) =
+                pending
+                    .iter_mut()
+                    .find(|((pending_hash, pending_width, pending_profile), _)| {
                         *pending_hash == hash
                             && *pending_profile == render_profile
                             && cached_width_satisfies(*pending_width, Some(target_width_u32))
-                    },
-                ) {
-                    if register_active {
-                        existing_request.register_active = true;
-                    }
-                    if let Ok(mut state) = MERMAID_DEBUG.lock() {
-                        state.stats.deferred_deduped += 1;
-                    }
-                    false
-                } else {
-                    match pending.entry(render_key) {
-                        Entry::Occupied(mut occupied) => {
-                            if register_active {
-                                occupied.get_mut().register_active = true;
-                            }
-                            if let Ok(mut state) = MERMAID_DEBUG.lock() {
-                                state.stats.deferred_deduped += 1;
-                            }
-                            false
+                    })
+            {
+                if register_active {
+                    existing_request.register_active = true;
+                }
+                if let Ok(mut state) = MERMAID_DEBUG.lock() {
+                    state.stats.deferred_deduped += 1;
+                }
+                false
+            } else {
+                match pending.entry(render_key) {
+                    Entry::Occupied(mut occupied) => {
+                        if register_active {
+                            occupied.get_mut().register_active = true;
                         }
-                        Entry::Vacant(vacant) => {
-                            vacant.insert(PendingDeferredRender {
-                                register_active,
-                                terminal_width,
-                                content: content.to_string(),
-                                stream_scope,
-                            });
-                            if let Ok(mut state) = MERMAID_DEBUG.lock() {
-                                state.stats.deferred_enqueued += 1;
-                            }
-                            true
+                        if let Ok(mut state) = MERMAID_DEBUG.lock() {
+                            state.stats.deferred_deduped += 1;
                         }
+                        false
+                    }
+                    Entry::Vacant(vacant) => {
+                        vacant.insert(PendingDeferredRender {
+                            register_active,
+                            terminal_width,
+                            content: content.to_string(),
+                            stream_scope,
+                        });
+                        if let Ok(mut state) = MERMAID_DEBUG.lock() {
+                            state.stats.deferred_enqueued += 1;
+                        }
+                        true
                     }
                 }
             }
-            Err(_) => {
-                crate::log_warn(
-                    "Mermaid deferred render pending map is poisoned; leaving diagram as placeholder",
-                );
-                return None;
-            }
-        };
+        }
+        Err(_) => {
+            crate::log_warn(
+                "Mermaid deferred render pending map is poisoned; leaving diagram as placeholder",
+            );
+            return None;
+        }
+    };
 
     if should_enqueue {
         let task = DeferredRenderTask {

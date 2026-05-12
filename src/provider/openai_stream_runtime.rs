@@ -340,11 +340,7 @@ pub(super) async fn try_persistent_ws_continuation(
     let parallel_tool_calls = request
         .get("parallel_tool_calls")
         .and_then(|value| value.as_bool())
-        .unwrap_or_else(|| {
-            crate::config::config()
-                .provider
-                .openai_parallel_tool_calls
-        });
+        .unwrap_or_else(|| crate::config::config().provider.openai_parallel_tool_calls);
     continuation_request["parallel_tool_calls"] = serde_json::json!(parallel_tool_calls);
 
     let continuation_tools = continuation_request

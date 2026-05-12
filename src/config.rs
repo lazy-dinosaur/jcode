@@ -176,7 +176,13 @@ fn maybe_reload(guard: &mut ConfigCache) {
     // window for the same broken file/env state.
     match Config::try_load() {
         Ok(new_config) => {
-            install_loaded_config_with_state(guard, new_config, current_path, current_modified, current_env);
+            install_loaded_config_with_state(
+                guard,
+                new_config,
+                current_path,
+                current_modified,
+                current_env,
+            );
             crate::logging::info(&format!(
                 "config reloaded ({})",
                 reload_reason(env_changed, mtime_changed)
@@ -239,7 +245,11 @@ fn config_env_fingerprint() -> Vec<(String, String)> {
     let mut values = std::env::vars_os()
         .filter_map(|(key, value)| {
             let key = key.to_string_lossy().to_string();
-            if key == "JCODE_HOME" || key == "HOME" || key == "XDG_CONFIG_HOME" || key.starts_with("JCODE_") {
+            if key == "JCODE_HOME"
+                || key == "HOME"
+                || key == "XDG_CONFIG_HOME"
+                || key.starts_with("JCODE_")
+            {
                 Some((key, value.to_string_lossy().to_string()))
             } else {
                 None

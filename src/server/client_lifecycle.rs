@@ -2856,9 +2856,39 @@ async fn start_processing_message(
     let report_agent = Arc::clone(&agent);
     let tx = client_event_tx.clone();
     let done_tx = processing_done_tx.clone();
+    // M32 (Round 23): wrap event_tx with a sibling-fanout forwarder so that
+    // assistant turn streaming events (TextDelta/ToolStart/ToolDone/MessageEnd/
+    // Done/UpstreamProvider/TokenUsage/...) are also broadcast to every other
+    // client attached to this session_id. Without this, server-initiated turns
+    // (bg auto-inject from M31, ambient wakes, sibling-trigger via Alt+B) would
+    // generate output that only the *origin* connection sees, while other
+    // attached TUIs render an empty turn. M15 already does this for the
+    // initial UserMessage; M32 extends it to every event the agent emits.
+    let fanout_members = Arc::clone(swarm.members);
+    let fanout_session_id = client_session_id.to_string();
+    let fanout_connection_id = client_connection_id.to_string();
+    let (fanout_tx, mut fanout_rx) =
+        tokio::sync::mpsc::unbounded_channel::<ServerEvent>();
+    let origin_tx_for_forward = tx.clone();
+    tokio::spawn(async move {
+        while let Some(event) = fanout_rx.recv().await {
+            // Deliver to the origin first (cheapest path; cloning happens
+            // only when fanout below has additional targets).
+            let _ = origin_tx_for_forward.send(event.clone());
+            // Best-effort broadcast to sibling client connections attached to
+            // the same session. Excludes the origin to avoid double-delivery.
+            let _ = fanout_session_event_except(
+                &fanout_members,
+                &fanout_session_id,
+                Some(&fanout_connection_id),
+                event,
+            )
+            .await;
+        }
+    });
     crate::logging::info(&format!("Processing message id={} spawning task", id));
     *state.task = Some(tokio::spawn(async move {
-        let event_tx = tx.clone();
+        let event_tx = fanout_tx;
         let result = match std::panic::AssertUnwindSafe(process_message_streaming_mpsc(
             agent,
             &content,

@@ -45,8 +45,7 @@ pub async fn run() -> Result<()> {
     // depend on this to avoid losing fire-and-forget hook state to
     // `kill_on_drop(true)` on the spawned children. 5s is the same upper
     // bound the existing tool-hook timeout uses for "well-behaved" hooks.
-    let flushed =
-        crate::hooks::flush_nonblocking_hooks(std::time::Duration::from_secs(5)).await;
+    let flushed = crate::hooks::flush_nonblocking_hooks(std::time::Duration::from_secs(5)).await;
     if flushed > 0 {
         logging::info(&format!(
             "Flushed {flushed} pending non-blocking hook(s) before exit"

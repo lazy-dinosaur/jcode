@@ -372,4 +372,3 @@ mod tests {
         assert!(split_history_event(event).is_none());
     }
 }
-

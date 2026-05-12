@@ -709,9 +709,7 @@ impl OpenAIProvider {
             tools.push(serde_json::json!({ "type": "image_generation" }));
         }
 
-        let parallel_tool_calls = crate::config::config()
-            .provider
-            .openai_parallel_tool_calls;
+        let parallel_tool_calls = crate::config::config().provider.openai_parallel_tool_calls;
 
         let mut request = serde_json::json!({
             "model": model_id,

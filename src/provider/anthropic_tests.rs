@@ -110,10 +110,9 @@ fn test_oauth_tool_search_advertised_schema_matches_codesearch_dispatch() {
     let provider = AnthropicProvider::new();
     let api_tools = provider.format_tools(&[], true);
 
-    let tool_search = api_tools
-        .iter()
-        .find(|t| t.name == "ToolSearch")
-        .expect("OAuth tool list must advertise `ToolSearch` (wire-name for the local `codesearch` tool)");
+    let tool_search = api_tools.iter().find(|t| t.name == "ToolSearch").expect(
+        "OAuth tool list must advertise `ToolSearch` (wire-name for the local `codesearch` tool)",
+    );
 
     let dispatch_schema = CodeSearchTool::new().parameters_schema();
     assert_eq!(
