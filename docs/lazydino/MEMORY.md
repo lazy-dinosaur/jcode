@@ -17,6 +17,11 @@
 
 ## 운영 중인 알려진 버그 (요약 — 자세한 건 카드)
 
+- **M42 — `checking websocket` 무한 thinking hang** (2026-05-13 00:00 재현)
+  - 메인 세션이 subagent 결과 기다리며 thinking 무한 대기
+  - status: `thinking… 108.3s · checking websocket · existing websocket · +1 queued`
+  - **진단 미수행, 기록만**. 다음 재현 시 즉시 debug socket dump 필요.
+
 - **M22 — same-round 두 번째 subagent deferred** (2026-05-12 재현)
   - **workaround**: round 당 1 spawn 만. 어기지 말 것.
   - 두 개 동시에 띄우면 두 번째가 background 로 deferred 되어
