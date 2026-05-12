@@ -295,12 +295,19 @@ async fn m35_hook_inject_body_truncated_at_max_bytes() { ... }
 
 ---
 
-## 10. 결정 필요 사항 (사용자 confirm 요청)
+## 10. 결정 사항 (사용자 confirm 완료, Round 18→19)
 
-- [ ] **A.** `bg.auto_inject` 의 default 값: **false (opt-in)** vs **true (opt-out)** — 추천: false (안전), config 로 항상 true 가능.
-- [ ] **B.** Injection format default: `SystemReminder` vs `UserMessage` — 추천: SystemReminder (LLM 이 reminders 채널 더 잘 따름).
-- [ ] **C.** Hook stdout truncation 한도: 16KB vs 32KB — 추천: 16KB.
-- [ ] **D.** M30 단독으로 가시화 (예: log) 만 하고 M31 자동 inject 와 분리 배포할지 vs 같이 — 추천: 같이 (M30 단독은 의미 없음).
-- [ ] **E.** 한 turn 당 max injections: **5개** vs **무제한** — 추천: 5개.
+- [x] **A.** `bg.auto_inject` default: **true (opt-out)**. 사용자 의도: "오토 인젝트가 왜 디폴트 false 야?" — jcode 는 적극 autonomy 지향이므로 opt-out 이 자연스럽다.
+- [x] **B.** Injection format default: **SystemReminder**. LLM 이 system-reminder 채널을 user-message 보다 더 권위있게 따름. M11 stage 6 의 inject_lifecycle_reminder_for_continuation 와 동일 channel 재사용.
+- [x] **C.** Hook stdout truncation 한도: **16KB** per inject. 32KB 까지 허용해도 되지만, hook 출력은 짧게 작성하는 것이 권장이므로 16KB 부터 시작하고 필요시 확장.
+- [x] **D.** M30 단독 분리 여부: **같이 배포**. M30 단독은 사용자 가시 효과가 없음. M30 wake 채널이 만들어진 다음 즉시 M31 bg inject 와 M35 hook inject 가 그 채널을 소비하도록 통합.
+- [x] **E.** 한 turn 당 max injections: **무제한**. 사용자 의도: "turn 당 max 인젝션 제한 없어야 하는거 아닌가?" — 제한 두지 않음. context overflow 방어는 두 가지 다른 메커니즘으로:
+  1. **per-inject byte cap** (16KB, C번) — 한 inject 가 폭주하지 않게.
+  2. **dedupe by source** (같은 bg-run-id 의 결과를 중복 inject 하지 않음) — 한 source 가 반복 wake 해도 한 번만.
+  - 이 두 가지가 turn-count cap 보다 본질적이고, 사용자의 "무제한" 본능과 일치한다.
 
-위 5개에 답해주시면 바로 구현 시작합니다. 없어도 추천값으로 진행 가능.
+## 11. 위험 재검토 (E=무제한 반영 후)
+
+- **Context overflow** — 위 (1)(2) 가 일차 방어. 추가로 LLM provider 가 context 한도 에러를 던지면 그 자체로 자연스러운 stop. jcode 의 `auto_compact_at` (별개 milestone) 가 이미 처리하고 있다.
+- **Wake storm** — 한 idle session 에 동시 다중 inject 가 들어와도 mpsc 수신 후 turn 시작 직전에 batch drain → 한 turn 의 system-reminder block 하나로 합쳐서 전달. 따라서 wake 가 10번 와도 turn 은 1번.
+- **Hook 무한 루프** — M11 stage 6 의 `max_lifecycle_deny_streak` (default 3) 가 이미 같은 메커니즘을 처리. M35 의 inject path 도 동일 streak counter 사용 검토.
