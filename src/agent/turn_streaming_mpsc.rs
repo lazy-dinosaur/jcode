@@ -434,7 +434,15 @@ impl Agent {
                         });
                     }
                     StreamEvent::StatusDetail { detail } => {
-                        self.last_status_detail = Some(detail.clone());
+                        // M42 — empty detail means clear (see server_events.rs).
+                        // Mirror that here so resume/recovery snapshots don't
+                        // resurrect a stale label that the provider already
+                        // cleared.
+                        if detail.is_empty() {
+                            self.last_status_detail = None;
+                        } else {
+                            self.last_status_detail = Some(detail.clone());
+                        }
                         let _ = event_tx.send(ServerEvent::StatusDetail { detail });
                     }
                     StreamEvent::MessageEnd {

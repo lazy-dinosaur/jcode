@@ -241,7 +241,9 @@ pub(super) async fn try_persistent_ws_continuation(
         return PersistentWsResult::NotAvailable;
     }
 
-    if persistent_ws_idle_needs_healthcheck(state.last_activity_at.elapsed()) {
+    let emitted_checking_detail =
+        persistent_ws_idle_needs_healthcheck(state.last_activity_at.elapsed());
+    if emitted_checking_detail {
         emit_status_detail(tx, "checking websocket").await;
     }
 
@@ -260,6 +262,16 @@ pub(super) async fn try_persistent_ws_continuation(
             *guard = None;
             return PersistentWsResult::NotAvailable;
         }
+    }
+
+    // M42 — clear the "checking websocket" detail once the healthcheck succeeds.
+    // Without this, the StatusDetail event stays set for the rest of the turn (it
+    // has no clear semantics on its own) and the status bar renders a stale
+    // "checking websocket" label long after the websocket is actually healthy
+    // and streaming again — observed as the `thinking… 108.3s · checking
+    // websocket · existing websocket` hang-looking display.
+    if emitted_checking_detail {
+        emit_status_detail(tx, "").await;
     }
 
     // The input array must be strictly growing for continuation to make sense.
