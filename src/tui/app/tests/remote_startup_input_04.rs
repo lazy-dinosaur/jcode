@@ -15,6 +15,35 @@ fn test_handle_server_event_updates_status_detail() {
     assert_eq!(app.status_detail.as_deref(), Some("reusing websocket"));
 }
 
+// M42 — empty StatusDetail acts as an explicit clear so providers can
+// overwrite a stale "checking websocket" label once the underlying phase
+// resolves. Without this, the StatusDetail had set-only semantics and the
+// stale label survived for the rest of the turn, surfacing in the status
+// bar as `thinking… 108.3s · checking websocket · existing websocket`.
+#[test]
+fn test_handle_server_event_empty_status_detail_clears_label() {
+    let mut app = create_test_app();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+
+    app.handle_server_event(
+        crate::protocol::ServerEvent::StatusDetail {
+            detail: "checking websocket".to_string(),
+        },
+        &mut remote,
+    );
+    assert_eq!(app.status_detail.as_deref(), Some("checking websocket"));
+
+    app.handle_server_event(
+        crate::protocol::ServerEvent::StatusDetail {
+            detail: String::new(),
+        },
+        &mut remote,
+    );
+    assert_eq!(app.status_detail, None);
+}
+
 #[test]
 fn test_handle_server_event_transcript_replace_updates_input() {
     let mut app = create_test_app();
