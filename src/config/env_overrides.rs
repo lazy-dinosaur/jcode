@@ -424,6 +424,13 @@ impl Config {
             }
         }
 
+        // Lazydino: OpenAI parallel_tool_calls toggle.
+        if let Ok(v) = std::env::var("JCODE_OPENAI_PARALLEL_TOOL_CALLS") {
+            if let Some(enabled) = parse_env_bool(&v) {
+                self.provider.openai_parallel_tool_calls = enabled;
+            }
+        }
+
         // Copilot premium mode: env var overrides config
         // If set in config but not in env, propagate config -> env
         if let Ok(v) = std::env::var("JCODE_COPILOT_PREMIUM") {

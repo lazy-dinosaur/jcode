@@ -47,7 +47,6 @@ fn isolated_jcode_home() -> (
     (lock, guard, dir)
 }
 
-
 #[test]
 fn test_openai_reasoning_effort_defaults_to_low() {
     assert_eq!(
@@ -589,6 +588,27 @@ fn test_agents_for_working_dir_allow_subagent_recursion_project_override() {
 }
 
 #[test]
+fn test_provider_default_openai_parallel_tool_calls_is_true() {
+    let cfg = Config::default();
+    assert!(cfg.provider.openai_parallel_tool_calls);
+}
+
+#[test]
+fn test_provider_openai_parallel_tool_calls_env_override_false() {
+    use std::sync::Mutex;
+    static GUARD: Mutex<()> = Mutex::new(());
+    let _lock = GUARD.lock().unwrap_or_else(|p| p.into_inner());
+
+    let _home = isolated_jcode_home();
+    let _env = EnvVarGuard::set("JCODE_OPENAI_PARALLEL_TOOL_CALLS", "0");
+
+    let mut cfg = Config::default();
+    assert!(cfg.provider.openai_parallel_tool_calls); // baseline before env apply
+    cfg.apply_env_overrides();
+    assert!(!cfg.provider.openai_parallel_tool_calls);
+}
+
+#[test]
 fn test_agents_for_working_dir_routes_and_routing_also_merge() {
     let _home = isolated_jcode_home();
     let dir = tempfile::TempDir::new().expect("tempdir");
@@ -1077,7 +1097,11 @@ fn test_hooks_for_working_dir_dedupes_when_global_path_equals_project_path() {
         hooks.commands.len(),
         1,
         "M9: hooks must not be merged twice when project config path equals global config path; got commands: {:?}",
-        hooks.commands.iter().map(|c| &c.command).collect::<Vec<_>>()
+        hooks
+            .commands
+            .iter()
+            .map(|c| &c.command)
+            .collect::<Vec<_>>()
     );
 
     if let Some(prev) = prev_home {
@@ -1100,11 +1124,8 @@ fn test_hooks_for_working_dir_still_merges_distinct_project_path() {
     std::fs::create_dir_all(&global_home).expect("mkdir global .jcode");
     crate::env::set_var("JCODE_HOME", &global_home);
 
-    std::fs::write(
-        global_home.join("config.toml"),
-        "[hooks]\nenabled = true\n",
-    )
-    .expect("write global");
+    std::fs::write(global_home.join("config.toml"), "[hooks]\nenabled = true\n")
+        .expect("write global");
     std::fs::create_dir_all(project_dir.path().join(".jcode")).expect("mkdir .jcode");
     std::fs::write(
         project_dir.path().join(".jcode").join("config.toml"),

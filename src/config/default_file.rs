@@ -173,6 +173,12 @@ cross_provider_failover = "countdown"
 # Copilot premium mode: "normal" (default), "one" (first msg only), "zero" (all free)
 # Set to "zero" if you have premium Copilot and want free requests
 # copilot_premium = "zero"
+# Lazydino: enable OpenAI Responses API `parallel_tool_calls`. When true, an
+# OpenAI model (gpt-5, codex, o1/o3 family) may emit multiple tool calls in a
+# single turn, matching Anthropic behavior and unlocking parallel sub-agent
+# fan-out. Default true. Env override: JCODE_OPENAI_PARALLEL_TOOL_CALLS=0
+# (also false/no/off) restores the historical single-call behavior.
+openai_parallel_tool_calls = true
 
 [prompt]
 # Project prompt/instruction loading.

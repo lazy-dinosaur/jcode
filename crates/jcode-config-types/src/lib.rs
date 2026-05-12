@@ -766,6 +766,14 @@ pub struct ProviderConfig {
     /// Copilot premium request mode: "normal", "one", or "zero"
     /// "zero" means all requests are free (no premium requests consumed)
     pub copilot_premium: Option<String>,
+    /// Lazydino: enable OpenAI Responses API `parallel_tool_calls`. When `true`
+    /// the model may emit multiple tool calls in a single turn, matching the
+    /// behavior already used for Anthropic. Default `true` because Claude
+    /// already does this and keeping OpenAI single-call leaves sub-agent
+    /// throughput on the table. Set `false` to restore the historical jcode
+    /// behavior if streaming-parser issues surface. Env override:
+    /// `JCODE_OPENAI_PARALLEL_TOOL_CALLS=0` (also `false`/`no`/`off`).
+    pub openai_parallel_tool_calls: bool,
 }
 
 impl Default for ProviderConfig {
@@ -781,6 +789,7 @@ impl Default for ProviderConfig {
             cross_provider_failover: CrossProviderFailoverMode::Countdown,
             same_provider_account_failover: true,
             copilot_premium: None,
+            openai_parallel_tool_calls: true,
         }
     }
 }

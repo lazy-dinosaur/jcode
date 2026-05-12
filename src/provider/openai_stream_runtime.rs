@@ -333,7 +333,19 @@ pub(super) async fn try_persistent_ws_continuation(
         continuation_request["include"] = include.clone();
     }
     continuation_request["store"] = serde_json::json!(false);
-    continuation_request["parallel_tool_calls"] = serde_json::json!(false);
+    // Lazydino: continuation requests should respect the same parallel_tool_calls
+    // policy as the initial request, otherwise the second leg of a multi-tool
+    // turn collapses back to single-call shape. Inherit from the original
+    // request when present, falling back to the config default.
+    let parallel_tool_calls = request
+        .get("parallel_tool_calls")
+        .and_then(|value| value.as_bool())
+        .unwrap_or_else(|| {
+            crate::config::config()
+                .provider
+                .openai_parallel_tool_calls
+        });
+    continuation_request["parallel_tool_calls"] = serde_json::json!(parallel_tool_calls);
 
     let continuation_tools = continuation_request
         .get("tools")
