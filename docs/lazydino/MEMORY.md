@@ -22,9 +22,10 @@
   - 두 개 동시에 띄우면 두 번째가 background 로 deferred 되어
     실시간 출력이 안 보임.
 - **M41 — server-initiated turn 첫 stream event 가 client redraw 안 깨움**
-  - fix patch (`patch/m41-bg-stream-redraw`) 작성/cherry-pick 완료
-  - native build/회귀 테스트 4/4 통과
-  - 배포 (atomic install + fork push) 진행 중
+  - ✅ DONE (2026-05-12 라이브 검증). deploy `m41-eefa3744`.
+  - 잔여 검증: thought-line + woke 조합 회귀 테스트, sibling fanout
+    다른 attached client redraw, auto-poke 동일 경로 확인 (모두
+    선택적, 메인 케이스는 OK).
 - **M40 Phase 3 — `" /tmp/..."` leading-space 가 slash-mode 진입**
   - fix 후보: `composer_mode` 에서 leading space 면 무조건 Chat
   - 미착수
