@@ -38,11 +38,28 @@ fn composer_mode(input: &str, is_remote_mode: bool) -> ComposerMode {
         } else {
             ComposerMode::ShellLocal
         }
-    } else if input.trim_start().starts_with('/') {
+    } else if leading_space_escapes_slash(input) {
+        // M40 Phase 3 — a leading space before `/` is treated as an explicit
+        // user signal "I am typing a path / message that happens to start with
+        // a slash, do not enter SlashCommand mode". This mirrors what
+        // `crate::skill::parse_invocation` already does on the send side
+        // (it returns None when the slash candidate contains a space), so the
+        // composer mode and the eventual dispatch stay consistent: no skill
+        // popup, no Unknown-skill banner, the input is sent as plain chat.
+        ComposerMode::Chat
+    } else if input.starts_with('/') {
         ComposerMode::SlashCommand
     } else {
         ComposerMode::Chat
     }
+}
+
+/// True when the input starts with one or more whitespace characters followed
+/// by `/`. Used as an escape hatch so that `" /tmp/foo bar"` is interpreted as
+/// chat content rather than a slash command.
+fn leading_space_escapes_slash(input: &str) -> bool {
+    let trimmed = input.trim_start();
+    trimmed.starts_with('/') && trimmed.len() < input.len()
 }
 
 fn shell_mode_hint(mode: ComposerMode) -> Option<&'static str> {
