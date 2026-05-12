@@ -109,3 +109,136 @@ fn mmdr_size_api_reports_explicit_png_canvas() {
     assert!(stats.last_viewbox_width.unwrap_or_default() > 0);
     assert!(stats.last_viewbox_height.unwrap_or_default() > 0);
 }
+
+// ---------------------------------------------------------------------------
+// Inline mermaid crop-bug regression tests (M28 follow-up).
+//
+// These tests guard the placeholder-vs-render geometry that drove the
+// chat-message bottom/right cropping bug. The math here mirrors what
+// `estimate_image_height` and `render_image_widget_fit` rely on, without
+// requiring a real terminal image protocol.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn estimate_image_height_caps_height_to_fit_max_width() {
+    // Picker is rarely initialized in unit tests, so the fallback path is the
+    // primary contract we want to lock down: it must never recommend more rows
+    // than `max_width` permits while preserving aspect ratio.
+    let max_width = 96u16;
+
+    // Wide diagram (4:1) - height should be small.
+    let h_wide = super::estimate_image_height(800, 200, max_width);
+    assert!(
+        h_wide > 0 && h_wide <= 30,
+        "wide diagram height should be modest, got {h_wide}"
+    );
+
+    // Tall diagram (1:3) - fallback caps at 30 rows, so verify the cap holds.
+    let h_tall = super::estimate_image_height(200, 600, max_width);
+    assert!(
+        h_tall > 0 && h_tall <= 30,
+        "tall diagram height should respect the conservative cap, got {h_tall}"
+    );
+
+    // Square diagram.
+    let h_square = super::estimate_image_height(400, 400, max_width);
+    assert!(
+        h_square > 0 && h_square <= 30,
+        "square diagram height should be reasonable, got {h_square}"
+    );
+}
+
+/// Compute the rendered cell area for a PNG of `(img_w_px, img_h_px)` shown
+/// inside `(area_w_cells, area_h_cells)` using `Resize::Fit`, given a font
+/// cell of `(font_w_px, font_h_px)`. Mirrors ratatui-image's Fit behaviour.
+fn fit_rendered_cells(
+    img_w_px: u32,
+    img_h_px: u32,
+    area_w_cells: u16,
+    area_h_cells: u16,
+    font_w_px: u16,
+    font_h_px: u16,
+) -> (u16, u16) {
+    let area_w_px = area_w_cells as f32 * font_w_px as f32;
+    let area_h_px = area_h_cells as f32 * font_h_px as f32;
+    let scale = (area_w_px / img_w_px as f32).min(area_h_px / img_h_px as f32);
+    let rendered_w_px = img_w_px as f32 * scale;
+    let rendered_h_px = img_h_px as f32 * scale;
+    let w_cells = (rendered_w_px / font_w_px as f32).ceil() as u16;
+    let h_cells = (rendered_h_px / font_h_px as f32).ceil() as u16;
+    (w_cells.min(area_w_cells), h_cells.min(area_h_cells))
+}
+
+#[test]
+fn fit_mode_never_overflows_placeholder_height() {
+    // Three aspect-ratio classes that previously triggered bottom-crop under
+    // Resize::Crop. With Resize::Fit, the rendered cell coverage must stay
+    // within the placeholder area for every variant.
+    let cases: &[(u32, u32, &str)] = &[
+        (800, 200, "wide"),
+        (200, 800, "tall"),
+        (400, 400, "square"),
+        (1200, 900, "4:3"),
+        (1920, 1080, "16:9"),
+    ];
+
+    let font = (8u16, 16u16);
+    let area_w = 118u16; // content_area.width - BORDER_WIDTH
+    let area_h = 24u16; // a typical placeholder height
+
+    for (img_w, img_h, label) in cases {
+        let (w_cells, h_cells) = fit_rendered_cells(*img_w, *img_h, area_w, area_h, font.0, font.1);
+        assert!(
+            w_cells <= area_w,
+            "{label}: fit width {w_cells} must not exceed area width {area_w}"
+        );
+        assert!(
+            h_cells <= area_h,
+            "{label}: fit height {h_cells} must not exceed area height {area_h} (this was the bottom-crop bug)"
+        );
+    }
+}
+
+#[test]
+fn placeholder_marker_and_height_roundtrip_through_prepared_region_scan() {
+    // The prepared-frame scan in ui_prepare.rs locates inline mermaid regions
+    // by detecting the marker line then counting empty lines that follow. This
+    // test simulates that scan to confirm the placeholder lines produced by
+    // `result_to_lines` (when an image protocol is available) correctly encode
+    // their full height into the region detection path.
+    use ratatui::text::Line;
+
+    let hash = 0xfeedfacedeadbeefu64;
+    let height = 17u16;
+
+    let lines: Vec<Line<'static>> = super::content_render::image_widget_placeholder(hash, height);
+    assert_eq!(
+        lines.len(),
+        height as usize,
+        "placeholder must reserve exactly `height` rows for the image region"
+    );
+
+    // Marker line.
+    let parsed = super::parse_image_placeholder(&lines[0]).expect("first line should encode hash");
+    assert_eq!(parsed, hash);
+
+    // Following lines must be empty so the region scan sees them as
+    // continuation rows.
+    for (i, line) in lines.iter().enumerate().skip(1) {
+        let is_empty = line.spans.is_empty()
+            || (line.spans.len() == 1 && line.spans[0].content.is_empty());
+        assert!(is_empty, "line {i} must be empty (got {:?})", line.spans);
+    }
+}
+
+#[test]
+fn fit_renderer_returns_zero_for_uncached_hash() {
+    // Without a cache entry, the inline-fit path must report zero rows so
+    // ui_viewport can render its fallback string instead of leaving stale
+    // pixels on screen.
+    let area = ratatui::prelude::Rect::new(0, 0, 40, 10);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+
+    let rows = super::render_image_widget_fit(0xdeadbeef_cafef00d, area, &mut buf, true, true);
+    assert_eq!(rows, 0, "uncached fit render must return 0 to trigger fallback");
+}

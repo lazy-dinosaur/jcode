@@ -592,12 +592,15 @@ pub(super) fn draw_messages(
                             width: content_area.width,
                             height: render_height,
                         };
-                        let rows = crate::tui::mermaid::render_image_widget(
+                        // Use Fit (aspect-preserving scale-to-fit) for inline chat
+                        // diagrams. Resize::Crop here would cut the right/bottom edges
+                        // whenever the rasterized PNG is larger than the cell area.
+                        let rows = crate::tui::mermaid::render_image_widget_fit(
                             hash,
                             image_area,
                             frame.buffer_mut(),
                             centered,
-                            false,
+                            true,
                         );
                         if rows == 0 {
                             frame.render_widget(
@@ -610,6 +613,9 @@ pub(super) fn draw_messages(
                         }
                     }
                 } else {
+                    // The marker line is above the viewport: only a tail slice of
+                    // the diagram is visible. Cropping is intentional here so the
+                    // diagram appears to scroll naturally, so keep Resize::Crop.
                     let visible_start = scroll.max(abs_idx);
                     let visible_end_img = visible_end.min(image_end);
                     let screen_y = (visible_start - scroll) as u16;
