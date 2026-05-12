@@ -38,6 +38,47 @@ pub(in crate::tui::app) fn handle_server_event(
         app.remote_resume_activity = None;
     }
 
+    // M41 — server-initiated turn wake-up.
+    //
+    // For background-injected (auto-poke, bg-tool completion) or sibling-fanout
+    // turns the client never went through `begin_remote_send()`, so
+    // `is_processing` stays false and `status` stays `Idle`. In that state the
+    // per-event handlers below mostly return `false`, and on native full-tier
+    // terminals (`eager_stream_redraw == false`) the event loop has no reason
+    // to redraw until the next idle tick (250ms ~ 1s). That makes the first
+    // text/tool output appear to "stall" until the user types something.
+    //
+    // Wake the client state up the first time we see a live-stream event so
+    // status/redraw logic in the rest of this function treats the turn as a
+    // normal in-progress turn.
+    let is_live_stream_event = matches!(
+        &event,
+        ServerEvent::TextDelta { .. }
+            | ServerEvent::TextReplace { .. }
+            | ServerEvent::ToolStart { .. }
+            | ServerEvent::ToolExec { .. }
+            | ServerEvent::ToolDone { .. }
+            | ServerEvent::GeneratedImage { .. }
+            | ServerEvent::BatchProgress { .. }
+            | ServerEvent::MessageEnd
+    );
+    let woke_server_initiated_turn = if is_live_stream_event && !app.is_processing {
+        crate::logging::info(
+            "M41 wake-up: server-initiated stream event arrived while client idle; \
+             marking is_processing=true to force redraw",
+        );
+        app.is_processing = true;
+        let now = Instant::now();
+        app.processing_started.get_or_insert(now);
+        app.last_stream_activity = Some(now);
+        if matches!(app.status, ProcessingStatus::Idle) {
+            app.status = ProcessingStatus::Thinking(now);
+        }
+        true
+    } else {
+        false
+    };
+
     let call_output_tokens_seen = remote.call_output_tokens_seen();
 
     match event {
@@ -47,7 +88,7 @@ pub(in crate::tui::app) fn handle_server_event(
                     app.append_streaming_text(&chunk);
                 }
                 app.insert_thought_line(thought_line);
-                return eager_stream_redraw;
+                return eager_stream_redraw || woke_server_initiated_turn;
             }
             let mut needs_redraw = false;
             if matches!(
@@ -66,7 +107,7 @@ pub(in crate::tui::app) fn handle_server_event(
                 needs_redraw = true;
             }
             app.last_stream_activity = Some(Instant::now());
-            eager_stream_redraw && needs_redraw
+            (eager_stream_redraw && needs_redraw) || woke_server_initiated_turn
         }
         ServerEvent::TextReplace { text } => {
             app.stream_buffer.flush();
@@ -89,7 +130,7 @@ pub(in crate::tui::app) fn handle_server_event(
                 input: serde_json::Value::Null,
                 intent: None,
             });
-            eager_stream_redraw
+            eager_stream_redraw || woke_server_initiated_turn
         }
         ServerEvent::ToolInput { delta } => {
             remote.handle_tool_input(&delta);
@@ -114,6 +155,7 @@ pub(in crate::tui::app) fn handle_server_event(
             remote.handle_tool_exec(&id, &name);
             app.observe_tool_call(&tool_call);
             eager_stream_redraw
+                || woke_server_initiated_turn
                 || app.side_panel.focused_page_id.as_deref()
                     == Some(app_mod::observe::OBSERVE_PAGE_ID)
         }
@@ -310,7 +352,15 @@ pub(in crate::tui::app) fn handle_server_event(
                 "Client received Done id={}, current_message_id={:?}",
                 id, app.current_message_id
             ));
-            if app.current_message_id == Some(id) {
+            // M41 — also accept a Done that closes a server-initiated turn,
+            // i.e. one where the client was woken via the live-stream wake-up
+            // path above and therefore never recorded a `current_message_id`.
+            // Without this, the final `flush/commit/idle cleanup` block is
+            // skipped and the assistant message stays in the streaming buffer
+            // (visible only as a partial render) until the next user action.
+            let matches_woken_server_turn =
+                app.current_message_id.is_none() && app.is_processing;
+            if app.current_message_id == Some(id) || matches_woken_server_turn {
                 completed_current_message = true;
                 app.clear_pending_remote_retry();
                 if let Some(chunk) = app.stream_buffer.flush() {
