@@ -16,4 +16,4 @@ unicode-width = "0.2"
 
 [features]
 default = []
-mermaid-renderer = ["dep:jcode-tui-mermaid"]
+mermaid-renderer = ["dep:jcode-tui-mermaid", "jcode-tui-mermaid/renderer"]

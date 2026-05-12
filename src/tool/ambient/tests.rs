@@ -464,3 +464,35 @@ async fn test_schedule_tool_requires_time() {
         .expect_err("should require wake_in_minutes or wake_at");
     assert!(err.to_string().contains("wake_in_minutes"));
 }
+
+// ---------------------------------------------------------------------------
+// M34: serde `alias` between `task` (schedule) and `context` (schedule_ambient)
+// so an LLM that mixes up the two scheduling tools still succeeds rather than
+// failing with `invalid type: null, expected string`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn m34_schedule_tool_input_accepts_context_alias() {
+    // Canonical `task` field still works.
+    let canonical: ScheduleToolInput =
+        serde_json::from_value(json!({"task": "do thing"})).expect("canonical task field");
+    assert_eq!(canonical.task, "do thing");
+
+    // `context` (sibling of schedule_ambient) is accepted as an alias.
+    let aliased: ScheduleToolInput =
+        serde_json::from_value(json!({"context": "do other thing"})).expect("context alias");
+    assert_eq!(aliased.task, "do other thing");
+}
+
+#[test]
+fn m34_schedule_ambient_input_accepts_task_alias() {
+    // Canonical `context` field still works.
+    let canonical: ScheduleInput =
+        serde_json::from_value(json!({"context": "ambient ctx"})).expect("canonical context");
+    assert_eq!(canonical.context, "ambient ctx");
+
+    // `task` (sibling of schedule/ScheduleWakeup) is accepted as an alias.
+    let aliased: ScheduleInput =
+        serde_json::from_value(json!({"task": "ambient via task"})).expect("task alias");
+    assert_eq!(aliased.context, "ambient via task");
+}

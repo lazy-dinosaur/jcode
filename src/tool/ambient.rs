@@ -377,6 +377,12 @@ struct ScheduleInput {
     wake_in_minutes: Option<u32>,
     #[serde(default)]
     wake_at: Option<String>,
+    // M34: accept both `context` (canonical) and `task` (sibling of
+    // `ScheduleTool`/`ScheduleWakeup`) so LLMs that mix up the two ambient
+    // tools still succeed instead of failing with
+    // `invalid type: null, expected string`. The serde alias makes
+    // `task` a transparent synonym during deserialization.
+    #[serde(alias = "task")]
     context: String,
     #[serde(default)]
     priority: Option<String>,
@@ -809,6 +815,10 @@ impl ScheduleTool {
 
 #[derive(Deserialize)]
 struct ScheduleToolInput {
+    // M34: accept both `task` (canonical) and `context` (sibling of
+    // `ScheduleAmbientTool`) so LLMs that mix up the two scheduling tools
+    // still succeed. See sibling note on `ScheduleInput::context`.
+    #[serde(alias = "context")]
     task: String,
     #[serde(default, deserialize_with = "deserialize_string_or_option_u32")]
     wake_in_minutes: Option<u32>,
