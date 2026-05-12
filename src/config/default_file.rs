@@ -219,17 +219,18 @@ memory_sidecar_enabled = false
 
 # M11 lifecycle hooks: when a blocking response.completed hook prints
 # {"action":"deny","reason":"..."}, jcode immediately continues the turn
-# with that reason as a transient System Reminder. This cap prevents a bad
+# with that reason as a transient System Reminder. A cap can prevent a bad
 # hook from creating an infinite self-correction loop.
 #
-# Default: 3 immediate continuation turns, then leave the reminder pending
-# for the next user prompt and stop the current turn.
-# Set to 0 for unlimited claude-code trust mode, where hook scripts are
-# expected to self-throttle using the response.completed payload field
-# `stop_hook_active = true` on continuation turns.
-# Environment override wins over config:
-#   JCODE_MAX_LIFECYCLE_DENY_STREAK=1 jcode
-# max_lifecycle_deny_streak = 3
+# Default (M35 Round 22): 0 = no cap (claude-code compatible trust mode).
+# Hook scripts must self-throttle using the response.completed payload field
+# `stop_hook_active = true` on continuation turns, e.g.:
+#   STOP_HOOK_ACTIVE=$(jq -r '.stop_hook_active' <&0)
+#   [ "$STOP_HOOK_ACTIVE" = "true" ] && exit 0
+# Set to N (e.g. 3) for a hardcap of N immediate continuation turns before
+# stopping. Environment override wins over config:
+#   JCODE_MAX_LIFECYCLE_DENY_STREAK=3 jcode
+# max_lifecycle_deny_streak = 0
 
 # Lazydino: allow recursive subagent calls (subagent inside subagent).
 # Default `false` matches upstream — child subagents have `subagent`, `task`,

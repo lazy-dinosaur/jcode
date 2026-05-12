@@ -8,7 +8,11 @@ pub(crate) enum LifecycleHookOutcome {
 }
 
 impl Agent {
-    pub(super) const DEFAULT_MAX_LIFECYCLE_DENY_STREAK: u8 = 3;
+    /// M35 Round 22: default 를 claude-code 호환 무제한 (0 = no cap) 으로 변경.
+    /// claude-code 의 Stop hook spec 은 cap 없이 `stop_hook_active` 만 제공하고
+    /// hook script 가 스스로 self-throttle 책임을 진다. jcode 도 동일 정책 채택.
+    /// 사용자가 hardcap 을 원하면 `max_lifecycle_deny_streak = N` 으로 명시 설정.
+    pub(super) const DEFAULT_MAX_LIFECYCLE_DENY_STREAK: u8 = 0;
 
     fn lifecycle_hook_reminder(reason: &str) -> String {
         format!(
