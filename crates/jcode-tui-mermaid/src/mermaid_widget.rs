@@ -353,29 +353,69 @@ fn render_image_widget_fit_inner(
             .map(|picker| image_area.width as u32 * picker.font_size().0 as u32)
     };
     let cached = get_cached_diagram(hash, min_cached_width);
-    let (img_width, path) = if let Some(cached) = cached {
-        (cached.width, Some(cached.path))
+    let (img_width, img_height, path) = if let Some(cached) = cached {
+        (cached.width, cached.height, Some(cached.path))
     } else {
-        (0, None)
+        (0, 0, None)
+    };
+
+    // Inline (non-scale-up) Fit path: shrink the render area to the PNG's
+    // natural cell footprint when it would otherwise fit. ratatui-image's
+    // `Resize::Fit` scales the source up to fill whichever axis bounds it
+    // first, which made small inline diagrams look "too big" and pushed
+    // surrounding chat content. By bounding the render area to natural
+    // pixel dimensions, Fit becomes a no-op for small diagrams and a true
+    // shrink-to-fit for large ones, matching the pre-redesign "natural
+    // inline" appearance without re-introducing the right/bottom crop.
+    let (natural_w_cells, natural_h_cells) = if let Some(Some(picker)) = PICKER.get() {
+        let font_size = picker.font_size();
+        let w = if img_width > 0 {
+            ((img_width as f32 / font_size.0 as f32).ceil() as u16).max(1)
+        } else {
+            0
+        };
+        let h = if img_height > 0 {
+            ((img_height as f32 / font_size.1 as f32).ceil() as u16).max(1)
+        } else {
+            0
+        };
+        (w, h)
+    } else {
+        (0, 0)
+    };
+    let bounded_width = if !scale_up && natural_w_cells > 0 {
+        natural_w_cells.min(image_area.width)
+    } else {
+        image_area.width
+    };
+    let bounded_height = if !scale_up && natural_h_cells > 0 {
+        natural_h_cells.min(image_area.height)
+    } else {
+        image_area.height
     };
 
     let render_area = if centered && img_width > 0 {
         let rendered_width = if let Some(Some(picker)) = PICKER.get() {
             let font_size = picker.font_size();
             let img_width_cells = (img_width as f32 / font_size.0 as f32).ceil() as u16;
-            img_width_cells.min(image_area.width)
+            img_width_cells.min(bounded_width)
         } else {
-            image_area.width
+            bounded_width
         };
         let x_offset = (image_area.width.saturating_sub(rendered_width)) / 2;
         Rect {
             x: image_area.x + x_offset,
             y: image_area.y,
             width: rendered_width,
-            height: image_area.height,
+            height: bounded_height,
         }
     } else {
-        image_area
+        Rect {
+            x: image_area.x,
+            y: image_area.y,
+            width: bounded_width,
+            height: bounded_height,
+        }
     };
 
     {

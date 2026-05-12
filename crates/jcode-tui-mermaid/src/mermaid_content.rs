@@ -1,6 +1,24 @@
 use super::*;
 
-/// Estimate the height needed for an image in terminal rows
+/// Cap inline mermaid placeholders to a sensible number of terminal rows so a
+/// single diagram cannot monopolise the chat viewport. This mirrors the natural
+/// "inline" feel of the pre-redesign renderer: when a PNG would otherwise
+/// reserve a very large vertical slot, we clamp the reservation here and let
+/// `render_image_widget_fit` shrink the diagram proportionally inside it.
+const INLINE_PLACEHOLDER_MAX_ROWS: u16 = 30;
+
+/// Estimate the height needed for an image in terminal rows.
+///
+/// The contract used by the inline chat renderer is "fit-or-shrink":
+/// * if the PNG fits within `max_width` cells at native pixel scale, use its
+///   natural cell height (no upscaling, which is what made backup feel
+///   "clean inline"); the caller's render path mirrors this by shrinking its
+///   render area to natural cells before calling `Resize::Fit`.
+/// * if the PNG is wider than `max_width`, scale the height down preserving
+///   aspect ratio so the placeholder matches the eventual `Resize::Fit` result.
+///
+/// In both cases the final height is clamped to `INLINE_PLACEHOLDER_MAX_ROWS`
+/// to keep one diagram from pushing the rest of the conversation off-screen.
 pub fn estimate_image_height(width: u32, height: u32, max_width: u16) -> u16 {
     if let Some(Some(picker)) = PICKER.get() {
         let font_size = picker.font_size();
@@ -9,17 +27,18 @@ pub fn estimate_image_height(width: u32, height: u32, max_width: u16) -> u16 {
         let img_height_cells = (height as f32 / font_size.1 as f32).ceil() as u16;
 
         // If image is wider than max_width, scale down proportionally
-        if img_width_cells > max_width {
+        let raw = if img_width_cells > max_width {
             let scale = max_width as f32 / img_width_cells as f32;
             (img_height_cells as f32 * scale).ceil() as u16
         } else {
             img_height_cells
-        }
+        };
+        raw.min(INLINE_PLACEHOLDER_MAX_ROWS).max(1)
     } else {
         // Fallback: assume ~8x16 font
         let aspect = width as f32 / height as f32;
         let h = (max_width as f32 / aspect / 2.0).ceil() as u16;
-        h.min(30) // Cap at reasonable height
+        h.min(INLINE_PLACEHOLDER_MAX_ROWS)
     }
 }
 

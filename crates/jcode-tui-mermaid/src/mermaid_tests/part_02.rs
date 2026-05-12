@@ -242,3 +242,104 @@ fn fit_renderer_returns_zero_for_uncached_hash() {
     let rows = super::render_image_widget_fit(0xdeadbeef_cafef00d, area, &mut buf, true, true);
     assert_eq!(rows, 0, "uncached fit render must return 0 to trigger fallback");
 }
+
+#[test]
+fn estimate_image_height_is_clamped_to_inline_max_rows() {
+    // Even a very tall narrow PNG (would be ~50+ rows at native scale) must
+    // never reserve more than the inline placeholder cap, otherwise a single
+    // chat-embedded diagram pushes the rest of the conversation off-screen.
+    let max_width = 96u16;
+    let h_very_tall = super::estimate_image_height(200, 4000, max_width);
+    assert!(
+        h_very_tall <= 30,
+        "very tall diagram height must respect INLINE_PLACEHOLDER_MAX_ROWS, got {h_very_tall}"
+    );
+
+    // Wide-and-not-tall stays small as before.
+    let h_wide = super::estimate_image_height(2400, 600, max_width);
+    assert!(h_wide > 0 && h_wide <= 30);
+
+    // A natural-sized diagram that already fits should not be inflated.
+    let h_small = super::estimate_image_height(400, 240, max_width);
+    assert!(h_small > 0 && h_small <= 30);
+}
+
+/// Compute the rendered cell area for a PNG bounded to (`bounded_w`,
+/// `bounded_h`) cells, using `Resize::Fit` semantics. Mirrors the inline
+/// no-scale-up path inside `render_image_widget_fit_inner`.
+fn fit_with_natural_bound_cells(
+    img_w_px: u32,
+    img_h_px: u32,
+    bounded_w_cells: u16,
+    bounded_h_cells: u16,
+    font_w_px: u16,
+    font_h_px: u16,
+) -> (u16, u16) {
+    let area_w_px = bounded_w_cells as f32 * font_w_px as f32;
+    let area_h_px = bounded_h_cells as f32 * font_h_px as f32;
+    let scale = (area_w_px / img_w_px as f32)
+        .min(area_h_px / img_h_px as f32)
+        .min(1.0); // never scale up in inline mode
+    let rendered_w_px = img_w_px as f32 * scale;
+    let rendered_h_px = img_h_px as f32 * scale;
+    let w_cells = (rendered_w_px / font_w_px as f32).ceil() as u16;
+    let h_cells = (rendered_h_px / font_h_px as f32).ceil() as u16;
+    (w_cells.min(bounded_w_cells), h_cells.min(bounded_h_cells))
+}
+
+#[test]
+fn inline_natural_bound_never_scales_up_small_diagrams() {
+    // A small natural-size PNG inside a much larger placeholder area must
+    // render at its natural cell footprint, not stretched up to fill the
+    // available space. This regressed the "natural inline" feel after the
+    // Fit-mode switch; the fix bounds the render area to natural cells.
+    let font = (8u16, 16u16);
+    let placeholder_w = 120u16;
+    let placeholder_h = 25u16;
+
+    let img_w_px = 480u32; // 60 cells wide at 8px font
+    let img_h_px = 320u32; // 20 cells tall at 16px font
+    let natural_w = (img_w_px as u16 + font.0 - 1) / font.0;
+    let natural_h = (img_h_px as u16 + font.1 - 1) / font.1;
+
+    let bounded_w = natural_w.min(placeholder_w);
+    let bounded_h = natural_h.min(placeholder_h);
+    let (w_cells, h_cells) =
+        fit_with_natural_bound_cells(img_w_px, img_h_px, bounded_w, bounded_h, font.0, font.1);
+
+    assert_eq!(w_cells, natural_w, "small diagram width must stay natural");
+    assert_eq!(h_cells, natural_h, "small diagram height must stay natural");
+    assert!(
+        w_cells < placeholder_w,
+        "should leave horizontal room (no stretch)"
+    );
+}
+
+#[test]
+fn inline_natural_bound_shrinks_large_diagrams_without_crop() {
+    // A PNG larger than the placeholder area must shrink to fit (no crop),
+    // matching the previous Fit-mode guarantee while still respecting the
+    // bounded geometry the placeholder reserved for it.
+    let font = (8u16, 16u16);
+    let placeholder_w = 100u16; // 800 px
+    let placeholder_h = 30u16; // 480 px
+
+    // 2:1 wide diagram that exceeds the placeholder in both axes.
+    let img_w_px = 1600u32;
+    let img_h_px = 800u32;
+    let natural_w = (img_w_px as u16 + font.0 - 1) / font.0;
+    let natural_h = (img_h_px as u16 + font.1 - 1) / font.1;
+
+    let bounded_w = natural_w.min(placeholder_w);
+    let bounded_h = natural_h.min(placeholder_h);
+    let (w_cells, h_cells) =
+        fit_with_natural_bound_cells(img_w_px, img_h_px, bounded_w, bounded_h, font.0, font.1);
+
+    assert!(w_cells <= placeholder_w, "fit must not overflow width");
+    assert!(h_cells <= placeholder_h, "fit must not overflow height");
+    // For a 2:1 PNG (1600×800 px) bounded to 100×30 cells = 800×480 px, the
+    // limiting axis is width (800/1600 = 0.5), so the diagram renders at
+    // 800×400 px = 100×25 cells. Aspect ratio (2:1) is preserved.
+    assert_eq!(w_cells, 100, "width should fill bounded width at limiting scale");
+    assert_eq!(h_cells, 25, "height should preserve 2:1 aspect after shrink");
+}
