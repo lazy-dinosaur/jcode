@@ -853,9 +853,21 @@ fn mermaid_should_register_active() -> bool {
 }
 
 fn mermaid_rendering_enabled() -> bool {
-    // Temporarily disable Mermaid for users while the renderer is unstable.
-    // Developers can opt in explicitly to keep iterating on the feature.
-    std::env::var("JCODE_ENABLE_MERMAID").is_ok_and(|value| value == "1")
+    // M28 (lazydino fork): when this build was compiled with
+    // `mermaid-renderer` enabled, mermaid is rendered by default. The
+    // `JCODE_ENABLE_MERMAID` env var still acts as an explicit override —
+    // set it to `0` (or any value other than `1`) to force-disable, or `1`
+    // to force-enable (matters when the cargo feature is off).
+    //
+    // Upstream behaviour: opt-in only via `JCODE_ENABLE_MERMAID=1` while
+    // the renderer was considered unstable. lazydino's binary always ships
+    // the renderer feature enabled (see top-level `Cargo.toml`), so the
+    // runtime gate becomes "on unless explicitly turned off".
+    match std::env::var("JCODE_ENABLE_MERMAID") {
+        Ok(value) if value == "1" => true,
+        Ok(_) => false,
+        Err(_) => cfg!(feature = "mermaid-renderer"),
+    }
 }
 
 fn mermaid_sidebar_placeholder(text: &str) -> Line<'static> {
