@@ -20,6 +20,7 @@ use jcode_provider_core::{
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{RwLock, mpsc};
@@ -142,6 +143,107 @@ fn oauth_agent_input_schema() -> Value {
         "required": ["description", "prompt"],
         "additionalProperties": false
     })
+}
+
+fn oauth_known_tool_schema(name: &str) -> Option<ApiTool> {
+    match name {
+        "Agent" => Some(ApiTool {
+            name: "Agent".to_string(),
+            description: "Launch a new agent to handle complex, multi-step tasks.".to_string(),
+            input_schema: oauth_agent_input_schema(),
+            cache_control: None,
+        }),
+        "Bash" => Some(ApiTool {
+            name: "Bash".to_string(),
+            description: "Executes a given bash command and returns its output.".to_string(),
+            input_schema: json!({"type":"object","properties":{"command":{"type":"string"},"timeout":{"type":"integer"},"run_in_background":{"type":"boolean"}},"required":["command"],"additionalProperties":false}),
+            cache_control: None,
+        }),
+        "Edit" => Some(ApiTool {
+            name: "Edit".to_string(),
+            description: "Performs exact string replacements in files.".to_string(),
+            input_schema: json!({"type":"object","properties":{"file_path":{"type":"string"},"old_string":{"type":"string"},"new_string":{"type":"string"},"replace_all":{"type":"boolean","default":false}},"required":["file_path","old_string","new_string"],"additionalProperties":false}),
+            cache_control: None,
+        }),
+        "Glob" => Some(ApiTool {
+            name: "Glob".to_string(),
+            description: "Fast file pattern matching tool.".to_string(),
+            input_schema: json!({"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"}},"required":["pattern"],"additionalProperties":false}),
+            cache_control: None,
+        }),
+        "Grep" => Some(ApiTool {
+            name: "Grep".to_string(),
+            description: "A powerful search tool built on ripgrep.".to_string(),
+            input_schema: json!({"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"},"glob":{"type":"string"},"output_mode":{"type":"string","enum":["content","files_with_matches","count"]},"-B":{"type":"number"},"-A":{"type":"number"},"-C":{"type":"number"},"context":{"type":"number"},"-n":{"type":"boolean"},"-i":{"type":"boolean"},"type":{"type":"string"},"head_limit":{"type":"number"},"offset":{"type":"number"},"multiline":{"type":"boolean"}},"required":["pattern"],"additionalProperties":false}),
+            cache_control: None,
+        }),
+        "Read" => Some(ApiTool {
+            name: "Read".to_string(),
+            description: "Reads a file from the local filesystem.".to_string(),
+            input_schema: json!({"type":"object","properties":{"file_path":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","exclusiveMinimum":0},"pages":{"type":"string"}},"required":["file_path"],"additionalProperties":false}),
+            cache_control: None,
+        }),
+        // M13: Keep `ScheduleWakeup` as the OAuth-facing name while advertising
+        // the local ScheduleTool dispatch schema.
+        "ScheduleWakeup" => Some(ApiTool {
+            name: "ScheduleWakeup".to_string(),
+            description:
+                "Schedule a task for future execution (requires wake_in_minutes or wake_at)."
+                    .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "required": ["task"],
+                "properties": {
+                    "task": {"type": "string", "description": "Task description for the scheduled run."},
+                    "wake_in_minutes": {"type": "integer", "description": "Wake N minutes from now."},
+                    "wake_at": {"type": "string", "description": "RFC3339 timestamp for absolute scheduling."},
+                    "priority": {"type": "string", "enum": ["low", "normal", "high"]},
+                    "relevant_files": {"type": "array", "items": {"type": "string"}},
+                    "background_context": {"type": "string"},
+                    "success_criteria": {"type": "string"},
+                    "target": {
+                        "type": "string",
+                        "enum": ["resume", "spawn", "ambient"],
+                        "description": "Delivery target. Defaults to resuming the originating session."
+                    }
+                },
+                "additionalProperties": false
+            }),
+            cache_control: None,
+        }),
+        "Skill" => Some(ApiTool {
+            name: "Skill".to_string(),
+            description: "Execute a skill within the main conversation".to_string(),
+            input_schema: json!({"type":"object","properties":{"skill":{"type":"string"},"args":{"type":"string"}},"required":["skill"],"additionalProperties":false}),
+            cache_control: None,
+        }),
+        // M12: Keep `ToolSearch` wire-name while advertising the local
+        // CodeSearchTool dispatch schema.
+        "ToolSearch" => Some(ApiTool {
+            name: "ToolSearch".to_string(),
+            description: "Search code, docs, and tool examples by semantic query.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "required": ["query"],
+                "properties": {
+                    "query": {"type": "string", "description": "Search query."},
+                    "max_tokens": {
+                        "type": "integer",
+                        "description": "Maximum tokens of results to return."
+                    }
+                },
+                "additionalProperties": false
+            }),
+            cache_control: None,
+        }),
+        "Write" => Some(ApiTool {
+            name: "Write".to_string(),
+            description: "Writes a file to the local filesystem.".to_string(),
+            input_schema: json!({"type":"object","properties":{"file_path":{"type":"string"},"content":{"type":"string"}},"required":["file_path","content"],"additionalProperties":false}),
+            cache_control: None,
+        }),
+        _ => None,
+    }
 }
 
 pub(crate) fn apply_oauth_attribution_headers(
@@ -850,118 +952,32 @@ impl AnthropicProvider {
     /// Adds cache_control to the last tool for prompt caching
     fn format_tools(&self, tools: &[ToolDefinition], is_oauth: bool) -> Vec<ApiTool> {
         if is_oauth {
-            return vec![
-                ApiTool {
-                    name: "Agent".to_string(),
-                    description: "Launch a new agent to handle complex, multi-step tasks."
-                        .to_string(),
-                    input_schema: oauth_agent_input_schema(),
-                    cache_control: None,
-                },
-                ApiTool {
-                    name: "Bash".to_string(),
-                    description: "Executes a given bash command and returns its output."
-                        .to_string(),
-                    input_schema: json!({"type":"object","properties":{"command":{"type":"string"},"timeout":{"type":"integer"},"run_in_background":{"type":"boolean"}},"required":["command"],"additionalProperties":false}),
-                    cache_control: None,
-                },
-                ApiTool {
-                    name: "Edit".to_string(),
-                    description: "Performs exact string replacements in files.".to_string(),
-                    input_schema: json!({"type":"object","properties":{"file_path":{"type":"string"},"old_string":{"type":"string"},"new_string":{"type":"string"},"replace_all":{"type":"boolean","default":false}},"required":["file_path","old_string","new_string"],"additionalProperties":false}),
-                    cache_control: None,
-                },
-                ApiTool {
-                    name: "Glob".to_string(),
-                    description: "Fast file pattern matching tool.".to_string(),
-                    input_schema: json!({"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"}},"required":["pattern"],"additionalProperties":false}),
-                    cache_control: None,
-                },
-                ApiTool {
-                    name: "Grep".to_string(),
-                    description: "A powerful search tool built on ripgrep.".to_string(),
-                    input_schema: json!({"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"},"glob":{"type":"string"},"output_mode":{"type":"string","enum":["content","files_with_matches","count"]},"-B":{"type":"number"},"-A":{"type":"number"},"-C":{"type":"number"},"context":{"type":"number"},"-n":{"type":"boolean"},"-i":{"type":"boolean"},"type":{"type":"string"},"head_limit":{"type":"number"},"offset":{"type":"number"},"multiline":{"type":"boolean"}},"required":["pattern"],"additionalProperties":false}),
-                    cache_control: None,
-                },
-                ApiTool {
-                    name: "Read".to_string(),
-                    description: "Reads a file from the local filesystem.".to_string(),
-                    input_schema: json!({"type":"object","properties":{"file_path":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","exclusiveMinimum":0},"pages":{"type":"string"}},"required":["file_path"],"additionalProperties":false}),
-                    cache_control: None,
-                },
-                ApiTool {
-                    // M13: Keep the OAuth-facing name as `ScheduleWakeup` (the
-                    // `schedule` -> `ScheduleWakeup` outgoing rename is applied
-                    // by `anthropic_map_tool_name_for_oauth`, and incoming
-                    // `ScheduleWakeup` is normalized back to `schedule` by
-                    // `anthropic_map_tool_name_from_oauth`). Only the advertised
-                    // schema changes: it must match `ScheduleTool::parameters_schema`
-                    // (`task` required), not the dead `delaySeconds`/`reason`
-                    // schema for an unimplemented `/loop` dynamic mode.
-                    name: "ScheduleWakeup".to_string(),
-                    description:
-                        "Schedule a task for future execution (requires wake_in_minutes or wake_at)."
-                            .to_string(),
-                    input_schema: json!({
-                        "type": "object",
-                        "required": ["task"],
-                        "properties": {
-                            "task": {"type": "string", "description": "Task description for the scheduled run."},
-                            "wake_in_minutes": {"type": "integer", "description": "Wake N minutes from now."},
-                            "wake_at": {"type": "string", "description": "RFC3339 timestamp for absolute scheduling."},
-                            "priority": {"type": "string", "enum": ["low", "normal", "high"]},
-                            "relevant_files": {"type": "array", "items": {"type": "string"}},
-                            "background_context": {"type": "string"},
-                            "success_criteria": {"type": "string"},
-                            "target": {
-                                "type": "string",
-                                "enum": ["resume", "spawn", "ambient"],
-                                "description": "Delivery target. Defaults to resuming the originating session."
-                            }
-                        },
-                        "additionalProperties": false
-                    }),
-                    cache_control: None,
-                },
-                ApiTool {
-                    name: "Skill".to_string(),
-                    description: "Execute a skill within the main conversation".to_string(),
-                    input_schema: json!({"type":"object","properties":{"skill":{"type":"string"},"args":{"type":"string"}},"required":["skill"],"additionalProperties":false}),
-                    cache_control: None,
-                },
-                ApiTool {
-                    // M12: align advertised `ToolSearch` schema with the actual
-                    // dispatch handler `CodeSearchTool` (see
-                    // `src/tool/codesearch.rs`). The previous schema required
-                    // `max_results`, which has no analogue in the local
-                    // dispatcher — the local tool takes `query` (required) and
-                    // `max_tokens` (optional). Wire-name `ToolSearch` is kept
-                    // and routed to `codesearch` by `anthropic_map_tool_name_*`.
-                    name: "ToolSearch".to_string(),
-                    description:
-                        "Search code, docs, and tool examples by semantic query."
-                            .to_string(),
-                    input_schema: json!({
-                        "type": "object",
-                        "required": ["query"],
-                        "properties": {
-                            "query": {"type": "string", "description": "Search query."},
-                            "max_tokens": {
-                                "type": "integer",
-                                "description": "Maximum tokens of results to return."
-                            }
-                        },
-                        "additionalProperties": false
-                    }),
-                    cache_control: None,
-                },
-                ApiTool {
-                    name: "Write".to_string(),
-                    description: "Writes a file to the local filesystem.".to_string(),
-                    input_schema: json!({"type":"object","properties":{"file_path":{"type":"string"},"content":{"type":"string"}},"required":["file_path","content"],"additionalProperties":false}),
-                    cache_control: Some(CacheControlParam::ephemeral()),
-                },
-            ];
+            let mut seen = HashSet::new();
+            let mut api_tools: Vec<ApiTool> = tools
+                .iter()
+                .filter_map(|tool| {
+                    let advertised_name = map_tool_name_for_oauth(&tool.name);
+                    if !seen.insert(advertised_name.clone()) {
+                        return None;
+                    }
+
+                    let mut api_tool =
+                        oauth_known_tool_schema(&advertised_name).unwrap_or_else(|| ApiTool {
+                            name: advertised_name,
+                            description: tool.description.clone(),
+                            input_schema: tool.input_schema.clone(),
+                            cache_control: None,
+                        });
+                    api_tool.cache_control = None;
+                    Some(api_tool)
+                })
+                .collect();
+
+            if let Some(last) = api_tools.last_mut() {
+                last.cache_control = Some(CacheControlParam::ephemeral());
+            }
+
+            return api_tools;
         }
 
         let len = tools.len();
