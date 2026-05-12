@@ -47,11 +47,14 @@ use crate::id;
 use crate::protocol::{Request, ServerEvent, decode_request, encode_event};
 use crate::provider::Provider;
 use crate::tool::Registry;
+use crate::turn::bg_completion::{
+    BackgroundCompletion, register_bg_completion_receiver, unregister_bg_completion_receiver,
+};
 use crate::transport::Stream;
 use anyhow::Result;
 use futures::FutureExt;
 use jcode_agent_runtime::{InterruptSignal, SoftInterruptSource, StreamError};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -82,6 +85,13 @@ struct SwarmStatusRefs<'a> {
     event_history: &'a Arc<RwLock<std::collections::VecDeque<SwarmEvent>>>,
     event_counter: &'a Arc<std::sync::atomic::AtomicU64>,
     event_tx: &'a broadcast::Sender<SwarmEvent>,
+}
+
+fn background_completion_system_reminder(completion: &BackgroundCompletion) -> String {
+    format!(
+        "Background task completion wake received.\n\nTask `{}` completed with exit code {} after {} ms. Stage 3 will inject stdout/stderr details into the turn context.",
+        completion.task_id, completion.exit_code, completion.duration_ms
+    )
 }
 
 fn server_reload_starting() -> bool {
@@ -1056,6 +1066,19 @@ pub(super) async fn handle_client(
     // otherwise monopolize the select loop before the initial subscribe/read.
     let mut client_subscribed = false;
     let mut pending_request = Some(initial_request);
+    let mut bg_completion_rx = match register_bg_completion_receiver(&client_session_id) {
+        Ok(rx) => rx,
+        Err(err) => {
+            crate::logging::warn(&format!(
+                "Failed to register background completion receiver for session {}: {}",
+                client_session_id, err
+            ));
+            let (_tx, rx) = mpsc::unbounded_channel();
+            rx
+        }
+    };
+    let mut pending_bg_completions: VecDeque<BackgroundCompletion> = VecDeque::new();
+    let mut next_bg_wake_request_id = u64::MAX / 2;
 
     loop {
         let request = if let Some(request) = pending_request.take() {
@@ -1158,8 +1181,83 @@ pub(super) async fn handle_client(
                             });
                         }
                     }
+                    if !client_is_processing
+                        && let Some(completion) = pending_bg_completions.pop_front()
+                    {
+                        let id = next_bg_wake_request_id;
+                        next_bg_wake_request_id = next_bg_wake_request_id.saturating_add(1);
+                        start_processing_message(
+                            ProcessingMessage {
+                                id,
+                                content: String::new(),
+                                images: vec![],
+                                system_reminder: Some(background_completion_system_reminder(&completion)),
+                            },
+                            &client_session_id,
+                            &client_connection_id,
+                            &mut ProcessingState {
+                                client_is_processing: &mut client_is_processing,
+                                message_id: &mut processing_message_id,
+                                session_id: &mut processing_session_id,
+                                task: &mut processing_task,
+                            },
+                            &agent,
+                            &client_event_tx,
+                            &processing_done_tx,
+                            &SwarmStatusRefs {
+                                members: &swarm_members,
+                                swarms_by_id: &swarms_by_id,
+                                event_history: &event_history,
+                                event_counter: &event_counter,
+                                event_tx: &swarm_event_tx,
+                            },
+                        )
+                        .await;
+                    }
                 } else {
                     break;
+                }
+                continue;
+            }
+            bg_completion = bg_completion_rx.recv() => {
+                if let Some(completion) = bg_completion {
+                    crate::logging::info(&format!(
+                        "received bg completion: {}",
+                        completion.task_id
+                    ));
+                    if client_is_processing {
+                        pending_bg_completions.push_back(completion);
+                    } else {
+                        let id = next_bg_wake_request_id;
+                        next_bg_wake_request_id = next_bg_wake_request_id.saturating_add(1);
+                        start_processing_message(
+                            ProcessingMessage {
+                                id,
+                                content: String::new(),
+                                images: vec![],
+                                system_reminder: Some(background_completion_system_reminder(&completion)),
+                            },
+                            &client_session_id,
+                            &client_connection_id,
+                            &mut ProcessingState {
+                                client_is_processing: &mut client_is_processing,
+                                message_id: &mut processing_message_id,
+                                session_id: &mut processing_session_id,
+                                task: &mut processing_task,
+                            },
+                            &agent,
+                            &client_event_tx,
+                            &processing_done_tx,
+                            &SwarmStatusRefs {
+                                members: &swarm_members,
+                                swarms_by_id: &swarms_by_id,
+                                event_history: &event_history,
+                                event_counter: &event_counter,
+                                event_tx: &swarm_event_tx,
+                            },
+                        )
+                        .await;
+                    }
                 }
                 continue;
             }
@@ -1368,6 +1466,7 @@ pub(super) async fn handle_client(
             }
 
             Request::Clear { id } => {
+                let previous_session_id = client_session_id.clone();
                 handle_clear_session(
                     id,
                     client_selfdev,
@@ -1394,6 +1493,21 @@ pub(super) async fn handle_client(
                 )
                 .await;
                 session_control = refresh_session_control_handle(&client_session_id, &agent).await;
+                if previous_session_id != client_session_id {
+                    unregister_bg_completion_receiver(&previous_session_id);
+                    bg_completion_rx = match register_bg_completion_receiver(&client_session_id) {
+                        Ok(rx) => rx,
+                        Err(err) => {
+                            crate::logging::warn(&format!(
+                                "Failed to register background completion receiver for session {} after clear: {}",
+                                client_session_id, err
+                            ));
+                            let (_tx, rx) = mpsc::unbounded_channel();
+                            rx
+                        }
+                    };
+                    pending_bg_completions.clear();
+                }
             }
 
             Request::Rewind { id, message_index } => {
@@ -2617,6 +2731,8 @@ pub(super) async fn handle_client(
             }
         }
     }
+
+    unregister_bg_completion_receiver(&client_session_id);
 
     cleanup_client_connection(
         &sessions,

@@ -7,6 +7,7 @@ use crate::bus::{
     BackgroundTaskCompleted, BackgroundTaskProgress, BackgroundTaskProgressEvent,
     BackgroundTaskProgressSource, BackgroundTaskStatus, Bus, BusEvent,
 };
+use crate::turn::bg_completion::{BackgroundCompletion, send_bg_completion};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
@@ -187,8 +188,19 @@ impl BackgroundTaskManager {
         let output_preview = if output.len() > 500 {
             format!("{}...", crate::util::truncate_str(&output, 500))
         } else {
-            output
+            output.clone()
         };
+        if status.notify {
+            let _ = send_bg_completion(BackgroundCompletion {
+                task_id: status.task_id.clone(),
+                exit_code: exit_code.unwrap_or(-1),
+                stdout: output,
+                stderr: String::new(),
+                duration_ms: duration_secs.unwrap_or_default().mul_add(1000.0, 0.0) as u64,
+                session_id: status.delivery_session_id_or_owner().to_string(),
+                notify: status.notify,
+            });
+        }
         Bus::global().publish(BusEvent::BackgroundTaskCompleted(BackgroundTaskCompleted {
             task_id: status.task_id.clone(),
             tool_name: status.tool_name.clone(),
@@ -416,19 +428,31 @@ impl BackgroundTaskManager {
 
             // Publish completion event to the bus
             Bus::global().publish(BusEvent::BackgroundTaskCompleted(BackgroundTaskCompleted {
-                task_id: task_id_clone,
+                task_id: task_id_clone.clone(),
                 tool_name: tool_name_owned,
                 display_name: display_name_owned,
                 session_id: session_id_owned,
                 delivery_session_id: delivery_session_id_owned,
                 status,
                 exit_code,
-                output_preview,
+                output_preview: output_preview.clone(),
                 output_file: output_path_clone,
                 duration_secs,
                 notify: notify_flag,
                 wake: wake_flag,
             }));
+
+            if notify_flag {
+                let _ = send_bg_completion(BackgroundCompletion {
+                    task_id: task_id_clone,
+                    exit_code: exit_code.unwrap_or(-1),
+                    stdout: output_preview,
+                    stderr: String::new(),
+                    duration_ms: duration_secs.mul_add(1000.0, 0.0) as u64,
+                    session_id: final_status.delivery_session_id_or_owner().to_string(),
+                    notify: notify_flag,
+                });
+            }
 
             result
         });
@@ -595,19 +619,31 @@ impl BackgroundTaskManager {
             };
 
             Bus::global().publish(BusEvent::BackgroundTaskCompleted(BackgroundTaskCompleted {
-                task_id: task_id_clone,
+                task_id: task_id_clone.clone(),
                 tool_name: tool_name_owned,
                 display_name: display_name_owned,
                 session_id: session_id_owned,
                 delivery_session_id: delivery_session_id_owned,
                 status: status.clone(),
                 exit_code,
-                output_preview,
+                output_preview: output_preview.clone(),
                 output_file: output_path_clone,
                 duration_secs,
                 notify: notify_flag,
                 wake: wake_flag,
             }));
+
+            if notify_flag {
+                let _ = send_bg_completion(BackgroundCompletion {
+                    task_id: task_id_clone,
+                    exit_code: exit_code.unwrap_or(-1),
+                    stdout: output_preview,
+                    stderr: String::new(),
+                    duration_ms: duration_secs.mul_add(1000.0, 0.0) as u64,
+                    session_id: final_status.delivery_session_id_or_owner().to_string(),
+                    notify: notify_flag,
+                });
+            }
 
             Ok(TaskResult {
                 exit_code,
