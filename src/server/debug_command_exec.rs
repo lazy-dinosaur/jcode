@@ -67,6 +67,58 @@ pub(super) async fn maybe_execute_shutdown_command(
     ))
 }
 
+/// Lazydino Round 24: handle `debug reload` BEFORE session resolution.
+///
+/// Without this, `jcode debug reload` from an ephemeral debug-CLI client
+/// fails with `Unknown session_id 'session_xxx_...'` because the debug
+/// dispatcher tries to resolve a target session for an agent that doesn't
+/// exist yet. The reload command does not need a session/agent — it just
+/// publishes the current local build and emits a reload signal.
+pub(super) async fn maybe_execute_reload_command(command: &str) -> Option<Result<String>> {
+    if command.trim() != "reload" {
+        return None;
+    }
+
+    let result = (|| -> Result<String> {
+        let repo_dir = crate::build::get_repo_dir()
+            .ok_or_else(|| anyhow::anyhow!("Could not find jcode repository directory"))?;
+
+        let target_binary = crate::build::find_dev_binary(&repo_dir)
+            .unwrap_or_else(|| build::release_binary_path(&repo_dir));
+        if !target_binary.exists() {
+            return Err(anyhow::anyhow!(format!(
+                "No binary found at {}. Run 'jcode self-dev --build' first, or build with 'scripts/dev_cargo.sh build --profile selfdev -p jcode --bin jcode' and publish current.",
+                target_binary.display()
+            )));
+        }
+
+        let source = crate::build::current_source_state(&repo_dir)?;
+        let hash = source.version_label.clone();
+        let published = crate::build::publish_local_current_build_for_source(&repo_dir, &source)?;
+        crate::build::smoke_test_server_binary(&published.versioned_path)?;
+        crate::build::update_shared_server_symlink(&hash)?;
+        crate::build::update_canary_symlink(&hash)?;
+
+        let mut manifest = crate::build::BuildManifest::load()?;
+        manifest.canary = Some(hash.clone());
+        manifest.canary_status = Some(crate::build::CanaryStatus::Testing);
+        manifest.save()?;
+
+        let jcode_dir = crate::storage::jcode_dir()?;
+        let info_path = jcode_dir.join("reload-info");
+        std::fs::write(&info_path, format!("reload:{}", hash))?;
+
+        let _request_id = super::send_reload_signal(hash.clone(), None, false);
+
+        Ok(format!(
+            "Reload signal sent for build {}. Server will restart.",
+            hash
+        ))
+    })();
+
+    Some(result)
+}
+
 #[derive(Clone)]
 pub(super) struct DebugInterruptContext {
     pub session_id: String,

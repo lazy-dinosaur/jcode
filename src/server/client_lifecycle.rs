@@ -967,7 +967,20 @@ pub(super) async fn handle_client(
     let client_connection_id_for_events = client_connection_id.clone();
     let client_connections_for_events = Arc::clone(&client_connections);
     let event_handle = tokio::spawn(async move {
+        let mut events_received = 0usize;
+        let mut writes_ok = 0usize;
+        let mut writes_failed = 0usize;
+        let log_threshold = 5usize; // 첫 5 개만 trace
         while let Some(event) = client_event_rx.recv().await {
+            events_received += 1;
+            let is_streaming_event = matches!(
+                &event,
+                ServerEvent::TextDelta { .. }
+                    | ServerEvent::MessageEnd { .. }
+                    | ServerEvent::ToolStart { .. }
+                    | ServerEvent::ToolDone { .. }
+                    | ServerEvent::Done { .. }
+            );
             {
                 let mut connections = client_connections_for_events.write().await;
                 if let Some(info) = connections.get_mut(&client_connection_id_for_events) {
@@ -992,13 +1005,35 @@ pub(super) async fn handle_client(
             let json = encode_event(&event);
             let mut w = writer_clone.lock().await;
             if let Err(error) = w.write_all(json.as_bytes()).await {
+                writes_failed += 1;
                 crate::logging::warn(&format!(
                     "event_forwarder write failed for connection {} while sending {:?}: {}",
                     client_connection_id_for_events, event, error
                 ));
                 break;
+            } else {
+                writes_ok += 1;
+                if is_streaming_event && writes_ok <= log_threshold {
+                    crate::logging::info(&format!(
+                        "[m32/drain] conn={} streaming write_ok #{} kind={}",
+                        client_connection_id_for_events,
+                        writes_ok,
+                        match &event {
+                            ServerEvent::TextDelta { .. } => "TextDelta",
+                            ServerEvent::MessageEnd { .. } => "MessageEnd",
+                            ServerEvent::ToolStart { .. } => "ToolStart",
+                            ServerEvent::ToolDone { .. } => "ToolDone",
+                            ServerEvent::Done { .. } => "Done",
+                            _ => "?",
+                        }
+                    ));
+                }
             }
         }
+        crate::logging::info(&format!(
+            "[m32/drain] conn={} event_handle ended events_received={} writes_ok={} writes_failed={}",
+            client_connection_id_for_events, events_received, writes_ok, writes_failed
+        ));
     });
 
     // Note: Don't send initial SessionId here - it's sent by the Subscribe handler
@@ -2867,24 +2902,35 @@ async fn start_processing_message(
     let fanout_members = Arc::clone(swarm.members);
     let fanout_session_id = client_session_id.to_string();
     let fanout_connection_id = client_connection_id.to_string();
-    let (fanout_tx, mut fanout_rx) =
-        tokio::sync::mpsc::unbounded_channel::<ServerEvent>();
+    let (fanout_tx, mut fanout_rx) = tokio::sync::mpsc::unbounded_channel::<ServerEvent>();
     let origin_tx_for_forward = tx.clone();
     tokio::spawn(async move {
+        let mut first_event_logged = false;
         while let Some(event) = fanout_rx.recv().await {
             // Deliver to the origin first (cheapest path; cloning happens
             // only when fanout below has additional targets).
             let _ = origin_tx_for_forward.send(event.clone());
             // Best-effort broadcast to sibling client connections attached to
             // the same session. Excludes the origin to avoid double-delivery.
-            let _ = fanout_session_event_except(
+            let delivered = fanout_session_event_except(
                 &fanout_members,
                 &fanout_session_id,
                 Some(&fanout_connection_id),
                 event,
             )
             .await;
+            if !first_event_logged {
+                crate::logging::info(&format!(
+                    "[m32/fanout] first event delivered to {} siblings (session={} origin_conn={})",
+                    delivered, fanout_session_id, fanout_connection_id
+                ));
+                first_event_logged = true;
+            }
         }
+        crate::logging::info(&format!(
+            "[m32/fanout] forwarder ended for session={}",
+            fanout_session_id
+        ));
     });
     crate::logging::info(&format!("Processing message id={} spawning task", id));
     *state.task = Some(tokio::spawn(async move {

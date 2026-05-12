@@ -56,10 +56,12 @@ fn test_openai_reasoning_effort_defaults_to_low() {
 }
 
 #[test]
-fn test_openai_fast_mode_defaults_to_priority() {
+fn test_openai_fast_mode_defaults_to_off() {
+    // lazydino fork (Round 24): default OFF to avoid accidental fast usage.
+    // Users can still opt in via /fast or by setting openai_service_tier in config.
     assert_eq!(
         ProviderConfig::default().openai_service_tier.as_deref(),
-        Some("priority")
+        None
     );
 }
 
@@ -78,8 +80,8 @@ fn test_generated_default_config_uses_low_openai_reasoning_effort() {
         "generated default config should use low OpenAI reasoning effort"
     );
     assert!(
-        content.contains("openai_service_tier = \"priority\""),
-        "generated default config should enable OpenAI fast mode"
+        content.contains("# openai_service_tier = \"priority\""),
+        "generated default config should leave OpenAI fast mode commented out by default (off)"
     );
 
     if let Some(prev) = prev_home {

@@ -160,9 +160,10 @@ openai_reasoning_effort = "low"
 # OpenAI transport mode (auto|websocket|https)
 # openai_transport = "auto"
 # OpenAI service tier override (priority|flex)
-# Defaults to `priority` to match Codex /fast behavior for OpenAI OAuth
-# (higher speed, higher usage). Set to "off" to disable.
-openai_service_tier = "priority"
+# Defaults to OFF (no service tier override). Set to "priority" if you want
+# Codex /fast behavior (higher speed, higher usage). Set to "flex" for slower
+# but cheaper. lazydino fork: default off to avoid accidental fast usage.
+# openai_service_tier = "priority"
 # Cross-provider failover when the same prompt would be resent elsewhere.
 # countdown = 3-second countdown before retrying on another provider; press Esc to cancel (default)
 # manual = show a notice and let you switch yourself

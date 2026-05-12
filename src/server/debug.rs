@@ -530,6 +530,10 @@ pub(super) async fn handle_debug_client(
                         .await
                         {
                             output
+                        } else if let Some(output) =
+                            super::debug_command_exec::maybe_execute_reload_command(cmd).await
+                        {
+                            output
                         } else {
                             match resolve_debug_session(&sessions, &session_id, requested_session)
                                 .await
