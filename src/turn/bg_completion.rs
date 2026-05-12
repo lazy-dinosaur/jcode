@@ -1,10 +1,39 @@
 use crate::logging;
+use crate::turn::injected_context::{
+    InjectedContext, InjectedSource, InjectionFormat, enqueue_injection,
+};
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
+use std::time::SystemTime;
 use tokio::sync::mpsc;
 
-static BG_COMPLETION_SENDERS: LazyLock<Mutex<HashMap<String, mpsc::UnboundedSender<BackgroundCompletion>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+static BG_COMPLETION_SENDERS: LazyLock<
+    Mutex<HashMap<String, mpsc::UnboundedSender<BackgroundCompletion>>>,
+> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackgroundAutoInjectConfig {
+    pub enabled: bool,
+    pub format: InjectionFormat,
+    pub max_bytes: Option<usize>,
+}
+
+impl Default for BackgroundAutoInjectConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            format: InjectionFormat::SystemReminder,
+            max_bytes: None,
+        }
+    }
+}
+
+pub fn parse_injection_format(raw: Option<&str>) -> InjectionFormat {
+    match raw.unwrap_or_default().trim().to_ascii_lowercase().as_str() {
+        "user_message" | "user" => InjectionFormat::UserMessage,
+        _ => InjectionFormat::SystemReminder,
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackgroundCompletion {
@@ -15,6 +44,48 @@ pub struct BackgroundCompletion {
     pub duration_ms: u64,
     pub session_id: String,
     pub notify: bool,
+    pub auto_inject: bool,
+    pub auto_inject_format: InjectionFormat,
+    pub auto_inject_max_bytes: Option<usize>,
+}
+
+fn truncate_for_inject(value: &str, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value.to_string();
+    }
+
+    let mut end = max_bytes;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value[..end].to_string()
+}
+
+pub fn enqueue_bg_completion_injection(
+    session_id: &str,
+    completion: &BackgroundCompletion,
+) -> anyhow::Result<bool> {
+    if !completion.auto_inject {
+        return Ok(false);
+    }
+
+    let body_cap = completion
+        .auto_inject_max_bytes
+        .unwrap_or(InjectedContext::MAX_BODY_BYTES);
+    let ctx = InjectedContext {
+        source: InjectedSource::BackgroundTask {
+            task_id: completion.task_id.clone(),
+            exit_code: completion.exit_code,
+            stdout: truncate_for_inject(&completion.stdout, body_cap),
+            stderr: truncate_for_inject(&completion.stderr, body_cap.min(2048)),
+            duration_ms: completion.duration_ms,
+        },
+        timestamp: SystemTime::now(),
+        format: completion.auto_inject_format,
+        dedupe_key: format!("bg:{}", completion.task_id),
+    };
+    enqueue_injection(session_id, ctx)?;
+    Ok(true)
 }
 
 pub fn register_bg_completion_receiver(

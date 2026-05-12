@@ -72,7 +72,7 @@ async fn update_delivery_applies_to_running_task_completion() -> Result<()> {
         .await;
 
     let updated = manager
-        .update_delivery(&info.task_id, true, true)
+        .update_delivery(&info.task_id, true, true, true, None, None)
         .await
         .map_err(|err| anyhow!("update delivery should succeed: {err}"))?
         .ok_or_else(|| anyhow!("task should exist"))?;

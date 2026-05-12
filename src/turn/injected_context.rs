@@ -61,7 +61,7 @@ impl InjectedContext {
                 stderr,
                 duration_ms,
             } => format!(
-                "[system-reminder]\nBackground task completed.\n- task_id: {task_id}\n- exit_code: {exit_code}\n- duration_ms: {duration_ms}\n- stdout (truncated to 16KB):\n{stdout}\n- stderr (truncated to 16KB):\n{stderr}"
+                "[system-reminder]\nBackground task completed.\n- task_id: {task_id}\n- exit_code: {exit_code}\n- duration_ms: {duration_ms}\n- stdout (truncated to 16384 bytes):\n{stdout}\n- stderr (truncated to 2048 bytes):\n{stderr}"
             ),
             InjectedSource::LifecycleHookStdout {
                 hook_kind,

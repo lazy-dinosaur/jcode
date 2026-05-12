@@ -25,6 +25,10 @@ fn default_wait_return_on_progress() -> bool {
     true
 }
 
+fn default_auto_inject() -> bool {
+    true
+}
+
 const DEFAULT_WAIT_SECONDS: u64 = 60;
 const MAX_WAIT_SECONDS: u64 = 60 * 60;
 const DEFAULT_TAIL_LINES: usize = 80;
@@ -71,6 +75,16 @@ struct BgInput {
     /// Whether to notify on completion when using watch/delivery (default: true)
     #[serde(default)]
     notify: Option<bool>,
+    /// Whether to automatically inject completion stdout/stderr into the next turn (default: true).
+    /// When true and notify is omitted, notify behaves as true so completion can be delivered.
+    #[serde(default = "default_auto_inject")]
+    auto_inject: bool,
+    /// Auto-injection format: system_reminder (default) or user_message.
+    #[serde(default)]
+    auto_inject_format: Option<String>,
+    /// Optional maximum stdout bytes for auto-injection; stderr uses the smaller of this and 2048.
+    #[serde(default)]
+    auto_inject_max_bytes: Option<usize>,
     /// Whether to wake on completion when using watch/delivery (default: true)
     #[serde(default)]
     wake: Option<bool>,
@@ -229,6 +243,9 @@ fn task_metadata(
         "duration_secs": task.duration_secs,
         "notify": task.notify,
         "wake": task.wake,
+        "auto_inject": task.auto_inject,
+        "auto_inject_format": task.auto_inject_format,
+        "auto_inject_max_bytes": task.auto_inject_max_bytes,
         "pid": task.pid,
         "detached": task.detached,
         "progress": task.progress,
@@ -275,6 +292,7 @@ fn format_task_details(task: &background::TaskStatusFile) -> String {
     }
     output.push_str(&format!("Notify: {}\n", task.notify));
     output.push_str(&format!("Wake: {}\n", task.wake));
+    output.push_str(&format!("Auto inject: {}\n", task.auto_inject));
     if let Some(error) = task.error.as_ref() {
         output.push_str(&format!("Error: {}\n", error));
     }
@@ -489,7 +507,10 @@ impl Tool for BgTool {
                 },
                 "max_age_hours": { "type": "integer", "description": "Cleanup age in hours." },
                 "dry_run": { "type": "boolean", "description": "For cleanup, report what would be removed without deleting." },
-                "notify": { "type": "boolean", "description": "When using delivery/watch/subscribe, whether to notify on completion. Defaults to true." },
+                "notify": { "type": "boolean", "description": "When using delivery/watch/subscribe, whether to notify on completion. Defaults to true. If auto_inject=true and notify is omitted, notify behaves as true so the completion can be delivered." },
+                "auto_inject": { "type": "boolean", "description": "Automatically inject completed task stdout/stderr into the next LLM turn. Defaults to true; set false to opt out." },
+                "auto_inject_format": { "type": "string", "enum": ["system_reminder", "user_message"], "description": "Format for automatic background completion injection. Defaults to system_reminder." },
+                "auto_inject_max_bytes": { "type": "integer", "description": "Override maximum stdout bytes for automatic injection. Defaults to the standard injected-context 16KB cap; stderr uses the smaller of this value and 2048 bytes." },
                 "wake": { "type": "boolean", "description": "When using delivery/watch/subscribe, whether to wake on completion. Defaults to true." },
                 "max_wait_seconds": { "type": "integer", "description": "When using wait, maximum seconds to block before returning. Defaults to 60, capped at 3600. Use 0 for an immediate check." },
                 "return_on_progress": { "type": "boolean", "description": "When using wait, return as soon as the task emits a progress/checkpoint event instead of only completion or timeout. Defaults to true." },
@@ -661,9 +682,21 @@ impl Tool for BgTool {
                 let task_id = resolve_task_ids(manager, &ctx, &params, "delivery", false)
                     .await?
                     .remove(0);
-                let notify = params.notify.unwrap_or_else(default_watch_notify);
+                let notify = params
+                    .notify
+                    .unwrap_or_else(|| params.auto_inject || default_watch_notify());
                 let wake = params.wake.unwrap_or_else(default_watch_wake);
-                match manager.update_delivery(&task_id, notify, wake).await? {
+                match manager
+                    .update_delivery(
+                        &task_id,
+                        notify,
+                        wake,
+                        params.auto_inject,
+                        params.auto_inject_format.clone(),
+                        params.auto_inject_max_bytes,
+                    )
+                    .await?
+                {
                     Some(task) => Ok(ToolOutput::new(format!(
                         "Updated background task delivery for {}.\nStatus: {}\nNotify: {}\nWake: {}",
                         task_id,
@@ -873,6 +906,19 @@ mod tests {
             err.to_string().contains("Missing required bg action"),
             "err={err:?}"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn auto_inject_default_is_true() -> Result<()> {
+        let params: BgInput = serde_json::from_value(json!({
+            "action": "delivery",
+            "task_id": "task-default"
+        }))?;
+
+        assert!(params.auto_inject);
+        assert!(params.auto_inject_format.is_none());
+        assert!(params.auto_inject_max_bytes.is_none());
         Ok(())
     }
 }

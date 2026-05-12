@@ -2,6 +2,7 @@ use crate::bus::{
     BackgroundTaskProgress, BackgroundTaskProgressEvent, BackgroundTaskProgressKind,
     BackgroundTaskProgressSource, BackgroundTaskStatus,
 };
+use crate::turn::bg_completion::BackgroundAutoInjectConfig;
 use anyhow::Result;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -71,6 +72,12 @@ pub struct TaskStatusFile {
     pub notify: bool,
     #[serde(default)]
     pub wake: bool,
+    #[serde(default = "default_true")]
+    pub auto_inject: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_inject_format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_inject_max_bytes: Option<usize>,
     #[serde(default)]
     pub progress: Option<BackgroundTaskProgress>,
     #[serde(default)]
@@ -93,6 +100,15 @@ fn default_true() -> bool {
 
 pub(super) fn normalize_delivery(notify: bool, wake: bool) -> (bool, bool) {
     (notify || wake, wake)
+}
+
+pub(super) fn normalize_auto_inject_delivery(
+    notify: bool,
+    wake: bool,
+    auto_inject: bool,
+) -> (bool, bool) {
+    let (notify, wake) = normalize_delivery(notify, wake);
+    (notify || auto_inject, wake)
 }
 
 pub(super) fn push_task_event(status: &mut TaskStatusFile, event: BackgroundTaskEventRecord) {
@@ -279,7 +295,7 @@ pub(super) struct RunningTask {
     pub(super) status_path: PathBuf,
     pub(super) started_at: Instant,
     pub(super) started_at_rfc3339: String,
-    pub(super) delivery_flags: watch::Sender<(bool, bool)>,
+    pub(super) delivery_flags: watch::Sender<(bool, bool, BackgroundAutoInjectConfig)>,
     pub(super) handle: JoinHandle<Result<TaskResult>>,
 }
 

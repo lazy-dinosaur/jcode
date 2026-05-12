@@ -47,10 +47,11 @@ use crate::id;
 use crate::protocol::{Request, ServerEvent, decode_request, encode_event};
 use crate::provider::Provider;
 use crate::tool::Registry;
-use crate::turn::bg_completion::{
-    BackgroundCompletion, register_bg_completion_receiver, unregister_bg_completion_receiver,
-};
 use crate::transport::Stream;
+use crate::turn::bg_completion::{
+    BackgroundCompletion, enqueue_bg_completion_injection, register_bg_completion_receiver,
+    unregister_bg_completion_receiver,
+};
 use anyhow::Result;
 use futures::FutureExt;
 use jcode_agent_runtime::{InterruptSignal, SoftInterruptSource, StreamError};
@@ -85,13 +86,6 @@ struct SwarmStatusRefs<'a> {
     event_history: &'a Arc<RwLock<std::collections::VecDeque<SwarmEvent>>>,
     event_counter: &'a Arc<std::sync::atomic::AtomicU64>,
     event_tx: &'a broadcast::Sender<SwarmEvent>,
-}
-
-fn background_completion_system_reminder(completion: &BackgroundCompletion) -> String {
-    format!(
-        "Background task completion wake received.\n\nTask `{}` completed with exit code {} after {} ms. Stage 3 will inject stdout/stderr details into the turn context.",
-        completion.task_id, completion.exit_code, completion.duration_ms
-    )
 }
 
 fn server_reload_starting() -> bool {
@@ -1182,7 +1176,7 @@ pub(super) async fn handle_client(
                         }
                     }
                     if !client_is_processing
-                        && let Some(completion) = pending_bg_completions.pop_front()
+                        && pending_bg_completions.pop_front().is_some()
                     {
                         let id = next_bg_wake_request_id;
                         next_bg_wake_request_id = next_bg_wake_request_id.saturating_add(1);
@@ -1191,7 +1185,7 @@ pub(super) async fn handle_client(
                                 id,
                                 content: String::new(),
                                 images: vec![],
-                                system_reminder: Some(background_completion_system_reminder(&completion)),
+                                system_reminder: None,
                             },
                             &client_session_id,
                             &client_connection_id,
@@ -1225,6 +1219,17 @@ pub(super) async fn handle_client(
                         "received bg completion: {}",
                         completion.task_id
                     ));
+                    match enqueue_bg_completion_injection(&client_session_id, &completion) {
+                        Ok(true) => crate::logging::info(&format!(
+                            "[bg/inject] enqueued completion task_id={} session_id={}",
+                            completion.task_id, client_session_id
+                        )),
+                        Ok(false) => {}
+                        Err(err) => crate::logging::warn(&format!(
+                            "[bg/inject] enqueue failed: {}",
+                            err
+                        )),
+                    }
                     if client_is_processing {
                         pending_bg_completions.push_back(completion);
                     } else {
@@ -1235,7 +1240,7 @@ pub(super) async fn handle_client(
                                 id,
                                 content: String::new(),
                                 images: vec![],
-                                system_reminder: Some(background_completion_system_reminder(&completion)),
+                                system_reminder: None,
                             },
                             &client_session_id,
                             &client_connection_id,
@@ -2809,12 +2814,14 @@ async fn start_processing_message(
     let sibling_images: Vec<jcode_session_types::RenderedImage> = images
         .iter()
         .enumerate()
-        .map(|(idx, (media_type, data))| jcode_session_types::RenderedImage {
-            media_type: media_type.clone(),
-            data: data.clone(),
-            label: Some(format!("image {}", idx + 1)),
-            source: jcode_session_types::RenderedImageSource::UserInput,
-        })
+        .map(
+            |(idx, (media_type, data))| jcode_session_types::RenderedImage {
+                media_type: media_type.clone(),
+                data: data.clone(),
+                label: Some(format!("image {}", idx + 1)),
+                source: jcode_session_types::RenderedImageSource::UserInput,
+            },
+        )
         .collect();
     let _delivered_to_siblings = fanout_session_event_except(
         swarm.members,

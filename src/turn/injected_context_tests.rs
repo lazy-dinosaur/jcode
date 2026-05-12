@@ -78,7 +78,7 @@ fn system_reminder_format_renders_expected_header() {
 
     assert!(rendered.starts_with("[system-reminder]\nBackground task completed."));
     assert!(rendered.contains("- task_id: 297670ykyb"));
-    assert!(rendered.contains("- stdout (truncated to 16KB):\ndone"));
+    assert!(rendered.contains("- stdout (truncated to 16384 bytes):\ndone"));
 }
 
 #[test]

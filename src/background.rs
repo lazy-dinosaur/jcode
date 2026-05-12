@@ -7,7 +7,9 @@ use crate::bus::{
     BackgroundTaskCompleted, BackgroundTaskProgress, BackgroundTaskProgressEvent,
     BackgroundTaskProgressSource, BackgroundTaskStatus, Bus, BusEvent,
 };
-use crate::turn::bg_completion::{BackgroundCompletion, send_bg_completion};
+use crate::turn::bg_completion::{
+    BackgroundAutoInjectConfig, BackgroundCompletion, parse_injection_format, send_bg_completion,
+};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
@@ -29,8 +31,9 @@ pub use model::{
     format_progress_summary, render_progress_bar,
 };
 use model::{
-    EXIT_MARKER_PREFIX, RunningTask, normalize_delivery, progress_equivalent,
-    progress_event_record, progress_wait_reason, push_task_event, task_dir, terminal_event_record,
+    EXIT_MARKER_PREFIX, RunningTask, normalize_auto_inject_delivery, normalize_delivery,
+    progress_equivalent, progress_event_record, progress_wait_reason, push_task_event, task_dir,
+    terminal_event_record,
 };
 
 /// Manages background task execution
@@ -123,6 +126,14 @@ impl BackgroundTaskManager {
         })
     }
 
+    fn auto_inject_config(status: &TaskStatusFile) -> BackgroundAutoInjectConfig {
+        BackgroundAutoInjectConfig {
+            enabled: status.auto_inject,
+            format: parse_injection_format(status.auto_inject_format.as_deref()),
+            max_bytes: status.auto_inject_max_bytes,
+        }
+    }
+
     async fn read_status_file(&self, path: &std::path::Path) -> Option<TaskStatusFile> {
         let content = fs::read_to_string(path).await.ok()?;
         serde_json::from_str(&content).ok()
@@ -191,6 +202,7 @@ impl BackgroundTaskManager {
             output.clone()
         };
         if status.notify {
+            let auto_inject_config = Self::auto_inject_config(&status);
             let _ = send_bg_completion(BackgroundCompletion {
                 task_id: status.task_id.clone(),
                 exit_code: exit_code.unwrap_or(-1),
@@ -199,6 +211,9 @@ impl BackgroundTaskManager {
                 duration_ms: duration_secs.unwrap_or_default().mul_add(1000.0, 0.0) as u64,
                 session_id: status.delivery_session_id_or_owner().to_string(),
                 notify: status.notify,
+                auto_inject: auto_inject_config.enabled,
+                auto_inject_format: auto_inject_config.format,
+                auto_inject_max_bytes: auto_inject_config.max_bytes,
             });
         }
         Bus::global().publish(BusEvent::BackgroundTaskCompleted(BackgroundTaskCompleted {
@@ -262,6 +277,9 @@ impl BackgroundTaskManager {
             detached: true,
             notify,
             wake,
+            auto_inject: true,
+            auto_inject_format: None,
+            auto_inject_max_bytes: None,
             progress: None,
             event_history: Vec::new(),
         };
@@ -330,6 +348,9 @@ impl BackgroundTaskManager {
             detached: false,
             notify,
             wake,
+            auto_inject: true,
+            auto_inject_format: None,
+            auto_inject_max_bytes: None,
             progress: None,
             event_history: Vec::new(),
         };
@@ -353,7 +374,9 @@ impl BackgroundTaskManager {
         let delivery_session_id_owned = session_id.to_string();
         let started_at = Instant::now();
         let started_at_rfc3339_for_task = started_at_rfc3339.clone();
-        let (delivery_flags_tx, delivery_flags_rx) = watch::channel((notify, wake));
+        let auto_inject_config = BackgroundAutoInjectConfig::default();
+        let (delivery_flags_tx, delivery_flags_rx) =
+            watch::channel((notify, wake, auto_inject_config));
 
         // Spawn the background task
         let handle = tokio::spawn(async move {
@@ -374,7 +397,7 @@ impl BackgroundTaskManager {
                 Err(e) => (BackgroundTaskStatus::Failed, None, Some(e.to_string())),
             };
 
-            let (notify_flag, wake_flag) = *delivery_flags_rx.borrow();
+            let (notify_flag, wake_flag, auto_inject_config) = delivery_flags_rx.borrow().clone();
             let prior_status = tokio::fs::read_to_string(&status_path_clone)
                 .await
                 .ok()
@@ -403,6 +426,16 @@ impl BackgroundTaskManager {
                 detached: false,
                 notify: notify_flag,
                 wake: wake_flag,
+                auto_inject: auto_inject_config.enabled,
+                auto_inject_format: Some(match auto_inject_config.format {
+                    crate::turn::injected_context::InjectionFormat::SystemReminder => {
+                        "system_reminder".to_string()
+                    }
+                    crate::turn::injected_context::InjectionFormat::UserMessage => {
+                        "user_message".to_string()
+                    }
+                }),
+                auto_inject_max_bytes: auto_inject_config.max_bytes,
                 progress: prior_progress,
                 event_history: prior_event_history,
             };
@@ -414,17 +447,15 @@ impl BackgroundTaskManager {
                 let _ = tokio::fs::write(&status_path_clone, json).await;
             }
 
-            // Read output preview for notification
-            let output_preview = tokio::fs::read_to_string(&output_path_clone)
+            // Read full output for auto-injection and derive a short bus preview separately.
+            let output_text = tokio::fs::read_to_string(&output_path_clone)
                 .await
-                .map(|s| {
-                    if s.len() > 500 {
-                        format!("{}...", crate::util::truncate_str(&s, 500))
-                    } else {
-                        s
-                    }
-                })
                 .unwrap_or_default();
+            let output_preview = if output_text.len() > 500 {
+                format!("{}...", crate::util::truncate_str(&output_text, 500))
+            } else {
+                output_text.clone()
+            };
 
             // Publish completion event to the bus
             Bus::global().publish(BusEvent::BackgroundTaskCompleted(BackgroundTaskCompleted {
@@ -446,11 +477,14 @@ impl BackgroundTaskManager {
                 let _ = send_bg_completion(BackgroundCompletion {
                     task_id: task_id_clone,
                     exit_code: exit_code.unwrap_or(-1),
-                    stdout: output_preview,
+                    stdout: output_text,
                     stderr: String::new(),
                     duration_ms: duration_secs.mul_add(1000.0, 0.0) as u64,
                     session_id: final_status.delivery_session_id_or_owner().to_string(),
                     notify: notify_flag,
+                    auto_inject: auto_inject_config.enabled,
+                    auto_inject_format: auto_inject_config.format,
+                    auto_inject_max_bytes: auto_inject_config.max_bytes,
                 });
             }
 
@@ -525,6 +559,9 @@ impl BackgroundTaskManager {
             detached: false,
             notify: true,
             wake: wake_on_completion,
+            auto_inject: true,
+            auto_inject_format: None,
+            auto_inject_max_bytes: None,
             progress: None,
             event_history: Vec::new(),
         };
@@ -542,7 +579,9 @@ impl BackgroundTaskManager {
         let started_at = Instant::now();
         let started_at_rfc3339 = initial_status.started_at.clone();
         let display_name_owned = initial_status.display_name.clone();
-        let (delivery_flags_tx, delivery_flags_rx) = watch::channel((true, wake_on_completion));
+        let auto_inject_config = BackgroundAutoInjectConfig::default();
+        let (delivery_flags_tx, delivery_flags_rx) =
+            watch::channel((true, wake_on_completion, auto_inject_config));
 
         let wrapper_handle = tokio::spawn(async move {
             let tool_result = handle.await;
@@ -573,7 +612,7 @@ impl BackgroundTaskManager {
                 let _ = file.write_all(output_text.as_bytes()).await;
             }
 
-            let (notify_flag, wake_flag) = *delivery_flags_rx.borrow();
+            let (notify_flag, wake_flag, auto_inject_config) = delivery_flags_rx.borrow().clone();
             let prior_status = tokio::fs::read_to_string(&status_path_clone)
                 .await
                 .ok()
@@ -601,6 +640,16 @@ impl BackgroundTaskManager {
                 detached: false,
                 notify: notify_flag,
                 wake: wake_flag,
+                auto_inject: auto_inject_config.enabled,
+                auto_inject_format: Some(match auto_inject_config.format {
+                    crate::turn::injected_context::InjectionFormat::SystemReminder => {
+                        "system_reminder".to_string()
+                    }
+                    crate::turn::injected_context::InjectionFormat::UserMessage => {
+                        "user_message".to_string()
+                    }
+                }),
+                auto_inject_max_bytes: auto_inject_config.max_bytes,
                 progress: prior_progress,
                 event_history: prior_event_history,
             };
@@ -612,10 +661,11 @@ impl BackgroundTaskManager {
                 let _ = tokio::fs::write(&status_path_clone, json).await;
             }
 
-            let output_preview = if output_text.len() > 500 {
-                format!("{}...", crate::util::truncate_str(&output_text, 500))
+            let full_output_text = output_text;
+            let output_preview = if full_output_text.len() > 500 {
+                format!("{}...", crate::util::truncate_str(&full_output_text, 500))
             } else {
-                output_text
+                full_output_text.clone()
             };
 
             Bus::global().publish(BusEvent::BackgroundTaskCompleted(BackgroundTaskCompleted {
@@ -637,11 +687,14 @@ impl BackgroundTaskManager {
                 let _ = send_bg_completion(BackgroundCompletion {
                     task_id: task_id_clone,
                     exit_code: exit_code.unwrap_or(-1),
-                    stdout: output_preview,
+                    stdout: full_output_text,
                     stderr: String::new(),
                     duration_ms: duration_secs.mul_add(1000.0, 0.0) as u64,
                     session_id: final_status.delivery_session_id_or_owner().to_string(),
                     notify: notify_flag,
+                    auto_inject: auto_inject_config.enabled,
+                    auto_inject_format: auto_inject_config.format,
+                    auto_inject_max_bytes: auto_inject_config.max_bytes,
                 });
             }
 
@@ -940,14 +993,20 @@ impl BackgroundTaskManager {
         task_id: &str,
         notify: bool,
         wake: bool,
+        auto_inject: bool,
+        auto_inject_format: Option<String>,
+        auto_inject_max_bytes: Option<usize>,
     ) -> Result<Option<TaskStatusFile>> {
-        let (notify, wake) = normalize_delivery(notify, wake);
+        let (notify, wake) = normalize_auto_inject_delivery(notify, wake, auto_inject);
         let status_path = self.status_path_for(task_id);
         let Some(mut status) = self.read_status_file(&status_path).await else {
             return Ok(None);
         };
         status.notify = notify;
         status.wake = wake;
+        status.auto_inject = auto_inject;
+        status.auto_inject_format = auto_inject_format;
+        status.auto_inject_max_bytes = auto_inject_max_bytes;
         let event_status = status.status.clone();
         let event_exit_code = status.exit_code;
         let event_progress = status.progress.clone();
@@ -956,7 +1015,10 @@ impl BackgroundTaskManager {
             BackgroundTaskEventRecord {
                 kind: BackgroundTaskEventKind::DeliveryUpdated,
                 timestamp: Utc::now().to_rfc3339(),
-                message: Some(format!("notify={}, wake={}", notify, wake)),
+                message: Some(format!(
+                    "notify={}, wake={}, auto_inject={}",
+                    notify, wake, auto_inject
+                )),
                 status: Some(event_status),
                 exit_code: event_exit_code,
                 progress: event_progress,
@@ -965,7 +1027,15 @@ impl BackgroundTaskManager {
         self.write_status_file(&status_path, &status).await;
 
         if let Some(task) = self.tasks.read().await.get(task_id) {
-            let _ = task.delivery_flags.send((notify, wake));
+            let _ = task.delivery_flags.send((
+                notify,
+                wake,
+                BackgroundAutoInjectConfig {
+                    enabled: status.auto_inject,
+                    format: parse_injection_format(status.auto_inject_format.as_deref()),
+                    max_bytes: status.auto_inject_max_bytes,
+                },
+            ));
         }
 
         Ok(Some(status))
@@ -989,7 +1059,7 @@ impl BackgroundTaskManager {
             task.handle.abort();
 
             // Update status file
-            let (notify_flag, wake_flag) = *task.delivery_flags.borrow();
+            let (notify_flag, wake_flag, auto_inject_config) = task.delivery_flags.borrow().clone();
             let mut final_status = TaskStatusFile {
                 task_id: task.task_id,
                 tool_name: task.tool_name,
@@ -1006,6 +1076,16 @@ impl BackgroundTaskManager {
                 detached: false,
                 notify: notify_flag,
                 wake: wake_flag,
+                auto_inject: auto_inject_config.enabled,
+                auto_inject_format: Some(match auto_inject_config.format {
+                    crate::turn::injected_context::InjectionFormat::SystemReminder => {
+                        "system_reminder".to_string()
+                    }
+                    crate::turn::injected_context::InjectionFormat::UserMessage => {
+                        "user_message".to_string()
+                    }
+                }),
+                auto_inject_max_bytes: auto_inject_config.max_bytes,
                 progress: None,
                 event_history: Vec::new(),
             };
