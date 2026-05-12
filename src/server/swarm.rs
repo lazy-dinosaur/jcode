@@ -831,6 +831,7 @@ pub(super) async fn update_member_status_with_report(
         agent_name,
         member_changed,
         status_changed,
+        report_changed,
         old_status,
         _is_headless,
         report_back_to_session_id,
@@ -863,12 +864,13 @@ pub(super) async fn update_member_status_with_report(
                 name,
                 member_changed,
                 status_changed,
+                report_changed,
                 previous_status,
                 is_headless,
                 report_back_to_session_id,
             )
         } else {
-            (None, None, false, false, String::new(), false, None)
+            (None, None, false, false, false, String::new(), false, None)
         }
     };
     if let Some(ref id) = swarm_id {
@@ -897,11 +899,25 @@ pub(super) async fn update_member_status_with_report(
 
         broadcast_swarm_status(id, swarm_members, swarms_by_id).await;
 
-        let should_notify_coordinator = status_changed
+        // M38: also fanout when the worker submits a *new* completion report
+        // body while its lifecycle status has not changed (e.g. an initial
+        // short "I'm done" ping followed by the full audit body once the
+        // worker is already in `ready`). Pre-M38 this notification path was
+        // gated on `status_changed`, which silently swallowed the second
+        // report and left the body trapped in `member.latest_completion_report`
+        // without ever reaching the coordinator.
+        //
+        // `report_changed` is only true when `completion_report.is_some()` AND
+        // the body differs from `member.latest_completion_report`, so a
+        // duplicate report with identical text is still a noop.
+        let should_notify_coordinator = (status_changed
             && ((status == "completed")
                 || (report_back_to_session_id.is_some()
                     && old_status == "running"
-                    && matches!(status, "ready" | "failed" | "stopped")));
+                    && matches!(status, "ready" | "failed" | "stopped"))))
+            || (report_changed
+                && report_back_to_session_id.is_some()
+                && matches!(status, "ready" | "failed" | "stopped" | "completed"));
         if should_notify_coordinator {
             let fallback_coordinator_id =
                 if report_back_to_session_id.as_deref() == Some(session_id) {
