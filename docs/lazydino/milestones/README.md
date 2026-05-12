@@ -13,7 +13,7 @@ self-contained handoff card. 다음 세션 시작 시 사용 패턴:
 |---|---|---|---|---|
 | 1 | M11 | ✅ DONE (framework 게이트) | 6 stages complete, latest Stage 6 deployed | [M11.md](./M11.md) |
 | 2 | M41 | ✅ DONE (라이브 검증 + 배포 완료) | fix + 4 회귀 테스트, deploy `m41-eefa3744`, fork pushed | [M41.md](./M41.md) |
-| 3 | M42 | 🔴 OPEN, **기록만** (라이브 hang 재현 1회) | 진단부터 (debug socket dump + transport 분석) | [M42.md](./M42.md) |
+| 3 | M42 | ✅ DONE 2026-05-13 (deploy `lazydino-6d81399a`) | stale `checking websocket` label clear (StatusDetail empty-string contract) | [M42.md](./M42.md) |
 | 4 | M40 | **High** (UX 직접 타격, 3 sub-issue) | Phase 1-4, image/slash/1m | [M40.md](./M40.md) |
 | 5 | M17 | **High** (사용자 워크플로우) | A vs B1 결정 + ~50줄 ~ 수백줄 | [M17.md](./M17.md) |
 | 6 | M22 | **Medium-High** (2026-05-12 재현) | 진단부터 (trace log) | [M22.md](./M22.md) |

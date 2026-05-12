@@ -23,10 +23,14 @@
   - **workaround**: bg/output/wait 같은 task lookup 류는 메인 세션에서
     직접 호출. subagent 위임 금지.
 
-- **M42 — `checking websocket` 무한 thinking hang** (2026-05-13 00:00 재현)
-  - 메인 세션이 subagent 결과 기다리며 thinking 무한 대기
-  - status: `thinking… 108.3s · checking websocket · existing websocket · +1 queued`
-  - **진단 미수행, 기록만**. 다음 재현 시 즉시 debug socket dump 필요.
+- **M42 — `checking websocket` stale label** (2026-05-13 fix)
+  - ✅ DONE (2026-05-13). deploy `lazydino-6d81399a`.
+  - Root cause: `StatusDetail { detail: String }` 가 set-only, clear
+    semantics 없음 → healthcheck 성공 후에도 `"checking websocket"` 이
+    Thinking 동안 stale 하게 렌더. 실제 hang 아님 (bg tool 91s 실행
+    중이었던 게 thinking 108.3s 와 일치).
+  - Fix: 빈 string detail 을 explicit clear 로 contract 정립
+    (provider/UI/agent 3 곳 동시에 mirror).
 
 - **M22 — same-round 두 번째 subagent deferred** (2026-05-12 재현)
   - **workaround**: round 당 1 spawn 만. 어기지 말 것.
