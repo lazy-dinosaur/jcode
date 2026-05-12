@@ -95,12 +95,40 @@ pub(in crate::tui::app) async fn submit_prepared_remote_input(
     }
 
     if let Some(skill_name) = SkillRegistry::parse_invocation(&prepared.expanded) {
-        remote.activate_skill(skill_name).await?;
-        app.input.clear();
-        app.cursor_pos = 0;
-        app.pending_images.clear();
-        app.set_status_notice(format!("Activating skill: /{}", skill_name));
-        return Ok(());
+        // Only treat the leading-slash token as a skill invocation when a skill
+        // with that name actually exists. Without this guard, inputs that happen
+        // to start with a slash but are intended as ordinary prompts (e.g. an
+        // absolute path like `/tmp/foo.txt 한 줄 추가해줘`) were unconditionally
+        // shipped to `remote.activate_skill`, which silently no-ops on the
+        // server side and leaves the client stuck in `sending...` forever.
+        // Mirrors the local fallback in `tui/app/input.rs` (skill snapshot ->
+        // working-dir reload -> unknown_skill_invocation message).
+        let mut skill_known = app.current_skills_snapshot().get(skill_name).is_some();
+        if !skill_known {
+            let working_dir = app.session.working_dir.as_deref().map(std::path::Path::new);
+            if let Ok(reloaded) = SkillRegistry::load_for_working_dir(working_dir) {
+                if reloaded.get(skill_name).is_some() {
+                    skill_known = true;
+                }
+                app.skills = std::sync::Arc::new(reloaded.clone());
+                if let Ok(mut shared) = app.registry.skills().try_write() {
+                    *shared = reloaded;
+                }
+            }
+        }
+
+        if skill_known {
+            remote.activate_skill(skill_name).await?;
+            app.input.clear();
+            app.cursor_pos = 0;
+            app.pending_images.clear();
+            app.set_status_notice(format!("Activating skill: /{}", skill_name));
+            return Ok(());
+        }
+        // Unknown skill: fall through and let the input be sent as a normal
+        // prompt. The server will route it through its own slash-command and
+        // project-command resolution; if nothing matches there either, the
+        // model still receives the literal text and the user is not stuck.
     }
 
     app.commit_pending_streaming_assistant_message();
