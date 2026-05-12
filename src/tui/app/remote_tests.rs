@@ -282,3 +282,161 @@ fn handle_server_event_applies_remote_memory_activity_snapshot() {
 
     crate::memory::clear_activity();
 }
+
+// ---------------------------------------------------------------------------
+// M41 — server-initiated turn wake-up regression tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn m41_text_delta_on_idle_client_wakes_and_requests_redraw() {
+    use crate::tui::app::ProcessingStatus;
+
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let _guard = rt.enter();
+    let mut app = create_test_app();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+
+    // Pre-conditions: client never called begin_remote_send(), so state is
+    // the same as right after attach to a server already busy with a
+    // background-initiated turn.
+    assert!(!app.is_processing);
+    assert!(matches!(app.status, ProcessingStatus::Idle));
+    assert!(app.current_message_id.is_none());
+
+    let needs_redraw = handle_server_event(
+        &mut app,
+        ServerEvent::TextDelta {
+            text: "Hello".to_string(),
+        },
+        &mut remote,
+    );
+
+    // The wake-up path forces a redraw even on native full-tier terminals
+    // where `eager_stream_redraw` is false.
+    assert!(
+        needs_redraw,
+        "M41: first TextDelta on idle client must request a redraw"
+    );
+    assert!(
+        app.is_processing,
+        "M41: wake-up must flip is_processing to true"
+    );
+    assert!(
+        !matches!(app.status, ProcessingStatus::Idle),
+        "M41: wake-up must advance status out of Idle"
+    );
+    assert!(
+        app.processing_started.is_some(),
+        "M41: wake-up must record processing_started"
+    );
+}
+
+#[test]
+fn m41_tool_start_on_idle_client_wakes_and_requests_redraw() {
+    use crate::tui::app::ProcessingStatus;
+
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let _guard = rt.enter();
+    let mut app = create_test_app();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+
+    assert!(!app.is_processing);
+    assert!(matches!(app.status, ProcessingStatus::Idle));
+
+    let needs_redraw = handle_server_event(
+        &mut app,
+        ServerEvent::ToolStart {
+            id: "tool-1".to_string(),
+            name: "bash".to_string(),
+        },
+        &mut remote,
+    );
+
+    assert!(
+        needs_redraw,
+        "M41: first ToolStart on idle client must request a redraw"
+    );
+    assert!(app.is_processing);
+    // ToolStart handler overrides status to RunningTool.
+    assert!(matches!(app.status, ProcessingStatus::RunningTool(_)));
+}
+
+#[test]
+fn m41_done_completes_server_initiated_turn_without_current_message_id() {
+    use crate::tui::app::ProcessingStatus;
+
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let _guard = rt.enter();
+    let mut app = create_test_app();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+
+    // Drive a small server-initiated turn: TextDelta wakes the client,
+    // then Done arrives with an id that the client never recorded.
+    let _ = handle_server_event(
+        &mut app,
+        ServerEvent::TextDelta {
+            text: "background result\n".to_string(),
+        },
+        &mut remote,
+    );
+    assert!(app.is_processing);
+    assert!(app.current_message_id.is_none());
+
+    let needs_redraw = handle_server_event(
+        &mut app,
+        ServerEvent::Done { id: 4242 },
+        &mut remote,
+    );
+
+    assert!(
+        needs_redraw,
+        "M41: Done that closes a woken server-initiated turn must request a redraw"
+    );
+    assert!(
+        !app.is_processing,
+        "M41: Done cleanup must flip is_processing back to false"
+    );
+    assert!(
+        matches!(app.status, ProcessingStatus::Idle),
+        "M41: Done cleanup must return status to Idle"
+    );
+    assert!(
+        app.streaming_text.is_empty(),
+        "M41: streaming buffer should have been committed by Done cleanup"
+    );
+}
+
+#[test]
+fn m41_text_delta_on_active_local_turn_does_not_trigger_wake_logic() {
+    use crate::tui::app::ProcessingStatus;
+    use std::time::Instant;
+
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let _guard = rt.enter();
+    let mut app = create_test_app();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+
+    // Simulate that begin_remote_send() already set up local state.
+    app.is_processing = true;
+    app.current_message_id = Some(7);
+    app.status = ProcessingStatus::Sending;
+    app.processing_started = Some(Instant::now());
+
+    // The wake-up path should NOT fire (already processing), so the return
+    // value reflects normal throttling rules. We don't assert a specific
+    // bool here because it depends on terminal profile, but we assert that
+    // the state machine was not perturbed.
+    let _ = handle_server_event(
+        &mut app,
+        ServerEvent::TextDelta {
+            text: "abc".to_string(),
+        },
+        &mut remote,
+    );
+
+    assert_eq!(app.current_message_id, Some(7));
+    assert!(app.is_processing);
+    // status should have advanced into Streaming via the existing branch,
+    // not been touched by the wake-up code path.
+    assert!(matches!(app.status, ProcessingStatus::Streaming));
+}
