@@ -109,6 +109,12 @@ fn global_config_cache_reloads_after_manual_file_edit() {
     // manual edit even on filesystems with coarse timestamp resolution.
     std::fs::write(&path, "[display]\ncentered = true\n# edited\n").expect("edit config");
 
+    // `config()` debounces stat() calls (500ms). Two calls fired back-to-back
+    // in a test will skip the reload-check on the second one. Tests that need
+    // to observe manual file edits must bypass the debounce explicitly. This
+    // mirrors the production path a user would take (`/reload-config` slash
+    // command or an explicit `force_reload_config()` call).
+    assert!(crate::config::force_reload_config());
     assert!(crate::config::config().display.centered);
 
     restore_env_var("JCODE_HOME", prev_home);
@@ -159,6 +165,10 @@ fn cached_external_auth_trust_observes_manual_revocation() {
         "[auth]\ntrusted_external_source_paths = []\n# manually revoked\n",
     )
     .expect("manually revoke external auth trust");
+
+    // Bypass the 500ms debounce — see comment in
+    // `global_config_cache_reloads_after_manual_file_edit` above.
+    assert!(crate::config::force_reload_config());
 
     assert!(!Config::external_auth_source_allowed_for_path_cached(
         "test_source",
