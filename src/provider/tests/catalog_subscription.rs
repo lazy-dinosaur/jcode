@@ -117,9 +117,15 @@ fn test_anthropic_model_catalog_hydrates_from_disk_cache() {
     with_clean_provider_test_env(|| {
         crate::env::remove_var("ANTHROPIC_API_KEY");
         crate::auth::claude::set_active_account_override(Some("disk-claude".to_string()));
+        // Use a fake model id that does NOT match any hard-coded branch in
+        // `context_limit_for_model_with_provider_and_cache`. The real
+        // `claude-opus-4-7` family early-returns 200_000 (or 1_048_576 only
+        // when `[1m]` suffix is present), short-circuiting the disk cache
+        // path that this test is supposed to exercise. Mirrors the openai
+        // sibling test which uses `openai-disk-only-model`.
         persist_anthropic_model_catalog(&AnthropicModelCatalog {
-            available_models: vec!["claude-opus-4-7".to_string()],
-            context_limits: [("claude-opus-4-7".to_string(), 1_048_576)]
+            available_models: vec!["claude-disk-only-model".to_string()],
+            context_limits: [("claude-disk-only-model".to_string(), 1_048_576)]
                 .into_iter()
                 .collect(),
         });
@@ -127,11 +133,14 @@ fn test_anthropic_model_catalog_hydrates_from_disk_cache() {
         assert_eq!(
             cached_anthropic_model_ids(),
             Some(vec![
-                "claude-opus-4-7".to_string(),
-                "claude-opus-4-7[1m]".to_string()
+                "claude-disk-only-model".to_string(),
+                "claude-disk-only-model[1m]".to_string()
             ])
         );
-        assert_eq!(context_limit_for_model("claude-opus-4-7"), Some(1_048_576));
+        assert_eq!(
+            context_limit_for_model("claude-disk-only-model"),
+            Some(1_048_576)
+        );
 
         crate::auth::claude::set_active_account_override(None);
     });
