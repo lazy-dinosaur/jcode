@@ -71,6 +71,7 @@ fn write_test_api_key(temp: &TempDir, env_file: &str, env_key: &str, value: &str
 fn isolate_openrouter_autodetect_env() -> Vec<EnvVarGuard> {
     let mut guards = vec![
         EnvVarGuard::remove("JCODE_HOME"),
+        EnvVarGuard::remove("OPENROUTER_API_KEY"),
         EnvVarGuard::remove("JCODE_OPENROUTER_API_BASE"),
         EnvVarGuard::remove("JCODE_OPENROUTER_API_KEY_NAME"),
         EnvVarGuard::remove("JCODE_OPENROUTER_ENV_FILE"),
