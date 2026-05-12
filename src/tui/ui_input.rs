@@ -1043,7 +1043,22 @@ mod tests {
             composer_mode("! cargo test", true),
             ComposerMode::ShellRemote
         );
-        assert_eq!(composer_mode(" /help", false), ComposerMode::SlashCommand);
+        // M40 Phase 3 — leading whitespace escapes SlashCommand mode.
+        // Pure `/help` still enters SlashCommand, but ` /help` (or any input
+        // beginning with whitespace before the slash) is treated as plain
+        // chat content. This is consistent with `parse_invocation` returning
+        // None for slash candidates that include a space.
+        assert_eq!(composer_mode("/help", false), ComposerMode::SlashCommand);
+        assert_eq!(composer_mode(" /help", false), ComposerMode::Chat);
+        assert_eq!(
+            composer_mode(" /tmp/test.txt 만들어", false),
+            ComposerMode::Chat
+        );
+        assert_eq!(
+            composer_mode("\t/foo", false),
+            ComposerMode::Chat,
+            "leading tab also escapes slash mode"
+        );
         assert_eq!(composer_mode("hello", false), ComposerMode::Chat);
     }
 
