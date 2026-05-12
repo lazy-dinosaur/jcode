@@ -7,19 +7,20 @@ self-contained handoff card. 다음 세션 시작 시 사용 패턴:
 2. 에이전트가 `docs/lazydino/milestones/M11.md` 를 읽음
 3. 거기에 적힌 worktree / branch / 분석 문서 / verification 으로 바로 진행
 
-## 우선순위 (Round 6 종료 시점)
+## 우선순위 (Round 6 종료 시점 + 2026-05-12 라이브 갱신)
 
 | 순위 | ID | 우선도 | 추정 작업량 | 카드 |
 |---|---|---|---|---|
 | 1 | M11 | ✅ DONE (framework 게이트) | 6 stages complete, latest Stage 6 deployed | [M11.md](./M11.md) |
-| 2 | M40 | **High** (UX 직접 타격, 3 sub-issue) | Phase 1-4, image/slash/1m | [M40.md](./M40.md) |
-| 3 | M17 | **High** (사용자 워크플로우) | A vs B1 결정 + ~50줄 ~ 수백줄 | [M17.md](./M17.md) |
-| 4 | M16 | Medium-High (구조 개선) | 4 sub-step | [M16.md](./M16.md) |
-| 5 | M2  | Medium-High | 재현부터 | [M2.md](./M2.md) |
-| 6 | M4  | Medium (BY-DESIGN) | UX caveat 정리 | [M4.md](./M4.md) |
-| 7 | M15 | Low-Medium (debug UX) | 작은 fix | [M15.md](./M15.md) |
-| 8 | M22 | Low (workaround 있음) | 진단부터 | [M22.md](./M22.md) |
-| 9 | M23 | Low (디스크 충분 동안) | tool 작성 | [M23.md](./M23.md) |
+| 2 | M41 | **High** (라이브 재현, fix 패치 완성/배포 중) | wake-up + Done 보정, 회귀 4 테스트 | [M41.md](./M41.md) |
+| 3 | M40 | **High** (UX 직접 타격, 3 sub-issue) | Phase 1-4, image/slash/1m | [M40.md](./M40.md) |
+| 4 | M17 | **High** (사용자 워크플로우) | A vs B1 결정 + ~50줄 ~ 수백줄 | [M17.md](./M17.md) |
+| 5 | M22 | **Medium-High** (2026-05-12 재현) | 진단부터 (trace log) | [M22.md](./M22.md) |
+| 6 | M16 | Medium-High (구조 개선) | 4 sub-step | [M16.md](./M16.md) |
+| 7 | M2  | Medium-High | 재현부터 | [M2.md](./M2.md) |
+| 8 | M4  | Medium (BY-DESIGN) | UX caveat 정리 | [M4.md](./M4.md) |
+| 9 | M15 | Low-Medium (debug UX) | 작은 fix | [M15.md](./M15.md) |
+| 10 | M23 | Low (디스크 충분 동안) | tool 작성 | [M23.md](./M23.md) |
 
 ## 공통 환경 (모든 카드에 적용)
 
