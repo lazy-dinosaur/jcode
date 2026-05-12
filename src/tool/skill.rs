@@ -151,7 +151,9 @@ impl SkillTool {
             output.push_str(&format!("  {}\n", skill.description));
             output.push_str(&format!("  Path: {}\n", skill.path.display()));
             if let Some(ref tools) = skill.allowed_tools {
-                output.push_str(&format!("  Tools: {}\n", tools.join(", ")));
+                output.push_str(&format!("  Tools (advisory): {}\n", tools.join(", ")));
+            } else {
+                output.push_str("  Tools (advisory): all tools available\n");
             }
             output.push('\n');
         }
@@ -233,7 +235,12 @@ impl SkillTool {
             output.push_str(&format!("**Description:** {}\n", skill.description));
             output.push_str(&format!("**Path:** {}\n", skill.path.display()));
             if let Some(ref tools) = skill.allowed_tools {
-                output.push_str(&format!("**Allowed tools:** {}\n", tools.join(", ")));
+                output.push_str(&format!(
+                    "**Allowed tools (advisory):** {}\n",
+                    tools.join(", ")
+                ));
+            } else {
+                output.push_str("**Allowed tools (advisory):** all tools available\n");
             }
             output.push_str("\n---\n\n");
             output.push_str(&skill.content);
