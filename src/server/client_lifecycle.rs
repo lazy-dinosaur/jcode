@@ -52,6 +52,9 @@ use crate::turn::bg_completion::{
     BackgroundCompletion, enqueue_bg_completion_injection, register_bg_completion_receiver,
     unregister_bg_completion_receiver,
 };
+use crate::turn::inject_wake::{
+    InjectWake, register_inject_wake_receiver, unregister_inject_wake_receiver,
+};
 use anyhow::Result;
 use futures::FutureExt;
 use jcode_agent_runtime::{InterruptSignal, SoftInterruptSource, StreamError};
@@ -1072,6 +1075,18 @@ pub(super) async fn handle_client(
         }
     };
     let mut pending_bg_completions: VecDeque<BackgroundCompletion> = VecDeque::new();
+    let mut inject_wake_rx = match register_inject_wake_receiver(&client_session_id) {
+        Ok(rx) => rx,
+        Err(err) => {
+            crate::logging::warn(&format!(
+                "Failed to register inject wake receiver for session {}: {}",
+                client_session_id, err
+            ));
+            let (_tx, rx) = mpsc::unbounded_channel();
+            rx
+        }
+    };
+    let mut pending_inject_wakes: VecDeque<InjectWake> = VecDeque::new();
     let mut next_bg_wake_request_id = u64::MAX / 2;
 
     loop {
@@ -1208,6 +1223,39 @@ pub(super) async fn handle_client(
                         )
                         .await;
                     }
+                    if !client_is_processing
+                        && pending_inject_wakes.pop_front().is_some()
+                    {
+                        let id = next_bg_wake_request_id;
+                        next_bg_wake_request_id = next_bg_wake_request_id.saturating_add(1);
+                        start_processing_message(
+                            ProcessingMessage {
+                                id,
+                                content: String::new(),
+                                images: vec![],
+                                system_reminder: None,
+                            },
+                            &client_session_id,
+                            &client_connection_id,
+                            &mut ProcessingState {
+                                client_is_processing: &mut client_is_processing,
+                                message_id: &mut processing_message_id,
+                                session_id: &mut processing_session_id,
+                                task: &mut processing_task,
+                            },
+                            &agent,
+                            &client_event_tx,
+                            &processing_done_tx,
+                            &SwarmStatusRefs {
+                                members: &swarm_members,
+                                swarms_by_id: &swarms_by_id,
+                                event_history: &event_history,
+                                event_counter: &event_counter,
+                                event_tx: &swarm_event_tx,
+                            },
+                        )
+                        .await;
+                    }
                 } else {
                     break;
                 }
@@ -1232,6 +1280,48 @@ pub(super) async fn handle_client(
                     }
                     if client_is_processing {
                         pending_bg_completions.push_back(completion);
+                    } else {
+                        let id = next_bg_wake_request_id;
+                        next_bg_wake_request_id = next_bg_wake_request_id.saturating_add(1);
+                        start_processing_message(
+                            ProcessingMessage {
+                                id,
+                                content: String::new(),
+                                images: vec![],
+                                system_reminder: None,
+                            },
+                            &client_session_id,
+                            &client_connection_id,
+                            &mut ProcessingState {
+                                client_is_processing: &mut client_is_processing,
+                                message_id: &mut processing_message_id,
+                                session_id: &mut processing_session_id,
+                                task: &mut processing_task,
+                            },
+                            &agent,
+                            &client_event_tx,
+                            &processing_done_tx,
+                            &SwarmStatusRefs {
+                                members: &swarm_members,
+                                swarms_by_id: &swarms_by_id,
+                                event_history: &event_history,
+                                event_counter: &event_counter,
+                                event_tx: &swarm_event_tx,
+                            },
+                        )
+                        .await;
+                    }
+                }
+                continue;
+            }
+            inject_wake = inject_wake_rx.recv() => {
+                if let Some(wake) = inject_wake {
+                    crate::logging::info(&format!(
+                        "received inject wake: source={} session_id={}",
+                        wake.source_kind, wake.session_id
+                    ));
+                    if client_is_processing {
+                        pending_inject_wakes.push_back(wake);
                     } else {
                         let id = next_bg_wake_request_id;
                         next_bg_wake_request_id = next_bg_wake_request_id.saturating_add(1);
@@ -1500,6 +1590,7 @@ pub(super) async fn handle_client(
                 session_control = refresh_session_control_handle(&client_session_id, &agent).await;
                 if previous_session_id != client_session_id {
                     unregister_bg_completion_receiver(&previous_session_id);
+                    unregister_inject_wake_receiver(&previous_session_id);
                     bg_completion_rx = match register_bg_completion_receiver(&client_session_id) {
                         Ok(rx) => rx,
                         Err(err) => {
@@ -1511,7 +1602,19 @@ pub(super) async fn handle_client(
                             rx
                         }
                     };
+                    inject_wake_rx = match register_inject_wake_receiver(&client_session_id) {
+                        Ok(rx) => rx,
+                        Err(err) => {
+                            crate::logging::warn(&format!(
+                                "Failed to register inject wake receiver for session {} after clear: {}",
+                                client_session_id, err
+                            ));
+                            let (_tx, rx) = mpsc::unbounded_channel();
+                            rx
+                        }
+                    };
                     pending_bg_completions.clear();
+                    pending_inject_wakes.clear();
                 }
             }
 
@@ -2738,6 +2841,7 @@ pub(super) async fn handle_client(
     }
 
     unregister_bg_completion_receiver(&client_session_id);
+    unregister_inject_wake_receiver(&client_session_id);
 
     cleanup_client_connection(
         &sessions,

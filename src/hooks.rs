@@ -530,6 +530,7 @@ fn enqueue_hook_injection(ctx: HookOutputContext<'_>, payload: &HookInjectPayloa
         dedupe_key: hook_inject_dedupe_key(ctx.hook_kind, ctx.tool_name, &payload.body),
     };
     enqueue_injection(ctx.session_id, injection)?;
+    crate::turn::inject_wake::send_inject_wake(ctx.session_id, "hook");
     Ok(())
 }
 
@@ -825,6 +826,30 @@ mod tests {
                 stdout: "hook body".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn hook_inject_path_triggers_wake_signal() {
+        let session_id = unique_hook_session("hook-inject-wake");
+        let mut rx = crate::turn::inject_wake::register_inject_wake_receiver(&session_id)
+            .expect("register inject wake receiver");
+
+        handle_hook_decision_stdout(
+            HookOutputContext {
+                session_id: &session_id,
+                hook_kind: TOOL_EXECUTE_AFTER,
+                tool_name: Some("bash"),
+                command: "cmd",
+            },
+            r#"{"inject":{"body":"hook body","format":"system_reminder"}}"#,
+        )
+        .unwrap();
+
+        let wake = rx.try_recv().expect("hook inject wake");
+        assert_eq!(wake.session_id, session_id);
+        assert_eq!(wake.source_kind, "hook");
+        crate::turn::inject_wake::unregister_inject_wake_receiver(&wake.session_id);
+        let _ = crate::turn::injected_context::drain_injections(&session_id).unwrap();
     }
 
     #[test]
