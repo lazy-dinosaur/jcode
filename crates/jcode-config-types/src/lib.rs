@@ -398,6 +398,13 @@ pub struct AgentsConfig {
     /// continuation turns. `None` uses the default (3). `Some(0)` means
     /// unlimited / trust hook scripts to self-throttle.
     pub max_lifecycle_deny_streak: Option<u8>,
+    /// Lazydino: allow recursive subagent calls (subagent inside subagent).
+    /// `false` (default) keeps upstream behavior — child subagents have
+    /// `subagent`, `task`, and `todo*` tools removed from their allowed set,
+    /// preventing unbounded recursion. `true` removes that restriction and
+    /// lets a child subagent spawn further subagents. Env override:
+    /// `JCODE_ALLOW_SUBAGENT_RECURSION=1`.
+    pub allow_subagent_recursion: bool,
 }
 
 /// Swarm coordination safety limits.

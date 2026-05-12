@@ -225,6 +225,17 @@ memory_sidecar_enabled = false
 #   JCODE_MAX_LIFECYCLE_DENY_STREAK=1 jcode
 # max_lifecycle_deny_streak = 3
 
+# Lazydino: allow recursive subagent calls (subagent inside subagent).
+# Default `false` matches upstream — child subagents have `subagent`, `task`,
+# and `todo*` tools removed from their allowed set to prevent unbounded
+# recursion. Set `true` to let a child subagent spawn further subagents.
+# Useful when you intentionally want deep delegation chains (e.g. a planner
+# subagent that itself delegates to coder/reviewer subagents).
+# Env override:
+#   JCODE_ALLOW_SUBAGENT_RECURSION=1 jcode
+# (also `true`/`yes`/`on`)
+# allow_subagent_recursion = false
+
 [swarm]
 # Lazydino M2 stage 3 — opt-in hard caps for concurrently active workers
 # owned by one coordinator. Active means any non-terminal worker status;

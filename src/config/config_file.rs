@@ -30,6 +30,7 @@ struct PartialAgentsConfig {
     memory_sidecar_enabled: bool,
     swarm_spawn_visible: Option<bool>,
     max_lifecycle_deny_streak: Option<u8>,
+    allow_subagent_recursion: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -58,6 +59,9 @@ impl PartialAgentsConfig {
         }
         if let Some(value) = self.max_lifecycle_deny_streak {
             agents.max_lifecycle_deny_streak = Some(value);
+        }
+        if let Some(value) = self.allow_subagent_recursion {
+            agents.allow_subagent_recursion = value;
         }
     }
 }

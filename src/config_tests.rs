@@ -561,6 +561,34 @@ fn test_agents_for_working_dir_max_lifecycle_deny_streak_project_override() {
 }
 
 #[test]
+fn test_agents_default_allow_subagent_recursion_is_false() {
+    let cfg = Config::default();
+    assert!(!cfg.agents.allow_subagent_recursion);
+}
+
+#[test]
+fn test_agents_for_working_dir_allow_subagent_recursion_project_override() {
+    let _home = isolated_jcode_home();
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let project = dir.path().join("project");
+    std::fs::create_dir_all(project.join(".jcode")).expect("create .jcode");
+    std::fs::write(
+        project.join(".jcode").join("config.toml"),
+        r#"
+        [agents]
+        allow_subagent_recursion = true
+        "#,
+    )
+    .expect("write project config");
+
+    let cfg = Config::default();
+    assert!(!cfg.agents.allow_subagent_recursion);
+
+    let agents = cfg.agents_for_working_dir(Some(&project));
+    assert!(agents.allow_subagent_recursion);
+}
+
+#[test]
 fn test_agents_for_working_dir_routes_and_routing_also_merge() {
     let _home = isolated_jcode_home();
     let dir = tempfile::TempDir::new().expect("tempdir");

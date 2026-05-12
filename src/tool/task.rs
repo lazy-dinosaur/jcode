@@ -413,8 +413,24 @@ impl Tool for SubagentTool {
         session.save()?;
 
         let mut allowed: HashSet<String> = self.registry.tool_names().await.into_iter().collect();
-        for blocked in ["subagent", "task", "todo", "todowrite", "todoread"] {
-            allowed.remove(blocked);
+        // Lazydino: allow optional recursive subagent calls. By default (and matching
+        // upstream behavior) child subagents have `subagent`/`task`/`todo*` removed
+        // from their tool set to prevent unbounded recursion. Setting
+        // `[agents] allow_subagent_recursion = true` in config.toml, or the env var
+        // `JCODE_ALLOW_SUBAGENT_RECURSION=1`, lifts that restriction.
+        let allow_recursion = {
+            let env_override = std::env::var("JCODE_ALLOW_SUBAGENT_RECURSION")
+                .ok()
+                .map(|v| matches!(v.as_str(), "1" | "true" | "yes" | "on"));
+            match env_override {
+                Some(value) => value,
+                None => agents.allow_subagent_recursion,
+            }
+        };
+        if !allow_recursion {
+            for blocked in ["subagent", "task", "todo", "todowrite", "todoread"] {
+                allowed.remove(blocked);
+            }
         }
 
         let summary_map: Arc<Mutex<HashMap<String, ToolSummary>>> =
