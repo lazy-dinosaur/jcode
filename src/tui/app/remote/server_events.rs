@@ -217,7 +217,15 @@ pub(in crate::tui::app) fn handle_server_event(
             eager_stream_redraw
         }
         ServerEvent::StatusDetail { detail } => {
-            app.status_detail = Some(detail);
+            // M42 — treat an empty detail as an explicit clear so providers can
+            // overwrite a stale label (e.g. `"checking websocket"`) once the
+            // underlying phase resolves. Without this, StatusDetail only has set
+            // semantics and stale labels survive the rest of the turn.
+            if detail.is_empty() {
+                app.status_detail = None;
+            } else {
+                app.status_detail = Some(detail);
+            }
             eager_stream_redraw
         }
         ServerEvent::MessageEnd => {
