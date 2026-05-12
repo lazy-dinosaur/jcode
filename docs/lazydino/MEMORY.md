@@ -19,7 +19,15 @@
 
 - **M43 — subagent 에서 `bg` 도구 접근 불일치** (2026-05-13 00:14 라이브)
   - subagent 에 위임한 `bg action="output"` 이 "도구 없음" 으로 실패.
-  - 진단 미수행. 가설 A (filtering 잔여) vs 가설 B (session-scope).
+  - 진단 1차 완료 (2026-05-13 07:30): **가설 A 확정**. quick subagent
+    (Haiku, OAuth) dump 결과 `bg` 가 LLM 한테 안 보임. 노출된 이름은
+    PascalCase Claude-Code 스타일 (`Bash`, `Read`, `Edit`, ...) →
+    OAuth tool advertisement 단에서 Claude-Code alias map 못 매기는
+    jcode-only tool 들 (`bg`, `bash_output`, `bash_kill` 등) 이
+    광고 자체에서 drop 되는 게 가장 유력. 추가 발견: `Agent`
+    (subagent alias) 가 노출됨 → `task.rs:431` recursion 차단이
+    내부 이름 기준이라 alias path 로 새는 중.
+  - Fix 미착수. 별도 swarm worker 에 위임 예정.
   - **workaround**: bg/output/wait 같은 task lookup 류는 메인 세션에서
     직접 호출. subagent 위임 금지.
 

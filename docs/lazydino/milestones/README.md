@@ -17,7 +17,7 @@ self-contained handoff card. 다음 세션 시작 시 사용 패턴:
 | 4 | M40 | **High** (UX 직접 타격, 3 sub-issue) | Phase 1-4, image/slash/1m | [M40.md](./M40.md) |
 | 5 | M17 | **High** (사용자 워크플로우) | A vs B1 결정 + ~50줄 ~ 수백줄 | [M17.md](./M17.md) |
 | 6 | M22 | **Medium-High** (2026-05-12 재현) | 진단부터 (trace log) | [M22.md](./M22.md) |
-| 7 | M43 | **Medium** (2026-05-13 라이브, workaround 있음) | 진단 (subagent tool dump) | [M43.md](./M43.md) |
+| 7 | M43 | **Medium** (2026-05-13 라이브, workaround 있음) | 진단 1차 완료 (가설 A 확정, OAuth tool advertisement drop), fix swarm 위임 예정 | [M43.md](./M43.md) |
 | 8 | M16 | Medium-High (구조 개선) | 4 sub-step | [M16.md](./M16.md) |
 | 9 | M2  | Medium-High | 재현부터 | [M2.md](./M2.md) |
 | 10 | M4  | Medium (BY-DESIGN) | UX caveat 정리 | [M4.md](./M4.md) |
