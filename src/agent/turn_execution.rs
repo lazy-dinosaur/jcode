@@ -1,7 +1,12 @@
 use super::*;
 
 impl Agent {
-    fn inject_pending_context_for_turn(&mut self) -> Result<()> {
+    async fn inject_pending_context_for_turn(&mut self) -> Result<()> {
+        crate::hooks::drain_pending_async_hook_injections(
+            &self.session.id,
+            std::time::Duration::from_millis(50),
+        )
+        .await?;
         let injections = crate::turn::injected_context::drain_injections(&self.session.id)?;
         if injections.is_empty() {
             return Ok(());
@@ -21,7 +26,7 @@ impl Agent {
 
     /// Run a single turn with the given user message
     pub async fn run_once(&mut self, user_message: &str) -> Result<()> {
-        self.inject_pending_context_for_turn()?;
+        self.inject_pending_context_for_turn().await?;
         self.add_message(
             Role::User,
             vec![ContentBlock::Text {
@@ -41,7 +46,7 @@ impl Agent {
     }
 
     pub async fn run_once_capture(&mut self, user_message: &str) -> Result<String> {
-        self.inject_pending_context_for_turn()?;
+        self.inject_pending_context_for_turn().await?;
         self.add_message(
             Role::User,
             vec![ContentBlock::Text {
@@ -66,7 +71,7 @@ impl Agent {
         user_message: &str,
         event_tx: broadcast::Sender<ServerEvent>,
     ) -> Result<()> {
-        self.inject_pending_context_for_turn()?;
+        self.inject_pending_context_for_turn().await?;
         // Inject any pending notifications before the user message
         let alerts = self.take_alerts();
         if !alerts.is_empty() {
@@ -107,7 +112,7 @@ impl Agent {
         system_reminder: Option<String>,
         event_tx: mpsc::UnboundedSender<ServerEvent>,
     ) -> Result<()> {
-        self.inject_pending_context_for_turn()?;
+        self.inject_pending_context_for_turn().await?;
         // Inject any pending notifications before the user message
         let alerts = self.take_alerts();
         if !alerts.is_empty() {

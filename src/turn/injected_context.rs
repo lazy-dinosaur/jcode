@@ -73,7 +73,7 @@ impl InjectedContext {
                     .map(|tool_name| format!("\n- tool_name: {tool_name}"))
                     .unwrap_or_default();
                 format!(
-                    "[system-reminder]\nLifecycle hook produced stdout.\n- hook_kind: {hook_kind}{tool_line}\n- stdout (truncated to 16KB):\n{stdout}"
+                    "[system-reminder]\nLifecycle hook output.\n- hook_kind: {hook_kind}{tool_line}\n- stdout (truncated to 16384 bytes):\n{stdout}"
                 )
             }
             InjectedSource::Custom { reason, body } => format!(

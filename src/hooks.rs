@@ -1,11 +1,20 @@
 use crate::config::config;
 use crate::tool::{ToolContext, ToolOutput};
+use crate::turn::bg_completion::parse_injection_format;
+use crate::turn::injected_context::{
+    InjectedContext, InjectedSource, InjectionFormat, enqueue_injection,
+};
+use crate::turn::pending_async_hooks::{
+    PendingAsyncHookOutput, drain_all_within, drain_completed_within, register_pending_async_hook,
+};
 use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::process::Stdio;
 use std::sync::OnceLock;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::sync::Mutex;
@@ -38,17 +47,12 @@ fn pending_nonblocking_hooks() -> &'static Mutex<Vec<JoinHandle<()>>> {
     SLOT.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-/// M10: spawn a non-blocking hook task and register its JoinHandle so
-/// `flush_nonblocking_hooks` can await it on shutdown. Long-running servers
-/// (`jcode serve`) do not need to call flush; single-shot CLI paths must.
+#[cfg(test)]
 fn spawn_tracked_nonblocking_hook<F>(future: F)
 where
     F: std::future::Future<Output = ()> + Send + 'static,
 {
     let handle = tokio::spawn(future);
-    // try_lock keeps this hot path lock-free in steady state; if the mutex is
-    // contended we fall back to a brief async lock via tokio::spawn so we
-    // never block the caller. The handle is registered in either case.
     let pending = pending_nonblocking_hooks();
     if let Ok(mut guard) = pending.try_lock() {
         guard.push(handle);
@@ -71,12 +75,13 @@ where
 /// registered. Returns the number of hooks that completed within the timeout
 /// (callers may surface this for diagnostics).
 pub async fn flush_nonblocking_hooks(timeout: Duration) -> usize {
+    let async_hook_count = drain_all_within(timeout).await;
     let handles: Vec<JoinHandle<()>> = {
         let mut guard = pending_nonblocking_hooks().lock().await;
         std::mem::take(&mut *guard)
     };
     if handles.is_empty() {
-        return 0;
+        return async_hook_count;
     }
     let total = handles.len();
     let join_all = async {
@@ -85,7 +90,7 @@ pub async fn flush_nonblocking_hooks(timeout: Duration) -> usize {
         }
     };
     match tokio::time::timeout(timeout, join_all).await {
-        Ok(()) => total,
+        Ok(()) => total + async_hook_count,
         Err(_) => {
             crate::logging::warn(&format!(
                 "flush_nonblocking_hooks: {total} hook(s) did not finish within {timeout:?}; remaining child processes will be killed on drop"
@@ -185,20 +190,27 @@ pub const LIFECYCLE_HOOK_TOOL_ARGS_PREVIEW_MAX: usize = 200;
 /// truncation with a trailing ellipsis.
 pub const LIFECYCLE_HOOK_LAST_USER_MESSAGE_MAX: usize = 500;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
 #[serde(default)]
-struct HookDecision {
-    action: String,
-    reason: Option<String>,
+pub struct HookDecision {
+    pub action: Option<String>,
+    pub reason: Option<String>,
+    pub inject: Option<HookInjectPayload>,
 }
 
-impl Default for HookDecision {
-    fn default() -> Self {
-        Self {
-            action: "allow".to_string(),
-            reason: None,
-        }
-    }
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct HookInjectPayload {
+    pub body: String,
+    #[serde(default)]
+    pub format: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct HookOutputContext<'a> {
+    session_id: &'a str,
+    hook_kind: &'a str,
+    tool_name: Option<&'a str>,
+    command: &'a str,
 }
 
 pub async fn pre_tool_use(tool_name: &str, input: &Value, ctx: &ToolContext) -> Result<()> {
@@ -232,7 +244,13 @@ pub async fn post_tool_use(
 }
 
 pub async fn run_session_hooks(payload: SessionStopHookPayload<'_>) -> Result<Option<String>> {
-    run_lifecycle_hooks(SESSION_STOP, payload.working_dir.as_deref(), &payload).await
+    run_lifecycle_hooks(
+        SESSION_STOP,
+        payload.session_id,
+        payload.working_dir.as_deref(),
+        &payload,
+    )
+    .await
 }
 
 /// M11 stage 4: fire `client.disconnect` lifecycle hooks. The payload type
@@ -241,13 +259,25 @@ pub async fn run_session_hooks(payload: SessionStopHookPayload<'_>) -> Result<Op
 pub async fn run_client_disconnect_hooks(
     payload: SessionStopHookPayload<'_>,
 ) -> Result<Option<String>> {
-    run_lifecycle_hooks(CLIENT_DISCONNECT, payload.working_dir.as_deref(), &payload).await
+    run_lifecycle_hooks(
+        CLIENT_DISCONNECT,
+        payload.session_id,
+        payload.working_dir.as_deref(),
+        &payload,
+    )
+    .await
 }
 
 pub async fn run_response_hooks(
     payload: ResponseCompletedHookPayload<'_>,
 ) -> Result<Option<String>> {
-    run_lifecycle_hooks(RESPONSE_COMPLETED, payload.working_dir.as_deref(), &payload).await
+    run_lifecycle_hooks(
+        RESPONSE_COMPLETED,
+        payload.session_id,
+        payload.working_dir.as_deref(),
+        &payload,
+    )
+    .await
 }
 
 async fn run_tool_hooks(
@@ -301,6 +331,9 @@ async fn run_tool_hooks(
         if hook.blocking {
             run_blocking_hook(
                 &hook.command,
+                event,
+                &ctx.session_id,
+                Some(tool_name),
                 hook.timeout_ms,
                 cwd.as_deref(),
                 &payload_json,
@@ -311,15 +344,15 @@ async fn run_tool_hooks(
             let timeout_ms = hook.timeout_ms;
             let cwd = cwd.clone();
             let payload_json = payload_json.clone();
-            // M10: register the JoinHandle so single-shot CLI exits can flush
-            // pending tool hooks before runtime drop.
-            spawn_tracked_nonblocking_hook(async move {
-                if let Err(err) =
-                    run_nonblocking_hook(&command, timeout_ms, cwd.as_deref(), &payload_json).await
-                {
-                    crate::logging::warn(&format!("non-blocking hook failed: {err:#}"));
-                }
-            });
+            spawn_pending_nonblocking_hook(
+                event,
+                &ctx.session_id,
+                Some(tool_name),
+                command,
+                timeout_ms,
+                cwd,
+                payload_json,
+            );
         }
     }
 
@@ -328,6 +361,7 @@ async fn run_tool_hooks(
 
 async fn run_lifecycle_hooks<T>(
     event: &'static str,
+    session_id: &str,
     cwd: Option<&str>,
     payload: &T,
 ) -> Result<Option<String>>
@@ -341,7 +375,7 @@ where
 
     let matching = matching_lifecycle_hooks(&hooks.commands, event);
 
-    run_lifecycle_hook_commands(matching, cwd, payload).await
+    run_lifecycle_hook_commands(event, session_id, matching, cwd, payload).await
 }
 
 fn matching_lifecycle_hooks(
@@ -357,6 +391,8 @@ fn matching_lifecycle_hooks(
 }
 
 async fn run_lifecycle_hook_commands<T>(
+    event: &'static str,
+    session_id: &str,
     matching: Vec<crate::config::HookCommandConfig>,
     cwd: Option<&str>,
     payload: &T,
@@ -372,8 +408,15 @@ where
 
     for hook in matching {
         if hook.blocking {
-            match run_blocking_lifecycle_hook(&hook.command, hook.timeout_ms, cwd, &payload_json)
-                .await
+            match run_blocking_lifecycle_hook(
+                &hook.command,
+                event,
+                session_id,
+                hook.timeout_ms,
+                cwd,
+                &payload_json,
+            )
+            .await
             {
                 Ok(Some(reason)) => return Ok(Some(reason)),
                 Ok(None) => {}
@@ -382,19 +425,15 @@ where
                 }
             }
         } else {
-            let command = hook.command.clone();
-            let timeout_ms = hook.timeout_ms;
-            let cwd = cwd.map(str::to_string);
-            let payload_json = payload_json.clone();
-            // M10: register the JoinHandle so single-shot CLI exits can flush
-            // pending lifecycle hooks before runtime drop.
-            spawn_tracked_nonblocking_hook(async move {
-                if let Err(err) =
-                    run_nonblocking_hook(&command, timeout_ms, cwd.as_deref(), &payload_json).await
-                {
-                    crate::logging::warn(&format!("non-blocking lifecycle hook failed: {err:#}"));
-                }
-            });
+            spawn_pending_nonblocking_hook(
+                event,
+                session_id,
+                None,
+                hook.command.clone(),
+                hook.timeout_ms,
+                cwd.map(str::to_string),
+                payload_json.clone(),
+            );
         }
     }
 
@@ -403,6 +442,9 @@ where
 
 async fn run_blocking_hook(
     command: &str,
+    hook_kind: &str,
+    session_id: &str,
+    tool_name: Option<&str>,
     timeout_ms: u64,
     cwd: Option<&str>,
     payload_json: &[u8],
@@ -419,7 +461,16 @@ async fn run_blocking_hook(
         ));
     }
 
-    let Some(decision) = parse_hook_decision_stdout(&output.stdout, command)? else {
+    let Some(decision) = handle_hook_decision_stdout(
+        HookOutputContext {
+            session_id,
+            hook_kind,
+            tool_name,
+            command,
+        },
+        &String::from_utf8_lossy(&output.stdout),
+    )?
+    else {
         return Ok(());
     };
 
@@ -429,8 +480,7 @@ async fn run_blocking_hook(
     }
 }
 
-fn parse_hook_decision_stdout(output_stdout: &[u8], command: &str) -> Result<Option<HookDecision>> {
-    let stdout = String::from_utf8_lossy(output_stdout);
+fn parse_hook_decision_stdout(stdout: &str, command: &str) -> Result<Option<HookDecision>> {
     let stdout = stdout.trim();
     if stdout.is_empty() {
         return Ok(None);
@@ -442,7 +492,7 @@ fn parse_hook_decision_stdout(output_stdout: &[u8], command: &str) -> Result<Opt
 }
 
 fn hook_decision_denial_reason(decision: HookDecision) -> Result<Option<String>> {
-    match decision.action.as_str() {
+    match decision.action.as_deref().unwrap_or("allow") {
         "allow" | "" => Ok(None),
         "deny" => Ok(Some(
             decision
@@ -454,25 +504,58 @@ fn hook_decision_denial_reason(decision: HookDecision) -> Result<Option<String>>
     }
 }
 
-async fn run_nonblocking_hook(
-    command: &str,
-    timeout_ms: u64,
-    cwd: Option<&str>,
-    payload_json: &[u8],
-) -> Result<()> {
-    let output = run_hook_command(command, timeout_ms, cwd, payload_json).await?;
-    if !output.status.success() {
-        return Err(anyhow!(
-            "hook command exited with status {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
+fn handle_hook_decision_stdout(
+    ctx: HookOutputContext<'_>,
+    stdout: &str,
+) -> Result<Option<HookDecision>> {
+    let decision = parse_hook_decision_stdout(stdout, ctx.command)?;
+    if let Some(decision) = decision.as_ref() {
+        if let Some(payload) = decision.inject.as_ref() {
+            enqueue_hook_injection(ctx, payload)?;
+        }
     }
+    Ok(decision)
+}
+
+fn enqueue_hook_injection(ctx: HookOutputContext<'_>, payload: &HookInjectPayload) -> Result<()> {
+    let format = parse_hook_inject_format(payload.format.as_deref());
+    let injection = InjectedContext {
+        source: InjectedSource::LifecycleHookStdout {
+            hook_kind: ctx.hook_kind.to_string(),
+            tool_name: ctx.tool_name.map(ToString::to_string),
+            stdout: payload.body.clone(),
+        },
+        timestamp: SystemTime::now(),
+        format,
+        dedupe_key: hook_inject_dedupe_key(ctx.hook_kind, ctx.tool_name, &payload.body),
+    };
+    enqueue_injection(ctx.session_id, injection)?;
     Ok(())
+}
+
+fn parse_hook_inject_format(raw: Option<&str>) -> InjectionFormat {
+    parse_injection_format(raw)
+}
+
+fn hook_inject_dedupe_key(hook_kind: &str, tool_name: Option<&str>, body: &str) -> String {
+    format!(
+        "hook:{}:{}:{:016x}",
+        hook_kind,
+        tool_name.unwrap_or("_"),
+        short_hash(body)
+    )
+}
+
+fn short_hash(value: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
 }
 
 async fn run_blocking_lifecycle_hook(
     command: &str,
+    hook_kind: &str,
+    session_id: &str,
     timeout_ms: u64,
     cwd: Option<&str>,
     payload_json: &[u8],
@@ -489,10 +572,92 @@ async fn run_blocking_lifecycle_hook(
         ));
     }
 
-    let Some(decision) = parse_hook_decision_stdout(&output.stdout, command)? else {
+    let Some(decision) = handle_hook_decision_stdout(
+        HookOutputContext {
+            session_id,
+            hook_kind,
+            tool_name: None,
+            command,
+        },
+        &String::from_utf8_lossy(&output.stdout),
+    )?
+    else {
         return Ok(None);
     };
     hook_decision_denial_reason(decision)
+}
+
+fn spawn_pending_nonblocking_hook(
+    hook_kind: &'static str,
+    session_id: &str,
+    tool_name: Option<&str>,
+    command: String,
+    timeout_ms: u64,
+    cwd: Option<String>,
+    payload_json: Vec<u8>,
+) {
+    static NEXT_HOOK_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let hook_id = NEXT_HOOK_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let id = format!("hook-{hook_id}");
+    let session_id_owned = session_id.to_string();
+    let tool_name_owned = tool_name.map(ToString::to_string);
+    let command_for_task = command.clone();
+    let handle = tokio::spawn(async move {
+        match run_hook_command(&command_for_task, timeout_ms, cwd.as_deref(), &payload_json).await {
+            Ok(output) if output.status.success() => PendingAsyncHookOutput {
+                session_id: session_id_owned,
+                hook_kind: hook_kind.to_string(),
+                tool_name: tool_name_owned,
+                command: command_for_task,
+                stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            },
+            Ok(output) => {
+                crate::logging::warn(&format!(
+                    "non-blocking hook exited with status {}: {}",
+                    output.status,
+                    String::from_utf8_lossy(&output.stderr).trim()
+                ));
+                PendingAsyncHookOutput {
+                    session_id: session_id_owned,
+                    hook_kind: hook_kind.to_string(),
+                    tool_name: tool_name_owned,
+                    command: command_for_task,
+                    stdout: String::new(),
+                }
+            }
+            Err(err) => {
+                crate::logging::warn(&format!("non-blocking hook failed: {err:#}"));
+                PendingAsyncHookOutput {
+                    session_id: session_id_owned,
+                    hook_kind: hook_kind.to_string(),
+                    tool_name: tool_name_owned,
+                    command: command_for_task,
+                    stdout: String::new(),
+                }
+            }
+        }
+    });
+    register_pending_async_hook(session_id, id, handle);
+}
+
+pub async fn drain_pending_async_hook_injections(
+    session_id: &str,
+    timeout: Duration,
+) -> Result<usize> {
+    let completed = drain_completed_within(session_id, timeout).await;
+    let count = completed.len();
+    for (_id, output) in completed {
+        handle_hook_decision_stdout(
+            HookOutputContext {
+                session_id: &output.session_id,
+                hook_kind: &output.hook_kind,
+                tool_name: output.tool_name.as_deref(),
+                command: &output.command,
+            },
+            &output.stdout,
+        )?;
+    }
+    Ok(count)
 }
 
 async fn run_hook_command(
@@ -548,30 +713,27 @@ mod tests {
     #[test]
     fn hook_decision_defaults_to_allow() {
         let decision: HookDecision = serde_json::from_str("{}").unwrap();
-        assert_eq!(decision.action, "allow");
+        assert!(decision.action.is_none());
+        assert!(hook_decision_denial_reason(decision).unwrap().is_none());
     }
 
     #[test]
     fn hook_decision_parses_deny_reason() {
         let decision: HookDecision =
             serde_json::from_str(r#"{"action":"deny","reason":"blocked"}"#).unwrap();
-        assert_eq!(decision.action, "deny");
+        assert_eq!(decision.action.as_deref(), Some("deny"));
         assert_eq!(decision.reason.as_deref(), Some("blocked"));
     }
 
     #[test]
     fn hook_decision_stdout_empty_means_no_decision() {
-        assert!(
-            parse_hook_decision_stdout(b"  \n", "cmd")
-                .unwrap()
-                .is_none()
-        );
+        assert!(parse_hook_decision_stdout("  \n", "cmd").unwrap().is_none());
     }
 
     #[test]
     fn hook_decision_rejects_noisy_multiline_stdout() {
         let err = parse_hook_decision_stdout(
-            b"log line\n{\"action\":\"deny\",\"reason\":\"blocked\"}",
+            "log line\n{\"action\":\"deny\",\"reason\":\"blocked\"}",
             "cmd",
         )
         .unwrap_err();
@@ -594,6 +756,175 @@ mod tests {
         assert_eq!(
             hook_decision_denial_reason(decision).unwrap().as_deref(),
             Some("no reason provided")
+        );
+    }
+
+    fn unique_hook_session(prefix: &str) -> String {
+        static NEXT_SESSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        format!(
+            "{prefix}-{}",
+            NEXT_SESSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        )
+    }
+
+    #[test]
+    fn hook_decision_parses_inject_field() {
+        let decision: HookDecision = serde_json::from_str(
+            r#"{"inject":{"body":"hello from hook","format":"system_reminder"}}"#,
+        )
+        .unwrap();
+        let inject = decision.inject.unwrap();
+        assert_eq!(inject.body, "hello from hook");
+        assert_eq!(inject.format.as_deref(), Some("system_reminder"));
+    }
+
+    #[test]
+    fn hook_decision_inject_format_defaults_to_system_reminder() {
+        let decision: HookDecision =
+            serde_json::from_str(r#"{"inject":{"body":"hello"}}"#).unwrap();
+        let inject = decision.inject.unwrap();
+        assert_eq!(
+            parse_hook_inject_format(inject.format.as_deref()),
+            InjectionFormat::SystemReminder
+        );
+    }
+
+    #[test]
+    fn hook_decision_inject_user_message_format_parses() {
+        let decision: HookDecision =
+            serde_json::from_str(r#"{"inject":{"body":"hello","format":"user_message"}}"#).unwrap();
+        let inject = decision.inject.unwrap();
+        assert_eq!(
+            parse_hook_inject_format(inject.format.as_deref()),
+            InjectionFormat::UserMessage
+        );
+    }
+
+    #[test]
+    fn hook_with_inject_enqueues_injected_context() {
+        let session_id = unique_hook_session("hook-inject");
+        handle_hook_decision_stdout(
+            HookOutputContext {
+                session_id: &session_id,
+                hook_kind: TOOL_EXECUTE_AFTER,
+                tool_name: Some("bash"),
+                command: "cmd",
+            },
+            r#"{"inject":{"body":"hook body","format":"system_reminder"}}"#,
+        )
+        .unwrap();
+
+        let drained = crate::turn::injected_context::drain_injections(&session_id).unwrap();
+        assert_eq!(drained.len(), 1);
+        assert_eq!(drained[0].format, InjectionFormat::SystemReminder);
+        assert_eq!(
+            drained[0].source,
+            InjectedSource::LifecycleHookStdout {
+                hook_kind: TOOL_EXECUTE_AFTER.to_string(),
+                tool_name: Some("bash".to_string()),
+                stdout: "hook body".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn hook_without_inject_does_not_enqueue_hook_inject() {
+        let session_id = unique_hook_session("hook-no-inject");
+        handle_hook_decision_stdout(
+            HookOutputContext {
+                session_id: &session_id,
+                hook_kind: TOOL_EXECUTE_AFTER,
+                tool_name: Some("bash"),
+                command: "cmd",
+            },
+            r#"{"action":"allow"}"#,
+        )
+        .unwrap();
+
+        let drained = crate::turn::injected_context::drain_injections(&session_id).unwrap();
+        assert!(drained.is_empty());
+    }
+
+    #[tokio::test]
+    async fn async_hook_completion_within_timeout_drains_and_injects_pending_async_hook() {
+        let session_id = unique_hook_session("async-hook-done");
+        crate::turn::pending_async_hooks::clear_pending_async_hooks(&session_id);
+        let output_session = session_id.clone();
+        let handle = tokio::spawn(async move {
+            PendingAsyncHookOutput {
+                session_id: output_session,
+                hook_kind: RESPONSE_COMPLETED.to_string(),
+                tool_name: None,
+                command: "cmd".to_string(),
+                stdout: r#"{"inject":{"body":"async body"}}"#.to_string(),
+            }
+        });
+        register_pending_async_hook(&session_id, "hook-1".to_string(), handle);
+
+        let drained_count =
+            drain_pending_async_hook_injections(&session_id, Duration::from_millis(50))
+                .await
+                .unwrap();
+        assert_eq!(drained_count, 1);
+
+        let drained = crate::turn::injected_context::drain_injections(&session_id).unwrap();
+        assert_eq!(drained.len(), 1);
+        assert!(drained[0].render().contains("async body"));
+    }
+
+    #[tokio::test]
+    async fn async_hook_completion_past_timeout_stays_pending_async_hook() {
+        let session_id = unique_hook_session("async-hook-pending");
+        crate::turn::pending_async_hooks::clear_pending_async_hooks(&session_id);
+        let output_session = session_id.clone();
+        let handle = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            PendingAsyncHookOutput {
+                session_id: output_session,
+                hook_kind: RESPONSE_COMPLETED.to_string(),
+                tool_name: None,
+                command: "cmd".to_string(),
+                stdout: r#"{"inject":{"body":"late body"}}"#.to_string(),
+            }
+        });
+        register_pending_async_hook(&session_id, "hook-1".to_string(), handle);
+
+        let drained_count =
+            drain_pending_async_hook_injections(&session_id, Duration::from_millis(1))
+                .await
+                .unwrap();
+        assert_eq!(drained_count, 0);
+        assert_eq!(
+            crate::turn::pending_async_hooks::pending_count(&session_id),
+            1
+        );
+
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        let _ = drain_pending_async_hook_injections(&session_id, Duration::from_millis(1)).await;
+    }
+
+    #[test]
+    fn dedupe_key_uniqueness_for_repeated_hook_outputs_hook_inject() {
+        let session_id = unique_hook_session("hook-dedupe");
+        let stdout = r#"{"inject":{"body":"same body"}}"#;
+        for _ in 0..2 {
+            handle_hook_decision_stdout(
+                HookOutputContext {
+                    session_id: &session_id,
+                    hook_kind: RESPONSE_COMPLETED,
+                    tool_name: None,
+                    command: "cmd",
+                },
+                stdout,
+            )
+            .unwrap();
+        }
+
+        let drained = crate::turn::injected_context::drain_injections(&session_id).unwrap();
+        assert_eq!(drained.len(), 1);
+        assert_eq!(
+            drained[0].dedupe_key,
+            hook_inject_dedupe_key(RESPONSE_COMPLETED, None, "same body")
         );
     }
 
@@ -720,6 +1051,8 @@ mod tests {
         };
 
         let denial = run_lifecycle_hook_commands(
+            CLIENT_DISCONNECT,
+            payload.session_id,
             matching_lifecycle_hooks(&commands, CLIENT_DISCONNECT),
             None,
             &payload,
@@ -852,15 +1185,26 @@ mod tests {
 
     #[tokio::test]
     async fn blocking_hook_allows_empty_stdout() {
-        run_blocking_hook("cat >/dev/null", 1000, None, br#"{"ok":true}"#)
-            .await
-            .unwrap();
+        run_blocking_hook(
+            "cat >/dev/null",
+            TOOL_EXECUTE_BEFORE,
+            "sess-1",
+            Some("bash"),
+            1000,
+            None,
+            br#"{"ok":true}"#,
+        )
+        .await
+        .unwrap();
     }
 
     #[tokio::test]
     async fn blocking_hook_denies_from_json_stdout() {
         let err = run_blocking_hook(
             "cat >/dev/null; printf '%s' '{\"action\":\"deny\",\"reason\":\"blocked\"}'",
+            TOOL_EXECUTE_BEFORE,
+            "sess-1",
+            Some("bash"),
             1000,
             None,
             br#"{"ok":true}"#,
@@ -893,9 +1237,15 @@ mod tests {
             ..Default::default()
         };
 
-        let denial = run_lifecycle_hook_commands(commands, None, &payload)
-            .await
-            .unwrap();
+        let denial = run_lifecycle_hook_commands(
+            RESPONSE_COMPLETED,
+            payload.session_id,
+            commands,
+            None,
+            &payload,
+        )
+        .await
+        .unwrap();
         assert!(denial.is_none());
 
         let written = std::fs::read_to_string(out).unwrap();
@@ -908,6 +1258,8 @@ mod tests {
     async fn lifecycle_blocking_hook_returns_deny_reason() {
         let denial = run_blocking_lifecycle_hook(
             "cat >/dev/null; printf '%s' '{\"action\":\"deny\",\"reason\":\"ignored\"}'",
+            RESPONSE_COMPLETED,
+            "sess-1",
             1000,
             None,
             br#"{"ok":true}"#,
@@ -951,9 +1303,15 @@ mod tests {
             ..Default::default()
         };
 
-        let denial = run_lifecycle_hook_commands(commands, None, &payload)
-            .await
-            .unwrap();
+        let denial = run_lifecycle_hook_commands(
+            RESPONSE_COMPLETED,
+            payload.session_id,
+            commands,
+            None,
+            &payload,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(denial.as_deref(), Some("blocked"));
         assert!(!marker.exists());
