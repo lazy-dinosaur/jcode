@@ -17,6 +17,12 @@
 
 ## 운영 중인 알려진 버그 (요약 — 자세한 건 카드)
 
+- **M43 — subagent 에서 `bg` 도구 접근 불일치** (2026-05-13 00:14 라이브)
+  - subagent 에 위임한 `bg action="output"` 이 "도구 없음" 으로 실패.
+  - 진단 미수행. 가설 A (filtering 잔여) vs 가설 B (session-scope).
+  - **workaround**: bg/output/wait 같은 task lookup 류는 메인 세션에서
+    직접 호출. subagent 위임 금지.
+
 - **M42 — `checking websocket` 무한 thinking hang** (2026-05-13 00:00 재현)
   - 메인 세션이 subagent 결과 기다리며 thinking 무한 대기
   - status: `thinking… 108.3s · checking websocket · existing websocket · +1 queued`
