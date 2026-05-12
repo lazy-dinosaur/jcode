@@ -7,6 +7,7 @@ async fn communicate_list_and_await_members_work_end_to_end() {
     let _runtime = EnvGuard::set("JCODE_RUNTIME_DIR", runtime_dir.path());
     let _socket = EnvGuard::set("JCODE_SOCKET", &socket_path);
     let _debug = EnvGuard::set("JCODE_DEBUG_CONTROL", "1");
+    let _no_terminal = EnvGuard::set("JCODE_SWARM_NO_TERMINAL", "1");
 
     let provider: Arc<dyn Provider> = Arc::new(DelayedTestProvider {
         delay: Duration::from_millis(300),
@@ -113,6 +114,7 @@ async fn communicate_status_returns_busy_snapshot_for_running_member() {
     let _runtime = EnvGuard::set("JCODE_RUNTIME_DIR", runtime_dir.path());
     let _socket = EnvGuard::set("JCODE_SOCKET", &socket_path);
     let _debug = EnvGuard::set("JCODE_DEBUG_CONTROL", "1");
+    let _no_terminal = EnvGuard::set("JCODE_SWARM_NO_TERMINAL", "1");
 
     let provider: Arc<dyn Provider> = Arc::new(DelayedTestProvider {
         delay: Duration::from_millis(300),
@@ -195,6 +197,7 @@ async fn communicate_spawn_reports_completion_back_to_spawner() {
     let _runtime = EnvGuard::set("JCODE_RUNTIME_DIR", runtime_dir.path());
     let _socket = EnvGuard::set("JCODE_SOCKET", &socket_path);
     let _debug = EnvGuard::set("JCODE_DEBUG_CONTROL", "1");
+    let _no_terminal = EnvGuard::set("JCODE_SWARM_NO_TERMINAL", "1");
 
     let provider: Arc<dyn Provider> = Arc::new(DelayedTestProvider {
         delay: Duration::from_millis(100),
@@ -232,12 +235,8 @@ async fn communicate_spawn_reports_completion_back_to_spawner() {
         )
         .await
         .expect("spawn with prompt should succeed");
-    let spawned_session = spawn_output
-        .output
-        .strip_prefix("Spawned new agent: ")
-        .expect("spawn output should include session id")
-        .trim()
-        .to_string();
+    let spawned_session = parse_spawned_session_id(&spawn_output.output)
+        .expect("spawn output should include session id");
 
     watcher
         .read_until(Duration::from_secs(15), |event| {
@@ -271,6 +270,7 @@ async fn communicate_spawn_with_prompt_and_summary_work_end_to_end() {
     let _runtime = EnvGuard::set("JCODE_RUNTIME_DIR", runtime_dir.path());
     let _socket = EnvGuard::set("JCODE_SOCKET", &socket_path);
     let _debug = EnvGuard::set("JCODE_DEBUG_CONTROL", "1");
+    let _no_terminal = EnvGuard::set("JCODE_SWARM_NO_TERMINAL", "1");
 
     let provider: Arc<dyn Provider> = Arc::new(DelayedTestProvider {
         delay: Duration::from_millis(100),
@@ -308,12 +308,8 @@ async fn communicate_spawn_with_prompt_and_summary_work_end_to_end() {
         )
         .await
         .expect("spawn with prompt should succeed");
-    let spawned_session = spawn_output
-        .output
-        .strip_prefix("Spawned new agent: ")
-        .expect("spawn output should include session id")
-        .trim()
-        .to_string();
+    let spawned_session = parse_spawned_session_id(&spawn_output.output)
+        .expect("spawn output should include session id");
     assert!(
         !spawned_session.is_empty(),
         "spawned session id should not be empty"
@@ -367,6 +363,7 @@ async fn communicate_spawn_self_promotes_and_retries_after_coordinator_drift() {
     let _runtime = EnvGuard::set("JCODE_RUNTIME_DIR", runtime_dir.path());
     let _socket = EnvGuard::set("JCODE_SOCKET", &socket_path);
     let _debug = EnvGuard::set("JCODE_DEBUG_CONTROL", "1");
+    let _no_terminal = EnvGuard::set("JCODE_SWARM_NO_TERMINAL", "1");
 
     let provider: Arc<dyn Provider> = Arc::new(DelayedTestProvider {
         delay: Duration::from_millis(100),
@@ -397,12 +394,8 @@ async fn communicate_spawn_self_promotes_and_retries_after_coordinator_drift() {
         .execute(json!({ "action": "spawn" }), ctx.clone())
         .await
         .expect("initial worker spawn should succeed");
-    let drifted_coordinator = first_spawn_output
-        .output
-        .strip_prefix("Spawned new agent: ")
-        .expect("spawn output should include session id")
-        .trim()
-        .to_string();
+    let drifted_coordinator = parse_spawned_session_id(&first_spawn_output.output)
+        .expect("spawn output should include session id");
     wait_for_member_presence(&mut watcher, &watcher_session, &drifted_coordinator)
         .await
         .expect("drifted coordinator should appear in swarm");

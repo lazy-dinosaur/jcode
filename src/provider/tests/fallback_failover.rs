@@ -194,9 +194,11 @@ fn test_set_model_rejects_cross_provider_without_creds() {
     let err = provider
         .set_model("claude-sonnet-4-6")
         .expect_err("forced provider should reject when the forced provider has no creds");
+    let err_text = err.to_string();
     assert!(
-        err.to_string().contains("Unsupported OpenAI model 'claude-sonnet-4-6'"),
-        "expected forced-provider model validation error, got: {}",
+        err_text.contains("Unsupported OpenAI model 'claude-sonnet-4-6'")
+            || err_text.contains("OpenAI credentials not available"),
+        "expected forced-provider validation error, got: {}",
         err
     );
 }

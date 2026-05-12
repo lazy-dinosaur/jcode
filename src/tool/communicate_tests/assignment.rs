@@ -7,6 +7,7 @@ async fn communicate_assign_task_can_spawn_fallback_agent() {
     let _runtime = EnvGuard::set("JCODE_RUNTIME_DIR", runtime_dir.path());
     let _socket = EnvGuard::set("JCODE_SOCKET", &socket_path);
     let _debug = EnvGuard::set("JCODE_DEBUG_CONTROL", "1");
+    let _no_terminal = EnvGuard::set("JCODE_SWARM_NO_TERMINAL", "1");
 
     let provider: Arc<dyn Provider> = Arc::new(DelayedTestProvider {
         delay: Duration::from_millis(100),
@@ -120,6 +121,7 @@ async fn communicate_assign_next_assigns_next_runnable_task() {
     let _runtime = EnvGuard::set("JCODE_RUNTIME_DIR", runtime_dir.path());
     let _socket = EnvGuard::set("JCODE_SOCKET", &socket_path);
     let _debug = EnvGuard::set("JCODE_DEBUG_CONTROL", "1");
+    let _no_terminal = EnvGuard::set("JCODE_SWARM_NO_TERMINAL", "1");
 
     let provider: Arc<dyn Provider> = Arc::new(DelayedTestProvider {
         delay: Duration::from_millis(100),
@@ -166,12 +168,8 @@ async fn communicate_assign_next_assigns_next_runnable_task() {
         )
         .await
         .expect("worker spawn should succeed");
-    let worker_session = spawn_output
-        .output
-        .strip_prefix("Spawned new agent: ")
-        .expect("spawn output should include session id")
-        .trim()
-        .to_string();
+    let worker_session = parse_spawned_session_id(&spawn_output.output)
+        .expect("spawn output should include session id");
 
     wait_for_member_presence(&mut watcher, &watcher_session, &worker_session)
         .await
@@ -227,6 +225,7 @@ async fn communicate_assign_next_can_prefer_fresh_spawn_server_side() {
     let _runtime = EnvGuard::set("JCODE_RUNTIME_DIR", runtime_dir.path());
     let _socket = EnvGuard::set("JCODE_SOCKET", &socket_path);
     let _debug = EnvGuard::set("JCODE_DEBUG_CONTROL", "1");
+    let _no_terminal = EnvGuard::set("JCODE_SWARM_NO_TERMINAL", "1");
 
     let provider: Arc<dyn Provider> = Arc::new(DelayedTestProvider {
         delay: Duration::from_millis(100),
@@ -268,12 +267,8 @@ async fn communicate_assign_next_can_prefer_fresh_spawn_server_side() {
         .execute(json!({"action": "spawn"}), ctx.clone())
         .await
         .expect("existing worker spawn should succeed");
-    let existing_worker = existing_output
-        .output
-        .strip_prefix("Spawned new agent: ")
-        .expect("spawn output should include session id")
-        .trim()
-        .to_string();
+    let existing_worker = parse_spawned_session_id(&existing_output.output)
+        .expect("spawn output should include session id");
     wait_for_member_presence(&mut watcher, &watcher_session, &existing_worker)
         .await
         .expect("existing worker should appear in swarm");
@@ -332,6 +327,7 @@ async fn communicate_assign_next_can_spawn_if_needed_server_side() {
     let _runtime = EnvGuard::set("JCODE_RUNTIME_DIR", runtime_dir.path());
     let _socket = EnvGuard::set("JCODE_SOCKET", &socket_path);
     let _debug = EnvGuard::set("JCODE_DEBUG_CONTROL", "1");
+    let _no_terminal = EnvGuard::set("JCODE_SWARM_NO_TERMINAL", "1");
 
     let provider: Arc<dyn Provider> = Arc::new(DelayedTestProvider {
         delay: Duration::from_millis(100),
@@ -422,6 +418,7 @@ async fn communicate_fill_slots_tops_up_to_concurrency_limit() {
     let _runtime = EnvGuard::set("JCODE_RUNTIME_DIR", runtime_dir.path());
     let _socket = EnvGuard::set("JCODE_SOCKET", &socket_path);
     let _debug = EnvGuard::set("JCODE_DEBUG_CONTROL", "1");
+    let _no_terminal = EnvGuard::set("JCODE_SWARM_NO_TERMINAL", "1");
 
     let provider: Arc<dyn Provider> = Arc::new(DelayedTestProvider {
         delay: Duration::from_millis(300),
@@ -514,6 +511,7 @@ async fn communicate_assign_task_can_prefer_fresh_spawn_over_reuse() {
     let _runtime = EnvGuard::set("JCODE_RUNTIME_DIR", runtime_dir.path());
     let _socket = EnvGuard::set("JCODE_SOCKET", &socket_path);
     let _debug = EnvGuard::set("JCODE_DEBUG_CONTROL", "1");
+    let _no_terminal = EnvGuard::set("JCODE_SWARM_NO_TERMINAL", "1");
 
     let provider: Arc<dyn Provider> = Arc::new(DelayedTestProvider {
         delay: Duration::from_millis(100),
@@ -560,12 +558,8 @@ async fn communicate_assign_task_can_prefer_fresh_spawn_over_reuse() {
         )
         .await
         .expect("existing reusable worker should spawn");
-    let existing_worker = existing_output
-        .output
-        .strip_prefix("Spawned new agent: ")
-        .expect("spawn output should include session id")
-        .trim()
-        .to_string();
+    let existing_worker = parse_spawned_session_id(&existing_output.output)
+        .expect("spawn output should include session id");
     wait_for_member_presence(&mut watcher, &watcher_session, &existing_worker)
         .await
         .expect("existing worker should appear in swarm");

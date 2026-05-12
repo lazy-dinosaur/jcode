@@ -575,6 +575,15 @@ async fn wait_for_member_presence(
     }
 }
 
+fn parse_spawned_session_id(output: &str) -> Option<String> {
+    output
+        .strip_prefix("Spawned new agent: ")?
+        .split_whitespace()
+        .next()
+        .filter(|session_id| !session_id.is_empty())
+        .map(ToString::to_string)
+}
+
 #[test]
 fn default_await_members_targets_include_ready() {
     assert_eq!(

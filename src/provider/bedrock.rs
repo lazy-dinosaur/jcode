@@ -1375,6 +1375,8 @@ mod tests {
     fn detects_env_credentials_requires_region_and_credential_hint() {
         let _guard = crate::storage::lock_test_env();
         let temp = tempfile::tempdir().unwrap();
+        let _home = EnvVarGuard::set("HOME", temp.path().as_os_str());
+        let _jcode_home = EnvVarGuard::set("JCODE_HOME", temp.path().join("jcode-home"));
         let _xdg = EnvVarGuard::set("XDG_CONFIG_HOME", temp.path().as_os_str());
         let _removed = [
             "JCODE_BEDROCK_ENABLE",

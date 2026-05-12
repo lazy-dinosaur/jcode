@@ -599,9 +599,11 @@ impl MultiProvider {
                         crate::logging::info("Hot-initialized Copilot API provider after login");
                         let provider = Arc::new(p);
                         let p_clone = provider.clone();
-                        tokio::spawn(async move {
-                            p_clone.detect_tier_and_set_default().await;
-                        });
+                        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                            handle.spawn(async move {
+                                p_clone.detect_tier_and_set_default().await;
+                            });
+                        }
                         *self
                             .copilot_api
                             .write()

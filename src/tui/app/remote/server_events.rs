@@ -358,8 +358,7 @@ pub(in crate::tui::app) fn handle_server_event(
             // Without this, the final `flush/commit/idle cleanup` block is
             // skipped and the assistant message stays in the streaming buffer
             // (visible only as a partial render) until the next user action.
-            let matches_woken_server_turn =
-                app.current_message_id.is_none() && app.is_processing;
+            let matches_woken_server_turn = app.current_message_id.is_none() && app.is_processing;
             if app.current_message_id == Some(id) || matches_woken_server_turn {
                 completed_current_message = true;
                 app.clear_pending_remote_retry();

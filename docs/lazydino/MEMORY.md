@@ -38,8 +38,9 @@
     다른 attached client redraw, auto-poke 동일 경로 확인 (모두
     선택적, 메인 케이스는 OK).
 - **M40 Phase 3 — `" /tmp/..."` leading-space 가 slash-mode 진입**
-  - fix 후보: `composer_mode` 에서 leading space 면 무조건 Chat
-  - 미착수
+  - ✅ DONE (2026-05-13). deploy `m40-862578f1`. `composer_mode` 에
+    `leading_space_escapes_slash()` 헬퍼: leading whitespace 면
+    무조건 Chat. 17개 ui::input_ui 테스트 통과. fork pushed.
 - **M40 Phase 1-2 — 이미지 첨부 silent fail**
 - **M40 Phase 4 — Opus 1m 메인 picker 미advertise**
 - **M16 (구조 개선) 은 가장 마지막**

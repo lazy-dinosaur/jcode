@@ -70,6 +70,7 @@ fn write_test_api_key(temp: &TempDir, env_file: &str, env_key: &str, value: &str
 
 fn isolate_openrouter_autodetect_env() -> Vec<EnvVarGuard> {
     let mut guards = vec![
+        EnvVarGuard::remove("JCODE_HOME"),
         EnvVarGuard::remove("JCODE_OPENROUTER_API_BASE"),
         EnvVarGuard::remove("JCODE_OPENROUTER_API_KEY_NAME"),
         EnvVarGuard::remove("JCODE_OPENROUTER_ENV_FILE"),
@@ -408,6 +409,7 @@ fn test_configured_api_base_rejects_insecure_http_remote() {
 fn autodetects_single_saved_openai_compatible_profile() {
     let _lock = crate::storage::lock_test_env();
     let temp = TempDir::new().expect("create temp dir");
+    let _jcode_home = EnvVarGuard::remove("JCODE_HOME");
     let _xdg = EnvVarGuard::set("XDG_CONFIG_HOME", temp.path());
     let _home = EnvVarGuard::set("HOME", temp.path());
     let _appdata = EnvVarGuard::set("APPDATA", temp.path().join("AppData").join("Roaming"));
@@ -433,6 +435,7 @@ fn autodetects_single_saved_openai_compatible_profile() {
 fn autodetects_single_saved_local_openai_compatible_profile() {
     let _lock = crate::storage::lock_test_env();
     let temp = TempDir::new().expect("create temp dir");
+    let _jcode_home = EnvVarGuard::remove("JCODE_HOME");
     let _xdg = EnvVarGuard::set("XDG_CONFIG_HOME", temp.path());
     let _home = EnvVarGuard::set("HOME", temp.path());
     let _appdata = EnvVarGuard::set("APPDATA", temp.path().join("AppData").join("Roaming"));
@@ -463,6 +466,7 @@ fn autodetects_single_saved_local_openai_compatible_profile() {
 fn does_not_guess_when_multiple_saved_openai_compatible_profiles_exist() {
     let _lock = crate::storage::lock_test_env();
     let temp = TempDir::new().expect("create temp dir");
+    let _jcode_home = EnvVarGuard::remove("JCODE_HOME");
     let _xdg = EnvVarGuard::set("XDG_CONFIG_HOME", temp.path());
     let _home = EnvVarGuard::set("HOME", temp.path());
     let _appdata = EnvVarGuard::set("APPDATA", temp.path().join("AppData").join("Roaming"));
@@ -497,6 +501,7 @@ fn does_not_guess_when_multiple_saved_openai_compatible_profiles_exist() {
 fn autodetected_profile_seeds_default_model_and_cache_namespace() {
     let _lock = crate::storage::lock_test_env();
     let temp = TempDir::new().expect("create temp dir");
+    let _jcode_home = EnvVarGuard::remove("JCODE_HOME");
     let _xdg = EnvVarGuard::set("XDG_CONFIG_HOME", temp.path());
     let _home = EnvVarGuard::set("HOME", temp.path());
     let _appdata = EnvVarGuard::set("APPDATA", temp.path().join("AppData").join("Roaming"));
@@ -960,6 +965,7 @@ fn named_openai_compatible_model_context_window_overrides_default() {
 fn named_openai_compatible_loads_api_key_from_env_file() {
     let _lock = crate::storage::lock_test_env();
     let temp = TempDir::new().expect("create temp dir");
+    let _jcode_home = EnvVarGuard::remove("JCODE_HOME");
     let _xdg = EnvVarGuard::set("XDG_CONFIG_HOME", temp.path());
     let _home = EnvVarGuard::set("HOME", temp.path());
     let _appdata = EnvVarGuard::set("APPDATA", temp.path().join("AppData").join("Roaming"));

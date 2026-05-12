@@ -33,10 +33,10 @@ fn test_rewrite_command_with_full_path() {
 #[test]
 fn test_paths() {
     let bdir = browser_dir();
-    assert!(bdir.to_string_lossy().contains(".jcode"));
     assert!(bdir.to_string_lossy().ends_with("browser"));
 
     let bin = browser_binary_path();
+    assert_eq!(bin.parent(), Some(bdir.as_path()));
     assert!(bin.to_string_lossy().contains("browser"));
 
     let xpi = xpi_path();

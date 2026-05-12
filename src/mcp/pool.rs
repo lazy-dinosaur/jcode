@@ -59,6 +59,13 @@ impl SharedMcpPool {
 
     /// Create pool loading config from default locations
     pub fn from_default_config() -> Self {
+        #[cfg(test)]
+        {
+            if std::env::var_os("JCODE_TEST_LOAD_DEFAULT_MCP_CONFIG").is_none() {
+                return Self::new(McpConfig::default());
+            }
+        }
+
         Self::new(McpConfig::load())
     }
 

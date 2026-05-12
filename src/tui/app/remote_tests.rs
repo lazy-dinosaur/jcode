@@ -382,11 +382,7 @@ fn m41_done_completes_server_initiated_turn_without_current_message_id() {
     assert!(app.is_processing);
     assert!(app.current_message_id.is_none());
 
-    let needs_redraw = handle_server_event(
-        &mut app,
-        ServerEvent::Done { id: 4242 },
-        &mut remote,
-    );
+    let needs_redraw = handle_server_event(&mut app, ServerEvent::Done { id: 4242 }, &mut remote);
 
     assert!(
         needs_redraw,

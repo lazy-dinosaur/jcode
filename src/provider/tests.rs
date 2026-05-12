@@ -1,5 +1,6 @@
 use super::*;
 use crate::provider::models::{ensure_model_allowed_for_subscription, filtered_display_models};
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 fn with_clean_provider_test_env<T>(f: impl FnOnce() -> T) -> T {
     let _guard = crate::storage::lock_test_env();
@@ -48,7 +49,7 @@ fn with_clean_provider_test_env<T>(f: impl FnOnce() -> T) -> T {
     crate::auth::claude::set_active_account_override(None);
     crate::auth::codex::set_active_account_override(None);
 
-    let result = f();
+    let result = catch_unwind(AssertUnwindSafe(f));
 
     crate::auth::claude::set_active_account_override(None);
     crate::auth::codex::set_active_account_override(None);
@@ -73,7 +74,10 @@ fn with_clean_provider_test_env<T>(f: impl FnOnce() -> T) -> T {
         }
     }
     crate::subscription_catalog::clear_runtime_env();
-    result
+    match result {
+        Ok(value) => value,
+        Err(panic) => resume_unwind(panic),
+    }
 }
 
 fn enter_test_runtime() -> tokio::runtime::Runtime {
