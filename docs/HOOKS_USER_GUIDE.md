@@ -474,9 +474,14 @@ claude-code 의 Stop hook 을 jcode 로 옮기려면:
 |---|---|
 | `/tmp/jcode-response-completed.log` | tee hook 의 모든 response.completed payload (영구) |
 | `/tmp/jcode-session-stop.log` | session.stop payload |
-| `/tmp/jcode-m35-self-throttle-demo.log` | self-throttle demo �� fire/skip/inject 기록 |
+| `/tmp/jcode-m35-self-throttle-demo.log` | self-throttle demo 의 fire/skip/inject 기록 |
 
-## 부록 D: 한 줄 cheatsheet
+## 부록 D: 관련 docs
+
+- [`M35_LIFECYCLE_HOOK_INJECT.md`](./M35_LIFECYCLE_HOOK_INJECT.md) — hook inject 의 design background, claude-code 비교, wire format 시행착오.
+- [`M31_BG_AUTO_INJECT.md`](./M31_BG_AUTO_INJECT.md) — bg tool 완료 시 LLM auto-inject (hook 과 동일한 `enqueue_injection` 인프라 공유).
+
+## 부록 E: 한 줄 cheatsheet
 
 ```bash
 # 가장 간단한 self-throttle inject hook 한 줄 inline
