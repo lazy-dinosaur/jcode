@@ -693,6 +693,10 @@ impl Agent {
                                 self.inject_lifecycle_reminder_for_continuation();
                                 continue;
                             }
+                            LifecycleHookOutcome::ContinueImmediateWithInject(inject) => {
+                                self.inject_hook_body_for_continuation(inject);
+                                continue;
+                            }
                         }
                     }
                     NoToolCallOutcome::ContinueWithoutEvent => continue,
@@ -756,6 +760,10 @@ impl Agent {
                         LifecycleHookOutcome::Stop => break,
                         LifecycleHookOutcome::ContinueImmediate => {
                             self.inject_lifecycle_reminder_for_continuation();
+                            continue;
+                        }
+                        LifecycleHookOutcome::ContinueImmediateWithInject(inject) => {
+                            self.inject_hook_body_for_continuation(inject);
                             continue;
                         }
                     }

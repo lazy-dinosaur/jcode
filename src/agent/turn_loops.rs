@@ -1,9 +1,10 @@
 use super::*;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum LifecycleHookOutcome {
     Stop,
     ContinueImmediate,
+    ContinueImmediateWithInject(crate::hooks::HookInjectContinuation),
 }
 
 impl Agent {
@@ -89,6 +90,34 @@ impl Agent {
         }
     }
 
+    pub(super) fn inject_hook_body_for_continuation(
+        &mut self,
+        inject: crate::hooks::HookInjectContinuation,
+    ) {
+        let trimmed = inject.body.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        let text = match inject.format {
+            crate::turn::injected_context::InjectionFormat::SystemReminder => {
+                format!("<system-reminder>\n{trimmed}\n</system-reminder>")
+            }
+            crate::turn::injected_context::InjectionFormat::UserMessage => trimmed.to_string(),
+        };
+        self.add_message(
+            Role::User,
+            vec![ContentBlock::Text {
+                text,
+                cache_control: None,
+            }],
+        );
+        if let Err(err) = self.session.save() {
+            logging::warn(&format!(
+                "[m35] failed to save session after hook inject continuation: {err:#}"
+            ));
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn inject_lifecycle_reminder_for_continuation_for_tests(&mut self) {
         self.inject_lifecycle_reminder_for_continuation();
@@ -108,6 +137,15 @@ impl Agent {
         self.handle_lifecycle_hook_deny(reason, cap)
     }
 
+    #[cfg(test)]
+    pub(crate) fn handle_lifecycle_hook_inject_with_cap_for_tests(
+        &mut self,
+        inject: crate::hooks::HookInjectContinuation,
+        cap: u8,
+    ) -> LifecycleHookOutcome {
+        self.handle_lifecycle_hook_inject(inject, cap)
+    }
+
     fn handle_lifecycle_hook_deny(&mut self, reason: String, cap: u8) -> LifecycleHookOutcome {
         self.set_pending_lifecycle_system_reminder(reason);
         if cap == 0 || self.lifecycle_deny_streak < cap {
@@ -125,6 +163,31 @@ impl Agent {
         } else {
             logging::warn(&format!(
                 "[m11-stage6] lifecycle deny streak cap ({cap}) reached, falling back to next-prompt reminder"
+            ));
+            LifecycleHookOutcome::Stop
+        }
+    }
+
+    fn handle_lifecycle_hook_inject(
+        &mut self,
+        inject: crate::hooks::HookInjectContinuation,
+        cap: u8,
+    ) -> LifecycleHookOutcome {
+        if cap == 0 || self.lifecycle_deny_streak < cap {
+            self.lifecycle_deny_streak = self.lifecycle_deny_streak.saturating_add(1);
+            logging::info(&format!(
+                "[m35] lifecycle inject #{} (cap={}), continuing turn",
+                self.lifecycle_deny_streak,
+                if cap == 0 {
+                    "unlimited".to_string()
+                } else {
+                    cap.to_string()
+                }
+            ));
+            LifecycleHookOutcome::ContinueImmediateWithInject(inject)
+        } else {
+            logging::warn(&format!(
+                "[m35] lifecycle inject streak cap ({cap}) reached, stopping turn"
             ));
             LifecycleHookOutcome::Stop
         }
@@ -288,9 +351,13 @@ impl Agent {
             session_age_seconds,
         };
         match crate::hooks::run_response_hooks(payload).await {
-            Ok(Some(reason)) => {
+            Ok(Some(crate::hooks::LifecycleHookDecision::Deny(reason))) => {
                 let cap = self.resolve_max_lifecycle_deny_streak_for_current_session();
                 self.handle_lifecycle_hook_deny(reason, cap)
+            }
+            Ok(Some(crate::hooks::LifecycleHookDecision::Inject(inject))) => {
+                let cap = self.resolve_max_lifecycle_deny_streak_for_current_session();
+                self.handle_lifecycle_hook_inject(inject, cap)
             }
             Ok(None) => LifecycleHookOutcome::Stop,
             Err(err) => {
@@ -936,6 +1003,10 @@ impl Agent {
                         self.inject_lifecycle_reminder_for_continuation();
                         continue;
                     }
+                    LifecycleHookOutcome::ContinueImmediateWithInject(inject) => {
+                        self.inject_hook_body_for_continuation(inject);
+                        continue;
+                    }
                 }
             }
 
@@ -971,6 +1042,10 @@ impl Agent {
                         LifecycleHookOutcome::Stop => break,
                         LifecycleHookOutcome::ContinueImmediate => {
                             self.inject_lifecycle_reminder_for_continuation();
+                            continue;
+                        }
+                        LifecycleHookOutcome::ContinueImmediateWithInject(inject) => {
+                            self.inject_hook_body_for_continuation(inject);
                             continue;
                         }
                     }

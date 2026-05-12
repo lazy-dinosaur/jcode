@@ -1304,6 +1304,83 @@ async fn lifecycle_continuation_is_noop_when_no_pending_reminder() {
     );
 }
 
+#[tokio::test]
+async fn hook_inject_appends_user_message_to_transcript() {
+    let _guard = crate::storage::lock_test_env();
+    let provider: Arc<dyn Provider> = Arc::new(NativeAutoCompactionProvider);
+    let registry = Registry::new(provider.clone()).await;
+    let mut agent = Agent::new(provider, registry);
+
+    agent.add_message(
+        Role::Assistant,
+        vec![ContentBlock::Text {
+            text: "Done".to_string(),
+            cache_control: None,
+        }],
+    );
+    let messages_before = agent.session.messages.len();
+    let inject = crate::hooks::HookInjectContinuation {
+        body: "Inspect the generated report before stopping.".to_string(),
+        format: crate::turn::injected_context::InjectionFormat::SystemReminder,
+    };
+
+    let outcome = agent.handle_lifecycle_hook_inject_with_cap_for_tests(inject, 3);
+    assert!(matches!(
+        outcome,
+        super::turn_loops::LifecycleHookOutcome::ContinueImmediateWithInject(_)
+    ));
+    let super::turn_loops::LifecycleHookOutcome::ContinueImmediateWithInject(inject) = outcome
+    else {
+        unreachable!();
+    };
+    agent.inject_hook_body_for_continuation(inject);
+
+    assert_eq!(agent.session.messages.len(), messages_before + 1);
+    let last = agent.session.messages.last().unwrap();
+    assert!(matches!(last.role, Role::User));
+    let ContentBlock::Text { text, .. } = &last.content[0] else {
+        panic!("expected text block");
+    };
+    assert!(text.contains("<system-reminder>"));
+    assert!(text.contains("Inspect the generated report before stopping."));
+}
+
+#[tokio::test]
+async fn hook_inject_respects_deny_streak_cap() {
+    let _guard = crate::storage::lock_test_env();
+    let provider: Arc<dyn Provider> = Arc::new(NativeAutoCompactionProvider);
+    let registry = Registry::new(provider.clone()).await;
+    let mut agent = Agent::new(provider, registry);
+
+    for expected_streak in 1..=3 {
+        let outcome = agent.handle_lifecycle_hook_inject_with_cap_for_tests(
+            crate::hooks::HookInjectContinuation {
+                body: format!("inject {expected_streak}"),
+                format: crate::turn::injected_context::InjectionFormat::SystemReminder,
+            },
+            3,
+        );
+        assert!(matches!(
+            outcome,
+            super::turn_loops::LifecycleHookOutcome::ContinueImmediateWithInject(_)
+        ));
+        assert_eq!(agent.lifecycle_deny_streak_for_tests(), expected_streak);
+    }
+
+    let outcome = agent.handle_lifecycle_hook_inject_with_cap_for_tests(
+        crate::hooks::HookInjectContinuation {
+            body: "inject 4".to_string(),
+            format: crate::turn::injected_context::InjectionFormat::SystemReminder,
+        },
+        3,
+    );
+    assert!(matches!(
+        outcome,
+        super::turn_loops::LifecycleHookOutcome::Stop
+    ));
+    assert_eq!(agent.lifecycle_deny_streak_for_tests(), 3);
+}
+
 #[test]
 fn lifecycle_deny_streak_env_override_beats_config() {
     let _guard = crate::storage::lock_test_env();
