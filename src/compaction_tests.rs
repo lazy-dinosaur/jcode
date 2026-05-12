@@ -290,6 +290,38 @@ async fn test_guard_at_95_triggers_hard_compact() {
         manager.active_summary.is_some(),
         "should have an emergency summary"
     );
+    assert!(
+        !manager.is_compacting(),
+        "critical hard compact must not leave a background compaction task pending"
+    );
+}
+
+#[tokio::test]
+async fn test_native_encrypted_compaction_blob_does_not_keep_usage_critical() {
+    let mut manager = CompactionManager::new().with_budget(DEFAULT_TOKEN_BUDGET);
+    let mut messages = Vec::new();
+    for i in 0..50 {
+        messages.push(make_text_message(
+            Role::User,
+            &format!("message {} {}", i, "x".repeat(100)),
+        ));
+        manager.notify_message_added();
+    }
+
+    let state = crate::session::StoredCompactionState {
+        summary_text: "visible native summary".repeat(200),
+        openai_encrypted_content: Some("x".repeat(8_100_000)),
+        covers_up_to_turn: 45,
+        original_turn_count: 45,
+        compacted_count: 45,
+    };
+    manager.restore_persisted_state_with(&state, &messages);
+
+    let usage = manager.context_usage_with(&messages);
+    assert!(
+        usage < COMPACTION_THRESHOLD,
+        "sendable encrypted replay payload should not be treated as prompt tokens; usage={usage:.2}"
+    );
 }
 
 #[tokio::test]

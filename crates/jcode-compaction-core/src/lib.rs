@@ -292,11 +292,15 @@ pub fn content_char_count(content: &[ContentBlock]) -> usize {
 }
 
 pub fn summary_payload_char_count(summary: &Summary) -> usize {
-    summary
-        .openai_encrypted_content
-        .as_ref()
-        .map(|value| value.len())
-        .unwrap_or_else(|| summary.text.len())
+    // OpenAI native compaction's `encrypted_content` is a provider replay blob,
+    // not prompt-visible text. Counting its byte length as prompt tokens makes a
+    // successful native compaction look like it is still far above the context
+    // window (for example an ~8 MiB encrypted blob becomes ~2M estimated
+    // tokens), which can trigger an endless emergency-compaction loop.
+    //
+    // Use the visible summary text for token estimation. Payload sendability is
+    // guarded separately by `openai_encrypted_content_is_sendable` before replay.
+    summary.text.len()
 }
 
 pub fn estimate_compaction_tokens(
@@ -633,6 +637,27 @@ mod tests {
         assert!(summary.contains("Tools used: read"));
         assert!(summary.contains("Files referenced: Cargo.toml, src/compaction.rs"));
         assert!(!summary.contains("https://example.com"));
+    }
+
+    #[test]
+    fn native_openai_encrypted_payload_does_not_count_as_prompt_tokens() {
+        let summary = Summary {
+            text: "visible summary".repeat(300),
+            openai_encrypted_content: Some("x".repeat(8_100_000)),
+            covers_up_to_turn: 100,
+            original_turn_count: 100,
+        };
+
+        let estimated = estimate_compaction_tokens(Some(&summary), 0, DEFAULT_TOKEN_BUDGET);
+
+        assert!(
+            estimated < 25_000,
+            "encrypted provider replay payload must not be estimated as prompt tokens: {estimated}"
+        );
+        assert_eq!(
+            estimated,
+            summary.text.len() / CHARS_PER_TOKEN + SYSTEM_OVERHEAD_TOKENS
+        );
     }
 
     #[test]

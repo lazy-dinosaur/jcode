@@ -792,10 +792,6 @@ impl CompactionManager {
         all_messages: &[Message],
         provider: Arc<dyn Provider>,
     ) -> CompactionAction {
-        let was_compacting = self.is_compacting();
-        self.maybe_start_compaction_with(all_messages, provider);
-        let bg_started = !was_compacting && self.is_compacting();
-
         let usage = self.context_usage_with(all_messages);
         if usage >= CRITICAL_THRESHOLD {
             crate::logging::warn(&format!(
@@ -827,6 +823,10 @@ impl CompactionManager {
                 }
             }
         }
+
+        let was_compacting = self.is_compacting();
+        self.maybe_start_compaction_with(all_messages, provider);
+        let bg_started = !was_compacting && self.is_compacting();
 
         if bg_started {
             CompactionAction::BackgroundStarted {
