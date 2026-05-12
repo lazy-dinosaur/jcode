@@ -1620,6 +1620,177 @@ mod tests {
         }));
     }
 
+    /// M38 regression: when a worker that is already in `ready` status sends a
+    /// *second* completion report (e.g. an initial short status followed by a
+    /// large audit body), the coordinator must still receive the new report
+    /// body even though the lifecycle status did not change.
+    ///
+    /// Prior to the M38 fix, `should_notify_coordinator` only triggered on
+    /// `status_changed`, so a second report submitted while `status == "ready"`
+    /// would be silently swallowed: `latest_completion_report` was overwritten
+    /// in-place but no `Notification` ever fanned out to the parent.
+    #[tokio::test]
+    async fn update_member_status_with_report_notifies_when_only_body_changes() {
+        let swarm_members = Arc::new(RwLock::new(HashMap::new()));
+        let swarms_by_id = Arc::new(RwLock::new(HashMap::from([(
+            "swarm-1".to_string(),
+            HashSet::from(["coord".to_string(), "worker".to_string()]),
+        )])));
+
+        let (coord, mut coord_rx) = swarm_member("coord", "coordinator", false);
+        let (mut worker, _worker_rx) = swarm_member("worker", "agent", true);
+        worker.status = "running".to_string();
+        worker.report_back_to_session_id = Some("coord".to_string());
+        {
+            let mut members = swarm_members.write().await;
+            members.insert("coord".to_string(), coord);
+            members.insert("worker".to_string(), worker);
+        }
+
+        // First report: running -> ready (status_changed = true).
+        update_member_status_with_report(
+            "worker",
+            "ready",
+            None,
+            Some("Initial short status while finalizing.".to_string()),
+            &swarm_members,
+            &swarms_by_id,
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        let first_events: Vec<_> = std::iter::from_fn(|| coord_rx.try_recv().ok()).collect();
+        assert!(
+            first_events.iter().any(|event| matches!(
+                event,
+                ServerEvent::Notification {
+                    notification_type: NotificationType::Message { .. },
+                    message,
+                    ..
+                } if message.contains("Initial short status while finalizing.")
+            )),
+            "coordinator must receive the first report on running -> ready"
+        );
+
+        // Second report: ready -> ready (status unchanged, body grew).
+        // This is the live-reported failure mode: the worker is already
+        // "stopped/waiting" and just posts the full audit body. Pre-fix,
+        // this would be swallowed because `status_changed == false`.
+        let full_audit_body = "Full audit report body: findings...".to_string();
+        update_member_status_with_report(
+            "worker",
+            "ready",
+            None,
+            Some(full_audit_body.clone()),
+            &swarm_members,
+            &swarms_by_id,
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        let second_events: Vec<_> = std::iter::from_fn(|| coord_rx.try_recv().ok()).collect();
+        assert!(
+            second_events.iter().any(|event| matches!(
+                event,
+                ServerEvent::Notification {
+                    notification_type: NotificationType::Message { .. },
+                    message,
+                    ..
+                } if message.contains("Full audit report body")
+            )),
+            "coordinator must also receive the second report body even though status did not change; got events: {:?}",
+            second_events
+        );
+    }
+
+    /// M38 guard: a duplicate completion report with the exact same body must
+    /// NOT trigger another fanout. We rely on
+    /// `member.latest_completion_report` equality for dedup, so resending the
+    /// identical text is a noop.
+    #[tokio::test]
+    async fn update_member_status_with_report_dedups_identical_body() {
+        let swarm_members = Arc::new(RwLock::new(HashMap::new()));
+        let swarms_by_id = Arc::new(RwLock::new(HashMap::from([(
+            "swarm-1".to_string(),
+            HashSet::from(["coord".to_string(), "worker".to_string()]),
+        )])));
+
+        let (coord, mut coord_rx) = swarm_member("coord", "coordinator", false);
+        let (mut worker, _worker_rx) = swarm_member("worker", "agent", true);
+        worker.status = "running".to_string();
+        worker.report_back_to_session_id = Some("coord".to_string());
+        {
+            let mut members = swarm_members.write().await;
+            members.insert("coord".to_string(), coord);
+            members.insert("worker".to_string(), worker);
+        }
+
+        let body = "Identical audit body".to_string();
+
+        update_member_status_with_report(
+            "worker",
+            "ready",
+            None,
+            Some(body.clone()),
+            &swarm_members,
+            &swarms_by_id,
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        // Drain the first delivery so we can prove the dedup specifically.
+        let first_events: Vec<_> = std::iter::from_fn(|| coord_rx.try_recv().ok()).collect();
+        assert!(
+            first_events.iter().any(|event| matches!(
+                event,
+                ServerEvent::Notification {
+                    notification_type: NotificationType::Message { .. },
+                    ..
+                }
+            )),
+            "first report should fanout"
+        );
+
+        // Re-submit identical body while status unchanged: no new fanout.
+        update_member_status_with_report(
+            "worker",
+            "ready",
+            None,
+            Some(body.clone()),
+            &swarm_members,
+            &swarms_by_id,
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        let second_events: Vec<_> = std::iter::from_fn(|| coord_rx.try_recv().ok()).collect();
+        let resent_notifications = second_events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    ServerEvent::Notification {
+                        notification_type: NotificationType::Message { .. },
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(
+            resent_notifications, 0,
+            "duplicate identical body must not refanout; got events: {:?}",
+            second_events
+        );
+    }
+
     #[tokio::test]
     async fn update_member_status_skips_noop_broadcasts() {
         let swarm_members = Arc::new(RwLock::new(HashMap::new()));
