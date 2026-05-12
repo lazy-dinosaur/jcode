@@ -1,5 +1,13 @@
 use super::*;
 
+fn test_tool(name: &str) -> ToolDefinition {
+    ToolDefinition {
+        name: name.to_string(),
+        description: format!("{name} test tool"),
+        input_schema: serde_json::json!({"type": "object", "additionalProperties": false}),
+    }
+}
+
 #[test]
 fn test_parse_sse_event() {
     let mut buffer = "event: message_start\ndata: {\"type\":\"message_start\"}\n\n".to_string();
@@ -67,7 +75,7 @@ fn test_oauth_schedule_tool_advertised_schema_matches_dispatch() {
     use crate::tool::ambient::ScheduleTool;
 
     let provider = AnthropicProvider::new();
-    let api_tools = provider.format_tools(&[], true);
+    let api_tools = provider.format_tools(&[test_tool("schedule")], true);
 
     // Wire-name stays `ScheduleWakeup` (for back-compat with the existing
     // `schedule` <-> `ScheduleWakeup` mapping); only the schema must match
@@ -108,7 +116,7 @@ fn test_oauth_tool_search_advertised_schema_matches_codesearch_dispatch() {
     use crate::tool::codesearch::CodeSearchTool;
 
     let provider = AnthropicProvider::new();
-    let api_tools = provider.format_tools(&[], true);
+    let api_tools = provider.format_tools(&[test_tool("codesearch")], true);
 
     let tool_search = api_tools.iter().find(|t| t.name == "ToolSearch").expect(
         "OAuth tool list must advertise `ToolSearch` (wire-name for the local `codesearch` tool)",
@@ -130,6 +138,86 @@ fn test_oauth_tool_search_advertised_schema_matches_codesearch_dispatch() {
         tool_search.input_schema["properties"]["max_results"].is_null(),
         "Advertised ToolSearch schema must not contain the dead `max_results` field"
     );
+}
+
+#[test]
+fn test_format_tools_oauth_includes_jcode_only_tools() {
+    let provider = AnthropicProvider::new();
+    let tools = vec![test_tool("bg"), test_tool("swarm"), test_tool("bash")];
+
+    let api_tools = provider.format_tools(&tools, true);
+    let names: Vec<&str> = api_tools.iter().map(|t| t.name.as_str()).collect();
+
+    assert!(names.contains(&"bg"), "bg must be advertised");
+    assert!(names.contains(&"swarm"), "swarm must be advertised");
+    assert!(
+        names.contains(&"Bash"),
+        "Bash hardcoded OAuth schema must remain for local bash"
+    );
+    assert!(
+        !names.contains(&"bash"),
+        "local bash must be advertised once via OAuth alias only"
+    );
+}
+
+#[test]
+fn test_format_tools_oauth_cache_control_only_on_last() {
+    let provider = AnthropicProvider::new();
+    let api_tools = provider.format_tools(&[test_tool("bash"), test_tool("bg")], true);
+
+    let with_cache: Vec<usize> = api_tools
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.cache_control.is_some())
+        .map(|(i, _)| i)
+        .collect();
+
+    assert_eq!(with_cache.len(), 1, "exactly one cache_control");
+    assert_eq!(with_cache[0], api_tools.len() - 1, "must be last");
+}
+
+#[test]
+fn test_format_tools_oauth_known_tools_not_duplicated() {
+    let provider = AnthropicProvider::new();
+    let tools = vec![test_tool("subagent"), test_tool("bash")];
+
+    let api_tools = provider.format_tools(&tools, true);
+    let agent_count = api_tools.iter().filter(|t| t.name == "Agent").count();
+    let bash_count = api_tools.iter().filter(|t| t.name == "Bash").count();
+
+    assert_eq!(agent_count, 1);
+    assert_eq!(bash_count, 1);
+}
+
+#[test]
+fn test_format_tools_oauth_empty_tools_returns_empty() {
+    let provider = AnthropicProvider::new();
+    let api_tools = provider.format_tools(&[], true);
+
+    assert!(
+        api_tools.is_empty(),
+        "§5.4 tools-driven OAuth advertisement must not hardcode tools when none are allowed"
+    );
+}
+
+#[test]
+fn test_format_tools_oauth_does_not_advertise_agent_without_subagent_tool() {
+    let provider = AnthropicProvider::new();
+    let api_tools = provider.format_tools(&[test_tool("bash"), test_tool("bg")], true);
+
+    assert!(
+        !api_tools.iter().any(|t| t.name == "Agent"),
+        "Agent must only be advertised when local subagent is allowed"
+    );
+}
+
+#[test]
+fn test_format_tools_api_key_path_unchanged() {
+    let provider = AnthropicProvider::new();
+    let api_tools = provider.format_tools(&[test_tool("bg")], false);
+
+    assert_eq!(api_tools.len(), 1);
+    assert_eq!(api_tools[0].name, "bg");
 }
 
 #[tokio::test]
