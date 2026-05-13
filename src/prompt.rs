@@ -1146,11 +1146,17 @@ fn find_prompt_project_dir(working_dir: Option<&Path>) -> Option<PathBuf> {
         start
     };
 
+    // Prefer the nearest private Jcode project root.  A monorepo commonly has
+    // nested `docs/AGENTS.md`, `packages/AGENTS.md`, etc.; those are local
+    // policies, not the root used to locate the private `.jcode/` harness.
     for ancestor in start.ancestors() {
-        if ancestor.join(".jcode").exists()
-            || ancestor.join("AGENTS.md").exists()
-            || ancestor.join("agents.md").exists()
-        {
+        if ancestor.join(".jcode").exists() {
+            return Some(ancestor.to_path_buf());
+        }
+    }
+
+    for ancestor in start.ancestors() {
+        if ancestor.join("AGENTS.md").exists() || ancestor.join("agents.md").exists() {
             return Some(ancestor.to_path_buf());
         }
     }

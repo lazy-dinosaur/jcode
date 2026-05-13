@@ -254,6 +254,64 @@ fn test_prompt_config_can_ignore_project_agents_and_keep_private_harness() {
 }
 
 #[test]
+fn test_nested_cwd_prefers_root_jcode_harness_over_nearby_agents_root() {
+    let project_dir = tempfile::TempDir::new().unwrap();
+    let docs_dir = project_dir.path().join("docs");
+    std::fs::create_dir_all(project_dir.path().join(".jcode/harness")).unwrap();
+    std::fs::create_dir_all(&docs_dir).unwrap();
+    std::fs::write(project_dir.path().join("AGENTS.md"), "root team harness").unwrap();
+    std::fs::write(docs_dir.join("AGENTS.md"), "docs local harness").unwrap();
+    std::fs::write(
+        project_dir.path().join(".jcode/AGENTS.md"),
+        "root private jcode harness",
+    )
+    .unwrap();
+    std::fs::write(
+        project_dir.path().join(".jcode/harness/10-rules.md"),
+        "root private harness module",
+    )
+    .unwrap();
+    std::fs::write(
+        project_dir.path().join(".jcode/config.toml"),
+        "[prompt]\nignore_project_agents = true\nload_jcode_agents = true\nload_harness_dir = true\n",
+    )
+    .unwrap();
+
+    let prompt_config = crate::config::PromptConfig::default();
+    let (agents_content, agents_info) =
+        load_agents_md_files_from_dir_with_config(Some(&docs_dir), &prompt_config);
+    let (overlay_content, _overlay_chars, harness_chars, overlay_sources) =
+        load_prompt_overlay_files_from_dir_with_config(Some(&docs_dir), &prompt_config);
+
+    let agents_content = agents_content.expect("agents content");
+    assert!(agents_info.has_jcode_agents_md);
+    assert!(agents_content.contains("root private jcode harness"));
+    assert!(agents_content.contains("root team harness"));
+    assert!(!agents_content.contains("docs local harness"));
+
+    let overlay_content = overlay_content.expect("harness content");
+    assert!(harness_chars > 0);
+    assert!(overlay_content.contains("root private harness module"));
+    assert!(overlay_sources.iter().any(|source| {
+        source.private
+            && source.status == PromptInstructionStatus::Loaded
+            && source.path.ends_with(".jcode/harness/10-rules.md")
+    }));
+
+    let (split, info) = build_system_prompt_split(None, &[], false, None, Some(&docs_dir));
+    assert!(split.static_part.contains("root private jcode harness"));
+    assert!(split.static_part.contains("root private harness module"));
+    assert!(!split.static_part.contains("root team harness"));
+    assert!(info.has_jcode_agents_md);
+    assert!(info.jcode_harness_chars > 0);
+    assert!(info.instruction_sources.iter().any(|source| {
+        source.status == PromptInstructionStatus::Skipped
+            && source.reason.as_deref() == Some("prompt.ignore_project_agents=true")
+            && source.path.ends_with("AGENTS.md")
+    }));
+}
+
+#[test]
 fn test_private_jcode_harness_modules_load_sorted() {
     let project_dir = tempfile::TempDir::new().unwrap();
     let harness_dir = project_dir.path().join(".jcode/harness");
