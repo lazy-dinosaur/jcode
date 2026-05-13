@@ -7,16 +7,16 @@ self-contained handoff card. 다음 세션 시작 시 사용 패턴:
 2. 에이전트가 `docs/lazydino/milestones/M11.md` 를 읽음
 3. 거기에 적힌 worktree / branch / 분석 문서 / verification 으로 바로 진행
 
-## 우선순위 (Round 6 종료 시점 + 2026-05-12 라이브 갱신)
+## 우선순위 (2026-05-13 M22 deploy integration 이후)
 
 | 순위 | ID | 우선도 | 추정 작업량 | 카드 |
 |---|---|---|---|---|
 | 1 | M11 | ✅ DONE (framework 게이트) | 6 stages complete, latest Stage 6 deployed | [M11.md](./M11.md) |
 | 2 | M41 | ✅ DONE (라이브 검증 + 배포 완료) | fix + 4 회귀 테스트, deploy `m41-eefa3744`, fork pushed | [M41.md](./M41.md) |
 | 3 | M42 | ✅ DONE 2026-05-13 (deploy `lazydino-6d81399a`) | stale `checking websocket` label clear (StatusDetail empty-string contract) | [M42.md](./M42.md) |
-| 4 | M40 | **High** (UX 직접 타격, 3 sub-issue) | Phase 1-4, image/slash/1m | [M40.md](./M40.md) |
+| 4 | M40 | **High** (UX 직접 타격, 2 remaining sub-issue) | **NEXT: Phase 4 Opus 1m advertise**, then Phase 1-2 image silent fail. Phase 3 slash DONE | [M40.md](./M40.md) |
 | 5 | M17 | **High** (사용자 워크플로우) | A vs B1 결정 + ~50줄 ~ 수백줄 | [M17.md](./M17.md) |
-| 6 | M22 | ✅ DONE 2026-05-13 (deploy integration) | OpenAI parallel_tool_calls + turn loop FuturesUnordered fan-out, 9 targeted tests PASS, mpsc Alt+B/reload preserved | [M22.md](./M22.md) |
+| 6 | M22 | ✅ DONE 2026-05-13 (deploy `lazydino-93e25dae`) | OpenAI parallel_tool_calls + turn loop FuturesUnordered fan-out, 9 targeted tests PASS, mpsc Alt+B/reload preserved, fork pushed | [M22.md](./M22.md) |
 | 7 | M43 | ✅ DONE 2026-05-13 (deploy `lazydino-07905799`) | OAuth path 에서 `tools` 기반 광고 회복, bg/swarm canary 실측 통과 | [M43.md](./M43.md) |
 | 8 | M16 | Medium-High (구조 개선) | 4 sub-step | [M16.md](./M16.md) |
 | 9 | M2  | Medium-High | 재현부터 | [M2.md](./M2.md) |
@@ -34,11 +34,11 @@ self-contained handoff card. 다음 세션 시작 시 사용 패턴:
 - **commit 분리**: `fix(mXX):`, `test(mXX):`, `docs:` 각각 별도 commit
 - **patch 베이스**: 항상 `origin/master` (deploy 위에 stack 안 함)
 - **toolchain**: `cargo +nightly` 필수
-- **integration**: deploy/m9-m10 으로 cherry-pick
+- **integration**: 현재 catch-up deploy branch 는 `deploy/m9-m27-catchup`
 - **빌드 + 배포**:
   ```bash
   cargo +nightly build --release
-  TIP=$(git rev-parse --short=8 deploy/m9-m10)
+  TIP=$(git rev-parse --short=8 deploy/m9-m27-catchup)
   install -m 0755 target/release/jcode \
     "$HOME/.jcode/builds/versions/lazydino-${TIP}/jcode"
   ln -sfn "$HOME/.jcode/builds/versions/lazydino-${TIP}/jcode" \
@@ -47,7 +47,7 @@ self-contained handoff card. 다음 세션 시작 시 사용 패턴:
     "$HOME/.jcode/builds/stable/jcode"
   install -m 0755 target/release/jcode "$HOME/.local/bin/jcode"
   ```
-- **fork push**: `./scripts/fork-push.sh deploy/m9-m10 patch/<name>`
+- **fork push**: `./scripts/fork-push.sh deploy/m9-m27-catchup patch/<name>`
 - **사용자 액션**: TUI close+reopen 은 *사용자 본인이* (절대 server kill 금지)
 - **subagent**: M22 완료. 같은 turn 에 여러 tool/subagent 가 emit 되면 turn loop 가 `FuturesUnordered` 로 fan-out. 단 모델이 multi-emits 할지는 provider/model 결정.
 
@@ -55,5 +55,18 @@ self-contained handoff card. 다음 세션 시작 시 사용 패턴:
 
 - `origin = https://github.com/1jehuang/jcode.git` (upstream)
 - `fork   = https://github.com/lazy-dinosaur/jcode.git` (개인)
-- fork == origin/master sync 완료, deploy/m9-m10 + 48 patch 모두 push 됨
-- backup tag 51개 (rollback 안전)
+- fork `deploy/m9-m27-catchup` pushed at `93e25dae` (M22 deploy integration)
+- fork `patch/m22-stage2-turn-loop-fanout` pushed at `b0a6b344`
+- latest installed binary: `jcode v0.12.274-dev (93e25dae)` via current/stable symlinks
+- backup tags retained for rollback safety
+
+## 현재 handoff 요약 (2026-05-13)
+
+- 방금 완료: **M22 Stage 2 same-round tool/subagent fan-out**.
+- 검증 완료: `cargo +nightly test --release --test m22_stage2_parallel_tools`
+  9/9 PASS, `cargo +nightly build --release` PASS, `git diff --check` PASS.
+- 의도적으로 하지 않은 것: active server kill/restart. TUI 는 사용자가 close/reopen 해야
+  새 binary 를 붙잡음.
+- 다음 추천: **M40 Phase 4 — Opus 1m main picker advertisement**.
+  이유: 메인 세션 context 한계에 직접 영향, subagent `variant=max` 는 이미 동작하므로
+  scope 가 비교적 선명함. 그 다음 M40 Phase 1-2 image attach silent fail.

@@ -46,8 +46,11 @@
     errors, urgent interrupt remaining count, global write_serializer,
     mpsc Alt+B background handoff, graceful reload bash 750ms handoff,
     selfdev reload clean message, loops SubagentStatus/ToolUpdated.
+  - Deploy integration: `deploy/m9-m27-catchup` at `93e25dae`, fork pushed.
+    Installed binary: `jcode v0.12.274-dev (93e25dae)` via current/stable symlinks.
   - 검증: `cargo +nightly test --release --test m22_stage2_parallel_tools`
-    9/9 PASS, `cargo +nightly build --release` PASS, mermaid string count unchanged.
+    9/9 PASS, `cargo +nightly build --release` PASS, `git diff --check` PASS,
+    mermaid string count unchanged.
   - 주의: `clippy --all-targets -D warnings` 는 deploy branch 의 M22 무관
     기존 lint 다수로 실패. M22 targeted/build 는 PASS.
 - **M41 — server-initiated turn 첫 stream event 가 client redraw 안 깨움**
@@ -59,8 +62,13 @@
   - ✅ DONE (2026-05-13). deploy `m40-862578f1`. `composer_mode` 에
     `leading_space_escapes_slash()` 헬퍼: leading whitespace 면
     무조건 Chat. 17개 ui::input_ui 테스트 통과. fork pushed.
-- **M40 Phase 1-2 — 이미지 첨부 silent fail**
-- **M40 Phase 4 — Opus 1m 메인 picker 미advertise**
+- **NEXT: M40 Phase 4 — Opus 1m 메인 picker 미advertise**
+  - 이유: 메인 세션 context 한계에 직접 영향. 코드/카탈로그에는 `[1m]` 등록,
+    subagent `variant=max` 는 동작 중. 남은 scope 는 main picker advertisement/
+    usage gate 쪽으로 좁혀져 있음.
+  - 시작 파일: `docs/lazydino/milestones/M40.md`, 특히 Phase 4 / Candidate D.
+- **그 다음: M40 Phase 1-2 — 이미지 첨부 silent fail**
+  - 먼저 진단 로그 + 사용자 피드백을 추가하고, live paste 로 실패 지점을 확인.
 - **M16 (구조 개선) 은 가장 마지막**
 
 ## 배포 절차 요약
