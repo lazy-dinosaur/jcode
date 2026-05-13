@@ -312,6 +312,10 @@ pub fn build_system_prompt_full(
         parts.push(format!("# Active Skill\n\n{}", skill));
     }
 
+    if let Some(priority) = instruction_priority_section(&info) {
+        parts.push(priority);
+    }
+
     let prompt = parts.join("\n\n");
     info.total_chars = prompt.len();
 
@@ -393,6 +397,10 @@ pub fn build_system_prompt_split(
     // Active skill prompt (changes per skill invocation)
     if let Some(skill) = skill_prompt {
         dynamic_parts.push(format!("# Active Skill\n\n{}", skill));
+    }
+
+    if let Some(priority) = instruction_priority_section(&info) {
+        static_parts.push(priority);
     }
 
     let static_part = static_parts.join("\n\n");
@@ -630,11 +638,11 @@ fn load_agents_md_files_from_dir_with_config(
     let mut info = ContextInfo::default();
 
     // Helper to load a file if it exists, returns (formatted_content, raw_size)
-    let load_file = |path: &Path, label: &str| -> Option<(String, usize)> {
+    let load_file = |path: &Path, label: &str, private: bool| -> Option<(String, usize)> {
         if path.exists() {
             std::fs::read_to_string(path).ok().map(|content| {
                 let raw_size = content.len();
-                let formatted = format!("# {}\n\n{}", label, content.trim());
+                let formatted = format_instruction_file(label, content.trim(), private);
                 (formatted, raw_size)
             })
         } else {
@@ -645,7 +653,7 @@ fn load_agents_md_files_from_dir_with_config(
     // Project-level files (from specified working directory or current directory)
     let project_dir = find_prompt_project_dir(working_dir)
         .unwrap_or_else(|| working_dir.unwrap_or(Path::new(".")).to_path_buf());
-    let project_agents_path = project_dir.join("AGENTS.md");
+    let project_agents_path = agents_md_path(&project_dir);
     if prompt_config.ignore_project_agents {
         info.instruction_sources.push(PromptInstructionSource {
             label: "Project Instructions (AGENTS.md)".to_string(),
@@ -655,9 +663,11 @@ fn load_agents_md_files_from_dir_with_config(
             private: false,
             reason: Some("prompt.ignore_project_agents=true".to_string()),
         });
-    } else if let Some((content, size)) =
-        load_file(&project_agents_path, "Project Instructions (AGENTS.md)")
-    {
+    } else if let Some((content, size)) = load_file(
+        &project_agents_path,
+        "Project Instructions (AGENTS.md)",
+        false,
+    ) {
         info.has_project_agents_md = true;
         info.project_agents_md_chars = size;
         info.instruction_sources.push(PromptInstructionSource {
@@ -672,7 +682,7 @@ fn load_agents_md_files_from_dir_with_config(
     }
 
     // Home directory files
-    if let Ok(global_agents_md) = crate::storage::user_home_path("AGENTS.md") {
+    if let Ok(global_agents_md) = global_agents_md_path() {
         if prompt_config.ignore_global_agents {
             info.instruction_sources.push(PromptInstructionSource {
                 label: "Global Instructions (~/.AGENTS.md)".to_string(),
@@ -682,9 +692,11 @@ fn load_agents_md_files_from_dir_with_config(
                 private: false,
                 reason: Some("prompt.ignore_global_agents=true".to_string()),
             });
-        } else if let Some((content, size)) =
-            load_file(&global_agents_md, "Global Instructions (~/.AGENTS.md)")
-        {
+        } else if let Some((content, size)) = load_file(
+            &global_agents_md,
+            "Global Instructions (~/.AGENTS.md)",
+            false,
+        ) {
             info.has_global_agents_md = true;
             info.global_agents_md_chars = size;
             info.instruction_sources.push(PromptInstructionSource {
@@ -701,7 +713,7 @@ fn load_agents_md_files_from_dir_with_config(
 
     // Private local jcode harness instructions. These are intentionally loaded after project and
     // global AGENTS.md so they have higher prompt priority for the local user.
-    let jcode_agents_path = project_dir.join(".jcode").join("AGENTS.md");
+    let jcode_agents_path = jcode_agents_md_path(&project_dir);
     if !prompt_config.load_jcode_agents {
         info.instruction_sources.push(PromptInstructionSource {
             label: "Private Jcode Harness (.jcode/AGENTS.md)".to_string(),
@@ -714,6 +726,7 @@ fn load_agents_md_files_from_dir_with_config(
     } else if let Some((content, size)) = load_file(
         &jcode_agents_path,
         "Private Jcode Harness (.jcode/AGENTS.md)",
+        true,
     ) {
         info.has_jcode_agents_md = true;
         info.jcode_agents_md_chars = size;
@@ -753,11 +766,11 @@ fn load_prompt_overlay_files_from_dir_with_config(
     let mut sources = Vec::new();
     let mut loaded_paths = BTreeSet::new();
 
-    let load_file = |path: &Path, label: &str| -> Option<(String, usize)> {
+    let load_file = |path: &Path, label: &str, private: bool| -> Option<(String, usize)> {
         if path.exists() {
             std::fs::read_to_string(path).ok().map(|content| {
                 let raw_size = content.len();
-                let formatted = format!("# {}\n\n{}", label, content.trim());
+                let formatted = format_instruction_file(label, content.trim(), private);
                 (formatted, raw_size)
             })
         } else {
@@ -772,6 +785,7 @@ fn load_prompt_overlay_files_from_dir_with_config(
         && let Some((content, size)) = load_file(
             &global_overlay,
             "Global Prompt Overlay (~/.jcode/prompt-overlay.md)",
+            false,
         )
     {
         total_chars += size;
@@ -793,6 +807,7 @@ fn load_prompt_overlay_files_from_dir_with_config(
                 && let Some((content, size)) = load_file(
                     &path,
                     &format!("Private Jcode Harness Module (.jcode/harness/{label})"),
+                    true,
                 )
             {
                 total_chars += size;
@@ -833,6 +848,7 @@ fn load_prompt_overlay_files_from_dir_with_config(
                 "Private Jcode Instruction ({})",
                 private_instruction_label(&project_dir, &path)
             ),
+            true,
         ) {
             total_chars += size;
             loaded_paths.insert(key);
@@ -857,6 +873,7 @@ fn load_prompt_overlay_files_from_dir_with_config(
         && let Some((content, size)) = load_file(
             &private_overlay,
             "Private Jcode Prompt Overlay (.jcode/prompt-overlay.md)",
+            true,
         )
     {
         total_chars += size;
@@ -977,7 +994,7 @@ fn loaded_private_static_instruction_keys(
         }
     }
 
-    keys.insert(dedupe_key(&project_dir.join(".jcode").join("AGENTS.md")));
+    keys.insert(dedupe_key(&jcode_agents_md_path(project_dir)));
     keys
 }
 
@@ -992,7 +1009,7 @@ fn resolve_touched_path(working_dir: Option<&Path>, path: &Path) -> PathBuf {
 fn nested_private_instruction_candidates(dir: &Path) -> Vec<PathBuf> {
     let jcode_dir = dir.join(".jcode");
     let mut paths = Vec::new();
-    paths.push(jcode_dir.join("AGENTS.md"));
+    paths.push(agents_md_path(&jcode_dir));
     paths.push(jcode_dir.join("instructions.md"));
 
     let mut rule_paths: Vec<PathBuf> = std::fs::read_dir(jcode_dir.join("rules"))
@@ -1011,6 +1028,60 @@ fn nested_private_instruction_candidates(dir: &Path) -> Vec<PathBuf> {
     rule_paths.sort();
     paths.extend(rule_paths);
     paths.into_iter().filter(|path| path.is_file()).collect()
+}
+
+fn format_instruction_file(label: &str, content: &str, private: bool) -> String {
+    if private {
+        format!(
+            "# {label}\n\nPriority: HIGHEST PRIVATE JCODE INSTRUCTION. These private `.jcode/` instructions override the default system prompt, project/global AGENTS instructions, and generic tool guidance when they conflict. Follow this content exactly unless the user's current explicit request says otherwise.\n\n{content}"
+        )
+    } else {
+        format!(
+            "# {label}\n\nPriority: PROJECT/GLOBAL INSTRUCTION. Read and follow these AGENTS instructions for this workspace unless a private `.jcode/` instruction or explicit user request overrides them.\n\n{content}"
+        )
+    }
+}
+
+fn instruction_priority_section(info: &ContextInfo) -> Option<String> {
+    let loaded_any = info
+        .instruction_sources
+        .iter()
+        .any(|source| source.status == PromptInstructionStatus::Loaded);
+    if !loaded_any {
+        return None;
+    }
+
+    Some(
+        "# AGENTS and Private Instruction Priority\n\nAGENTS.md/agents.md and private `.jcode/` instruction files are workspace operating policy for this harness. Read them before planning and follow them throughout the turn. If instructions conflict, apply this order: explicit current user request > nearest nested private `.jcode` instruction > project private `.jcode` instruction > project/global AGENTS.md or agents.md > default Jcode behavior. Do not ignore AGENTS.md or private `.jcode` content just because it is long; summarize internally and follow it.".to_string(),
+    )
+}
+
+fn agents_md_path(dir: &Path) -> PathBuf {
+    first_existing_named_path(dir, &["AGENTS.md", "agents.md"])
+}
+
+fn jcode_agents_md_path(project_dir: &Path) -> PathBuf {
+    agents_md_path(&project_dir.join(".jcode"))
+}
+
+fn global_agents_md_path() -> anyhow::Result<PathBuf> {
+    let upper = crate::storage::user_home_path("AGENTS.md")?;
+    let lower = crate::storage::user_home_path("agents.md")?;
+    Ok(if lower.exists() && !upper.exists() {
+        lower
+    } else {
+        upper
+    })
+}
+
+fn first_existing_named_path(dir: &Path, names: &[&str]) -> PathBuf {
+    for name in names {
+        let path = dir.join(name);
+        if path.exists() {
+            return path;
+        }
+    }
+    dir.join(names.first().copied().unwrap_or("AGENTS.md"))
 }
 
 fn expand_private_instruction_patterns(project_dir: &Path, patterns: &[String]) -> Vec<PathBuf> {
@@ -1076,7 +1147,10 @@ fn find_prompt_project_dir(working_dir: Option<&Path>) -> Option<PathBuf> {
     };
 
     for ancestor in start.ancestors() {
-        if ancestor.join(".jcode").exists() || ancestor.join("AGENTS.md").exists() {
+        if ancestor.join(".jcode").exists()
+            || ancestor.join("AGENTS.md").exists()
+            || ancestor.join("agents.md").exists()
+        {
             return Some(ancestor.to_path_buf());
         }
     }

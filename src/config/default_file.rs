@@ -182,18 +182,31 @@ cross_provider_failover = "countdown"
 openai_parallel_tool_calls = true
 
 [prompt]
-# Project prompt/instruction loading.
+# Project prompt/instruction loading. Jcode reads AGENTS.md/agents.md before planning
+# and appends an explicit priority reminder into the system prompt so these files
+# are treated as workspace policy, not optional background text.
+#
+# Priority order:
+#   1. explicit current user request
+#   2. nearest nested private .jcode instruction discovered from touched files
+#   3. project private .jcode instructions
+#   4. repo/global AGENTS.md or agents.md
+#   5. default Jcode behavior
+#
 # If your repo has a team AGENTS.md but you want to use only your private .jcode harness,
 # set this in <project>/.jcode/config.toml:
 # ignore_project_agents = true
 ignore_project_agents = false
 # Ignore ~/.AGENTS.md if desired.
 ignore_global_agents = false
-# Load private project harness instructions from <project>/.jcode/AGENTS.md.
+# Load private project harness instructions from <project>/.jcode/AGENTS.md
+# or <project>/.jcode/agents.md. These are labeled as highest-priority private
+# instructions in the model prompt.
 load_jcode_agents = true
 # Load private project harness modules from <project>/.jcode/harness/*.md in sorted order.
 load_harness_dir = true
 # Additional private instruction files/globs. Relative paths resolve under <project>/.jcode/.
+# These are also labeled as highest-priority private instructions.
 # Example: private_instructions = ["rules/*.md", "monorepo/*/AGENTS.md"]
 private_instructions = []
 

@@ -159,6 +159,57 @@ fn test_private_jcode_agents_load_after_project_agents() {
 }
 
 #[test]
+fn test_lowercase_agents_md_is_discovered_and_priority_reminder_is_appended() {
+    let project_dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(
+        project_dir.path().join("agents.md"),
+        "lowercase team policy",
+    )
+    .unwrap();
+
+    let prompt_config = crate::config::PromptConfig::default();
+    let (content, info) =
+        load_agents_md_files_from_dir_with_config(Some(project_dir.path()), &prompt_config);
+    let content = content.expect("agents content");
+
+    assert!(info.has_project_agents_md);
+    assert!(content.contains("lowercase team policy"));
+    assert_eq!(
+        info.instruction_sources[0].path,
+        project_dir.path().join("agents.md")
+    );
+
+    let (split, _info) =
+        build_system_prompt_split(None, &[], false, None, Some(project_dir.path()));
+    assert!(
+        split
+            .static_part
+            .contains("# AGENTS and Private Instruction Priority")
+    );
+    assert!(split.static_part.contains("Read them before planning"));
+}
+
+#[test]
+fn test_private_jcode_agents_are_labeled_highest_priority() {
+    let project_dir = tempfile::TempDir::new().unwrap();
+    std::fs::create_dir_all(project_dir.path().join(".jcode")).unwrap();
+    std::fs::write(
+        project_dir.path().join(".jcode/agents.md"),
+        "private lowercase policy",
+    )
+    .unwrap();
+
+    let prompt_config = crate::config::PromptConfig::default();
+    let (content, info) =
+        load_agents_md_files_from_dir_with_config(Some(project_dir.path()), &prompt_config);
+    let content = content.expect("private agents content");
+
+    assert!(info.has_jcode_agents_md);
+    assert!(content.contains("Priority: HIGHEST PRIVATE JCODE INSTRUCTION"));
+    assert!(content.contains("private lowercase policy"));
+}
+
+#[test]
 fn test_prompt_config_can_ignore_project_agents_and_keep_private_harness() {
     let project_dir = tempfile::TempDir::new().unwrap();
     std::fs::create_dir_all(project_dir.path().join(".jcode")).unwrap();
