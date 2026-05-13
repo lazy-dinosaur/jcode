@@ -65,7 +65,7 @@ pub(super) fn print_tool_summary(tool: &ToolCall) {
 }
 
 impl Agent {
-    pub(super) fn inject_nested_private_instructions_for_tool_calls(
+    pub(super) fn inject_nested_instructions_for_tool_calls(
         &mut self,
         tool_calls: &[ToolCall],
     ) -> bool {
@@ -74,7 +74,7 @@ impl Agent {
             return false;
         }
 
-        let instructions = crate::prompt::load_nested_private_instructions_for_paths(
+        let instructions = crate::prompt::load_nested_instructions_for_paths(
             self.working_dir().map(std::path::Path::new),
             touched_paths,
         );
@@ -100,7 +100,7 @@ impl Agent {
         }
 
         let mut text = String::from(
-            "# Nested Private Jcode Instructions\n\nThe following private `.jcode/` instructions are relevant to files just read/searched/edited in this turn. Follow them for the next steps.\n",
+            "# Nested Instructions\n\nThe following AGENTS.md/agents.md and private `.jcode/` instructions are relevant to files just read/searched/edited in this turn. Read and follow them for the next steps. Private `.jcode/` instructions take priority over public AGENTS instructions when they conflict.\n",
         );
         for instruction in instructions {
             text.push_str("\n## ");

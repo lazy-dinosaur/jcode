@@ -510,6 +510,80 @@ fn test_nested_private_instructions_dedup_across_multiple_touched_files() {
 }
 
 #[test]
+fn test_nested_instructions_include_public_agents_for_touched_files() {
+    let project_dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(project_dir.path().join("AGENTS.md"), "root launch policy").unwrap();
+
+    let package_dir = project_dir.path().join("packages/foo");
+    let src_dir = package_dir.join("src");
+    std::fs::create_dir_all(&src_dir).unwrap();
+    std::fs::create_dir_all(package_dir.join(".jcode/rules")).unwrap();
+    std::fs::write(package_dir.join("AGENTS.md"), "package public policy").unwrap();
+    std::fs::write(src_dir.join("AGENTS.md"), "src public policy").unwrap();
+    std::fs::write(
+        package_dir.join(".jcode/rules/10-private.md"),
+        "package private policy",
+    )
+    .unwrap();
+    std::fs::write(src_dir.join("component.ts"), "export const x = 1;").unwrap();
+
+    let prompt_config = crate::config::PromptConfig::default();
+    let nested = load_nested_instructions_for_paths_with_config(
+        Some(project_dir.path()),
+        [std::path::PathBuf::from("packages/foo/src/component.ts")],
+        &prompt_config,
+    );
+    let content = nested
+        .iter()
+        .map(|item| item.content.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        content,
+        vec![
+            "src public policy",
+            "package public policy",
+            "package private policy",
+        ]
+    );
+    assert!(nested.iter().any(|item| {
+        !item.private
+            && item.label.contains("Nested Project Instruction")
+            && item.path.ends_with("packages/foo/src/AGENTS.md")
+    }));
+    assert!(
+        nested
+            .iter()
+            .any(|item| item.private && item.content == "package private policy")
+    );
+    assert!(!content.contains(&"root launch policy"));
+}
+
+#[test]
+fn test_nested_public_agents_dedup_across_multiple_touched_files() {
+    let project_dir = tempfile::TempDir::new().unwrap();
+    let src_dir = project_dir.path().join("src");
+    std::fs::create_dir_all(&src_dir).unwrap();
+    std::fs::write(src_dir.join("AGENTS.md"), "src shared public policy").unwrap();
+    std::fs::write(src_dir.join("a.ts"), "a").unwrap();
+    std::fs::write(src_dir.join("b.ts"), "b").unwrap();
+
+    let prompt_config = crate::config::PromptConfig::default();
+    let nested = load_nested_instructions_for_paths_with_config(
+        Some(project_dir.path()),
+        [
+            std::path::PathBuf::from("src/a.ts"),
+            std::path::PathBuf::from("src/b.ts"),
+        ],
+        &prompt_config,
+    );
+
+    assert_eq!(nested.len(), 1);
+    assert_eq!(nested[0].content, "src shared public policy");
+    assert!(!nested[0].private);
+}
+
+#[test]
 fn test_non_selfdev_prompt_includes_lightweight_selfdev_hint() {
     let prompt = build_system_prompt(None, &[]);
     assert!(prompt.contains("Self-Development Access"));
