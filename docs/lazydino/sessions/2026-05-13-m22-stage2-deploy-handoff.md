@@ -4,9 +4,11 @@
 
 - Working repo: `/home/lazydino/dev/jcode`
 - Current branch: `deploy/m9-m27-catchup`
-- Current deploy HEAD: `93e25dae docs(m22): mark Stage 2 fan-out fix done`
+- M22 code/binary deploy commit: `93e25dae docs(m22): mark Stage 2 fan-out fix done`
+- Current deploy branch may include docs-only handoff refresh commits on top.
 - Fork pushed:
-  - `fork/deploy/m9-m27-catchup` → `93e25dae`
+  - `fork/deploy/m9-m27-catchup` contains code/binary deploy `93e25dae`
+    plus docs-only handoff refresh commits
   - `fork/patch/m22-stage2-turn-loop-fanout` → `b0a6b344`
 - Installed binary: `jcode v0.12.274-dev (93e25dae)`
   - `/home/lazydino/.jcode/builds/current/jcode` symlink

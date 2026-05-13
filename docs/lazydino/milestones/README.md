@@ -55,7 +55,8 @@ self-contained handoff card. 다음 세션 시작 시 사용 패턴:
 
 - `origin = https://github.com/1jehuang/jcode.git` (upstream)
 - `fork   = https://github.com/lazy-dinosaur/jcode.git` (개인)
-- fork `deploy/m9-m27-catchup` pushed at `93e25dae` (M22 deploy integration)
+- fork `deploy/m9-m27-catchup` contains M22 code/binary deploy commit `93e25dae`
+  plus later docs-only handoff refresh commits
 - fork `patch/m22-stage2-turn-loop-fanout` pushed at `b0a6b344`
 - latest installed binary: `jcode v0.12.274-dev (93e25dae)` via current/stable symlinks
 - backup tags retained for rollback safety
