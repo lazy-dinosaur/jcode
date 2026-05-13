@@ -1,3 +1,4 @@
+use super::turn_execution::{DispatchedToolResult, PresetToolResult};
 use super::turn_loops::LifecycleHookOutcome;
 use super::*;
 
@@ -779,96 +780,36 @@ impl Agent {
             }
 
             // Execute tools and add results
-            let tool_count = tool_calls.len();
             let mut tool_results_dirty = false;
-            for tool_index in 0..tool_count {
-                // === INJECTION POINT C (before): Check for urgent abort before each tool (except first) ===
-                if tool_index > 0 && self.has_urgent_interrupt() {
-                    crate::telemetry::record_user_cancelled();
-                    // Add tool_results for all remaining skipped tools to maintain valid history
-                    for skipped_tc in &tool_calls[tool_index..] {
-                        self.add_message(
-                            Role::User,
-                            vec![ContentBlock::ToolResult {
-                                tool_use_id: skipped_tc.id.clone(),
-                                content: "[Skipped: user interrupted]".to_string(),
-                                is_error: Some(true),
-                            }],
-                        );
-                    }
-                    let tools_remaining = tool_count - tool_index;
-                    let injected = self.inject_soft_interrupts();
-                    if !injected.is_empty() {
-                        for event in
-                            Self::build_soft_interrupt_events(injected, "C", Some(tools_remaining))
-                        {
-                            let _ = event_tx.send(event);
-                        }
-                        // Add note about skipped tools for the AI
-                        self.add_message(
-                            Role::User,
-                            vec![ContentBlock::Text {
-                                text: format!(
-                                    "[User interrupted: {} remaining tool(s) skipped]",
-                                    tools_remaining
-                                ),
-                                cache_control: None,
-                            }],
-                        );
-                    }
-                    self.persist_session_best_effort("streamed tool output");
-                    break; // Skip remaining tools
-                }
-                let tc = &tool_calls[tool_index];
+            let classified = self.classify_tool_calls(&tool_calls, &sdk_tool_results)?;
+            let mut preset_results: HashMap<usize, PresetToolResult> =
+                classified.presets.into_iter().collect();
+            let to_execute = classified.to_execute;
+            let mut dispatched_results = HashMap::new();
+            let mut urgent_interrupted = false;
+            let mut tools_remaining_on_interrupt = 0usize;
 
+            if self.has_urgent_interrupt() && !to_execute.is_empty() {
+                crate::telemetry::record_user_cancelled();
+                urgent_interrupted = true;
+                tools_remaining_on_interrupt = to_execute.len();
+                for (index, tc) in to_execute {
+                    dispatched_results.insert(
+                        index,
+                        DispatchedToolResult {
+                            index,
+                            tc,
+                            started_at: Instant::now(),
+                            elapsed: Duration::ZERO,
+                            result: Err(anyhow::anyhow!("[Skipped: user interrupted]")),
+                        },
+                    );
+                }
+            } else if to_execute.len() == 1 {
+                let (index, tc) = to_execute.into_iter().next().expect("one tool to execute");
                 let message_id = assistant_message_id
                     .clone()
                     .unwrap_or_else(|| self.session.id.clone());
-
-                if let Some(error_msg) = tc.validation_error() {
-                    logging::warn(&error_msg);
-                    let _ = event_tx.send(ServerEvent::ToolDone {
-                        id: tc.id.clone(),
-                        name: tc.name.clone(),
-                        output: error_msg.clone(),
-                        error: Some(error_msg.clone()),
-                    });
-                    self.add_message(
-                        Role::User,
-                        vec![ContentBlock::ToolResult {
-                            tool_use_id: tc.id.clone(),
-                            content: error_msg,
-                            is_error: Some(true),
-                        }],
-                    );
-                    tool_results_dirty = true;
-                    continue;
-                }
-
-                self.validate_tool_allowed(&tc.name)?;
-
-                let is_native_tool = JCODE_NATIVE_TOOLS.contains(&tc.name.as_str());
-
-                if let Some((sdk_content, sdk_is_error)) = sdk_tool_results.remove(&tc.id) {
-                    // For native tools, ignore SDK errors and execute locally
-                    if !(is_native_tool && sdk_is_error) {
-                        self.add_message(
-                            Role::User,
-                            vec![ContentBlock::ToolResult {
-                                tool_use_id: tc.id.clone(),
-                                content: sdk_content,
-                                is_error: if sdk_is_error { Some(true) } else { None },
-                            }],
-                        );
-                        tool_results_dirty = true;
-
-                        // NOTE: No injection here - wait for Point D after all tools
-
-                        continue;
-                    }
-                    // Fall through to local execution for native tools with SDK errors
-                }
-
                 let ctx = ToolContext {
                     session_id: self.session.id.clone(),
                     message_id: message_id.clone(),
@@ -886,7 +827,7 @@ impl Agent {
                 logging::info(&format!("Tool starting: {}", tc.name));
                 let tool_start = Instant::now();
 
-                // Spawn tool in its own task so we can detach it to background on Alt+B
+                // Spawn tool in its own task so we can detach it to background on Alt+B.
                 let registry_clone = self.registry.clone();
                 let tool_name_for_spawn = tc.name.clone();
                 let tool_input_for_spawn = tc.input.clone();
@@ -896,8 +837,11 @@ impl Agent {
                         .await
                 });
 
+                // Reset background signal before waiting.
+                self.background_tool_signal.reset();
+
                 // Wait for tool completion OR background signal from user (Alt+B)
-                // OR graceful shutdown signal from server reload
+                // OR graceful shutdown signal from server reload.
                 let bg_signal = self.background_tool_signal.clone();
                 let shutdown_signal = self.graceful_shutdown.clone();
                 let allow_reload_handoff = tc.name == "bash";
@@ -936,57 +880,22 @@ impl Agent {
                     }
                 };
 
-                self.unlock_tools_if_needed(&tc.name);
                 let tool_elapsed = tool_start.elapsed();
 
                 if let Some(result) = tool_result {
-                    // Normal tool completion
-                    logging::info(&format!(
-                        "Tool finished: {} in {:.2}s",
-                        tc.name,
-                        tool_elapsed.as_secs_f64()
-                    ));
-
-                    match result {
-                        Ok(output) => {
-                            let _ = event_tx.send(ServerEvent::ToolDone {
-                                id: tc.id.clone(),
-                                name: tc.name.clone(),
-                                output: output.output.clone(),
-                                error: None,
-                            });
-
-                            let blocks = tool_output_to_content_blocks(tc.id.clone(), output);
-                            self.add_message_with_duration(
-                                Role::User,
-                                blocks,
-                                Some(tool_elapsed.as_millis() as u64),
-                            );
-                            tool_results_dirty = true;
-                        }
-                        Err(e) => {
-                            let error_msg = format!("Error: {}", e);
-                            let _ = event_tx.send(ServerEvent::ToolDone {
-                                id: tc.id.clone(),
-                                name: tc.name.clone(),
-                                output: error_msg.clone(),
-                                error: Some(error_msg.clone()),
-                            });
-
-                            self.add_message_with_duration(
-                                Role::User,
-                                vec![ContentBlock::ToolResult {
-                                    tool_use_id: tc.id.clone(),
-                                    content: error_msg,
-                                    is_error: Some(true),
-                                }],
-                                Some(tool_elapsed.as_millis() as u64),
-                            );
-                            tool_results_dirty = true;
-                        }
-                    }
+                    dispatched_results.insert(
+                        index,
+                        DispatchedToolResult {
+                            index,
+                            tc,
+                            started_at: tool_start,
+                            elapsed: tool_elapsed,
+                            result,
+                        },
+                    );
                 } else if self.is_graceful_shutdown() {
-                    // Server reload - abort tool and save interrupted result
+                    // Server reload - abort tool and save interrupted result.
+                    self.unlock_tools_if_needed(&tc.name);
                     logging::info(&format!(
                         "Tool '{}' interrupted by server reload after {:.1}s",
                         tc.name,
@@ -1030,8 +939,8 @@ impl Agent {
                     );
                     self.session.save()?;
 
-                    // Add results for any remaining tools too
-                    for remaining_tc in &tool_calls[(tool_index + 1)..] {
+                    // Add results for any remaining tools too.
+                    for remaining_tc in &tool_calls[(index + 1)..] {
                         self.add_message(
                             Role::User,
                             vec![ContentBlock::ToolResult {
@@ -1044,26 +953,16 @@ impl Agent {
                     self.session.save()?;
                     return Ok(());
                 } else {
-                    // User pressed Alt+B — move tool to background
+                    // User pressed Alt+B — move tool to background.
+                    self.unlock_tools_if_needed(&tc.name);
                     logging::info(&format!(
                         "Tool '{}' moved to background after {:.1}s",
                         tc.name,
                         tool_elapsed.as_secs_f64()
                     ));
 
-                    let delivery_session_id = self
-                        .session
-                        .parent_id
-                        .clone()
-                        .unwrap_or_else(|| self.session.id.clone());
                     let bg_info = crate::background::global()
-                        .adopt_with_delivery(
-                            &tc.name,
-                            &self.session.id,
-                            &delivery_session_id,
-                            true,
-                            tool_handle,
-                        )
+                        .adopt(&tc.name, &self.session.id, tool_handle)
                         .await;
 
                     let bg_msg = format!(
@@ -1089,41 +988,168 @@ impl Agent {
                         }],
                         Some(tool_elapsed.as_millis() as u64),
                     );
+                    tool_results_dirty = true;
+                    self.session.save()?;
 
                     self.background_tool_signal.reset();
+                }
+            } else if !to_execute.is_empty() {
+                let message_id = assistant_message_id
+                    .clone()
+                    .unwrap_or_else(|| self.session.id.clone());
+                let cancel_token = tokio_util::sync::CancellationToken::new();
+                let ctx_factory = |tc: &ToolCall| ToolContext {
+                    session_id: self.session.id.clone(),
+                    message_id: message_id.clone(),
+                    tool_call_id: tc.id.clone(),
+                    working_dir: self.working_dir().map(PathBuf::from),
+                    stdin_request_tx: self.stdin_request_tx.clone(),
+                    graceful_shutdown_signal: Some(self.graceful_shutdown.clone()),
+                    execution_mode: ToolExecutionMode::AgentTurn,
+                };
+                let per_tool_start = |tc: &ToolCall| {
+                    if trace {
+                        eprintln!("[trace] tool_exec_start name={} id={}", tc.name, tc.id);
+                    }
+                    logging::info(&format!("Tool starting: {}", tc.name));
+                };
 
-                    // M8: end the current turn after Alt+B detach. Without this
-                    // return, the parent agent kept driving the turn loop into
-                    // the next provider call, which left TUI `is_processing=true`
-                    // and blocked client-side queued messages from dispatching.
-                    // The detached tool keeps running in the background and its
-                    // result is delivered back via the bg/wait flow when the
-                    // user (or agent) chooses to collect it.
-                    //
-                    // Fill in skipped ToolResults for any remaining tool_calls
-                    // in this round so the persisted history stays valid for
-                    // the API invariant (every tool_use must have a matching
-                    // tool_result before the next assistant turn).
-                    for remaining_tc in &tool_calls[(tool_index + 1)..] {
-                        self.add_message(
+                self.background_tool_signal.reset();
+                let results = self
+                    .dispatch_tools_parallel(to_execute, ctx_factory, per_tool_start, &cancel_token)
+                    .await;
+                urgent_interrupted = self.has_urgent_interrupt();
+                if urgent_interrupted {
+                    crate::telemetry::record_user_cancelled();
+                    tools_remaining_on_interrupt = results
+                        .iter()
+                        .filter(|result| {
+                            result.result.as_ref().err().is_some_and(|err| {
+                                let err = err.to_string();
+                                err.contains("user interrupted")
+                            })
+                        })
+                        .count();
+                }
+                dispatched_results = results
+                    .into_iter()
+                    .map(|result| (result.index, result))
+                    .collect();
+            }
+
+            for (tool_index, tc) in tool_calls.iter().enumerate() {
+                if let Some(preset) = preset_results.remove(&tool_index) {
+                    match preset {
+                        PresetToolResult::ValidationError(error_msg) => {
+                            logging::warn(&error_msg);
+                            let _ = event_tx.send(ServerEvent::ToolDone {
+                                id: tc.id.clone(),
+                                name: tc.name.clone(),
+                                output: error_msg.clone(),
+                                error: Some(error_msg.clone()),
+                            });
+                            self.add_message(
+                                Role::User,
+                                vec![ContentBlock::ToolResult {
+                                    tool_use_id: tc.id.clone(),
+                                    content: error_msg,
+                                    is_error: Some(true),
+                                }],
+                            );
+                            tool_results_dirty = true;
+                        }
+                        PresetToolResult::SdkProvided { content, is_error } => {
+                            self.add_message(
+                                Role::User,
+                                vec![ContentBlock::ToolResult {
+                                    tool_use_id: tc.id.clone(),
+                                    content,
+                                    is_error: if is_error { Some(true) } else { None },
+                                }],
+                            );
+                            tool_results_dirty = true;
+                        }
+                    }
+                    continue;
+                }
+
+                let Some(result) = dispatched_results.remove(&tool_index) else {
+                    continue;
+                };
+                crate::telemetry::record_tool_call();
+                self.unlock_tools_if_needed(&result.tc.name);
+                logging::info(&format!(
+                    "Tool finished: {} in {:.2}s",
+                    result.tc.name,
+                    result.elapsed.as_secs_f64()
+                ));
+
+                match result.result {
+                    Ok(output) => {
+                        let _ = event_tx.send(ServerEvent::ToolDone {
+                            id: result.tc.id.clone(),
+                            name: result.tc.name.clone(),
+                            output: output.output.clone(),
+                            error: None,
+                        });
+
+                        let blocks = tool_output_to_content_blocks(result.tc.id.clone(), output);
+                        self.add_message_with_duration(
+                            Role::User,
+                            blocks,
+                            Some(result.elapsed.as_millis() as u64),
+                        );
+                        tool_results_dirty = true;
+                    }
+                    Err(e) => {
+                        let error_msg = format!("Error: {}", e);
+                        let _ = event_tx.send(ServerEvent::ToolDone {
+                            id: result.tc.id.clone(),
+                            name: result.tc.name.clone(),
+                            output: error_msg.clone(),
+                            error: Some(error_msg.clone()),
+                        });
+
+                        self.add_message_with_duration(
                             Role::User,
                             vec![ContentBlock::ToolResult {
-                                tool_use_id: remaining_tc.id.clone(),
-                                content: format!(
-                                    "[Skipped: '{}' was moved to background; remaining tools in this round are deferred]",
-                                    tc.name
-                                ),
+                                tool_use_id: result.tc.id.clone(),
+                                content: error_msg,
                                 is_error: Some(true),
                             }],
+                            Some(result.elapsed.as_millis() as u64),
                         );
+                        tool_results_dirty = true;
                     }
-                    self.session.save()?;
-                    return Ok(());
                 }
 
                 // NOTE: We do NOT inject between tools (non-urgent) because that would
                 // place user text between tool_results, which may violate API constraints.
                 // All non-urgent injection happens at Point D after all tools are done.
+            }
+
+            if urgent_interrupted {
+                let injected = self.inject_soft_interrupts();
+                if !injected.is_empty() {
+                    for event in Self::build_soft_interrupt_events(
+                        injected,
+                        "C",
+                        Some(tools_remaining_on_interrupt),
+                    ) {
+                        let _ = event_tx.send(event);
+                    }
+                    self.add_message(
+                        Role::User,
+                        vec![ContentBlock::Text {
+                            text: format!(
+                                "[User interrupted: {} remaining tool(s) skipped]",
+                                tools_remaining_on_interrupt
+                            ),
+                            cache_control: None,
+                        }],
+                    );
+                }
+                self.persist_session_best_effort("streamed tool output");
             }
 
             if tool_results_dirty {

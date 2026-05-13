@@ -1,3 +1,4 @@
+use super::turn_execution::PresetToolResult;
 use super::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1059,101 +1060,18 @@ impl Agent {
 
             // Execute tools and add results
             let mut tool_results_dirty = false;
-            for tc in tool_calls {
+            let classified = self.classify_tool_calls(&tool_calls, &sdk_tool_results)?;
+            let mut preset_results: HashMap<usize, PresetToolResult> =
+                classified.presets.into_iter().collect();
+            let to_execute = classified.to_execute;
+            let mut dispatched_results = HashMap::new();
+
+            if !to_execute.is_empty() {
                 let message_id = assistant_message_id
                     .clone()
                     .unwrap_or_else(|| self.session.id.clone());
-
-                if let Some(error_msg) = tc.validation_error() {
-                    logging::warn(&error_msg);
-                    Bus::global().publish(BusEvent::ToolUpdated(ToolEvent {
-                        session_id: self.session.id.clone(),
-                        message_id: message_id.clone(),
-                        tool_call_id: tc.id.clone(),
-                        tool_name: tc.name.clone(),
-                        status: ToolStatus::Error,
-                        title: None,
-                    }));
-                    if print_output {
-                        println!("\n  → {}", error_msg);
-                    }
-                    self.add_message(
-                        Role::User,
-                        vec![ContentBlock::ToolResult {
-                            tool_use_id: tc.id,
-                            content: error_msg,
-                            is_error: Some(true),
-                        }],
-                    );
-                    tool_results_dirty = true;
-                    continue;
-                }
-
-                self.validate_tool_allowed(&tc.name)?;
-
-                let is_native_tool = JCODE_NATIVE_TOOLS.contains(&tc.name.as_str());
-
-                // Check if SDK already executed this tool
-                if let Some((sdk_content, sdk_is_error)) = sdk_tool_results.remove(&tc.id) {
-                    // For native tools, ignore SDK errors and execute locally
-                    if is_native_tool && sdk_is_error {
-                        if trace {
-                            eprintln!(
-                                "[trace] sdk_error_for_native_tool name={} id={}, executing locally",
-                                tc.name, tc.id
-                            );
-                        }
-                        // Fall through to local execution below
-                    } else {
-                        if trace {
-                            eprintln!(
-                                "[trace] using_sdk_result name={} id={} is_error={}",
-                                tc.name, tc.id, sdk_is_error
-                            );
-                        }
-                        if print_output {
-                            print!("\n  → ");
-                            let preview = if sdk_content.len() > 200 {
-                                format!("{}...", crate::util::truncate_str(&sdk_content, 200))
-                            } else {
-                                sdk_content.clone()
-                            };
-                            println!("{}", preview.lines().next().unwrap_or("(done via SDK)"));
-                        }
-
-                        Bus::global().publish(BusEvent::ToolUpdated(ToolEvent {
-                            session_id: self.session.id.clone(),
-                            message_id: message_id.clone(),
-                            tool_call_id: tc.id.clone(),
-                            tool_name: tc.name.clone(),
-                            status: if sdk_is_error {
-                                ToolStatus::Error
-                            } else {
-                                ToolStatus::Completed
-                            },
-                            title: None,
-                        }));
-
-                        self.add_message(
-                            Role::User,
-                            vec![ContentBlock::ToolResult {
-                                tool_use_id: tc.id,
-                                content: sdk_content,
-                                is_error: if sdk_is_error { Some(true) } else { None },
-                            }],
-                        );
-                        tool_results_dirty = true;
-                        continue;
-                    }
-                }
-
-                // SDK didn't execute this tool, run it locally
-                if print_output {
-                    print!("\n  → ");
-                    io::stdout().flush()?;
-                }
-
-                let ctx = ToolContext {
+                let cancel_token = tokio_util::sync::CancellationToken::new();
+                let ctx_factory = |tc: &ToolCall| ToolContext {
                     session_id: self.session.id.clone(),
                     message_id: message_id.clone(),
                     tool_call_id: tc.id.clone(),
@@ -1162,46 +1080,130 @@ impl Agent {
                     graceful_shutdown_signal: Some(self.graceful_shutdown.clone()),
                     execution_mode: ToolExecutionMode::AgentTurn,
                 };
+                let per_tool_start = |tc: &ToolCall| {
+                    if print_output {
+                        print!("\n  → ");
+                        let _ = io::stdout().flush();
+                    }
+                    if trace {
+                        eprintln!("[trace] tool_exec_start name={} id={}", tc.name, tc.id);
+                    }
+                    Bus::global().publish(BusEvent::ToolUpdated(ToolEvent {
+                        session_id: self.session.id.clone(),
+                        message_id: message_id.clone(),
+                        tool_call_id: tc.id.clone(),
+                        tool_name: tc.name.clone(),
+                        status: ToolStatus::Running,
+                        title: None,
+                    }));
+                    logging::info(&format!("Tool starting: {}", tc.name));
+                    Bus::global().publish(BusEvent::SubagentStatus(SubagentStatus {
+                        session_id: self.session.id.clone(),
+                        status: format!("running {}", tc.name),
+                        model: Some(self.provider.model()),
+                    }));
+                };
 
-                if trace {
-                    eprintln!("[trace] tool_exec_start name={} id={}", tc.name, tc.id);
+                let results = self
+                    .dispatch_tools_parallel(to_execute, ctx_factory, per_tool_start, &cancel_token)
+                    .await;
+                dispatched_results = results
+                    .into_iter()
+                    .map(|result| (result.index, result))
+                    .collect();
+            }
+
+            for tool_index in 0..tool_calls.len() {
+                let tc = &tool_calls[tool_index];
+                let message_id = assistant_message_id
+                    .clone()
+                    .unwrap_or_else(|| self.session.id.clone());
+
+                if let Some(preset) = preset_results.remove(&tool_index) {
+                    match preset {
+                        PresetToolResult::ValidationError(error_msg) => {
+                            logging::warn(&error_msg);
+                            Bus::global().publish(BusEvent::ToolUpdated(ToolEvent {
+                                session_id: self.session.id.clone(),
+                                message_id: message_id.clone(),
+                                tool_call_id: tc.id.clone(),
+                                tool_name: tc.name.clone(),
+                                status: ToolStatus::Error,
+                                title: None,
+                            }));
+                            if print_output {
+                                println!("\n  → {}", error_msg);
+                            }
+                            self.add_message(
+                                Role::User,
+                                vec![ContentBlock::ToolResult {
+                                    tool_use_id: tc.id.clone(),
+                                    content: error_msg,
+                                    is_error: Some(true),
+                                }],
+                            );
+                            tool_results_dirty = true;
+                        }
+                        PresetToolResult::SdkProvided { content, is_error } => {
+                            if trace {
+                                eprintln!(
+                                    "[trace] using_sdk_result name={} id={} is_error={}",
+                                    tc.name, tc.id, is_error
+                                );
+                            }
+                            if print_output {
+                                print!("\n  → ");
+                                let preview = if content.len() > 200 {
+                                    format!("{}...", crate::util::truncate_str(&content, 200))
+                                } else {
+                                    content.clone()
+                                };
+                                println!("{}", preview.lines().next().unwrap_or("(done via SDK)"));
+                            }
+                            Bus::global().publish(BusEvent::ToolUpdated(ToolEvent {
+                                session_id: self.session.id.clone(),
+                                message_id: message_id.clone(),
+                                tool_call_id: tc.id.clone(),
+                                tool_name: tc.name.clone(),
+                                status: if is_error {
+                                    ToolStatus::Error
+                                } else {
+                                    ToolStatus::Completed
+                                },
+                                title: None,
+                            }));
+                            self.add_message(
+                                Role::User,
+                                vec![ContentBlock::ToolResult {
+                                    tool_use_id: tc.id.clone(),
+                                    content,
+                                    is_error: if is_error { Some(true) } else { None },
+                                }],
+                            );
+                            tool_results_dirty = true;
+                        }
+                    }
+                    continue;
                 }
-                Bus::global().publish(BusEvent::ToolUpdated(ToolEvent {
-                    session_id: self.session.id.clone(),
-                    message_id: message_id.clone(),
-                    tool_call_id: tc.id.clone(),
-                    tool_name: tc.name.clone(),
-                    status: ToolStatus::Running,
-                    title: None,
-                }));
 
-                logging::info(&format!("Tool starting: {}", tc.name));
-                let tool_start = Instant::now();
-
-                // Publish status for TUI to show during Task execution
-                Bus::global().publish(BusEvent::SubagentStatus(SubagentStatus {
-                    session_id: self.session.id.clone(),
-                    status: format!("running {}", tc.name),
-                    model: Some(self.provider.model()),
-                }));
-
-                let result = self.registry.execute(&tc.name, tc.input.clone(), ctx).await;
+                let Some(result) = dispatched_results.remove(&tool_index) else {
+                    continue;
+                };
                 crate::telemetry::record_tool_call();
-                self.unlock_tools_if_needed(&tc.name);
-                let tool_elapsed = tool_start.elapsed();
+                self.unlock_tools_if_needed(&result.tc.name);
                 logging::info(&format!(
                     "Tool finished: {} in {:.2}s",
-                    tc.name,
-                    tool_elapsed.as_secs_f64()
+                    result.tc.name,
+                    result.elapsed.as_secs_f64()
                 ));
 
-                match result {
+                match result.result {
                     Ok(output) => {
                         Bus::global().publish(BusEvent::ToolUpdated(ToolEvent {
                             session_id: self.session.id.clone(),
                             message_id: message_id.clone(),
-                            tool_call_id: tc.id.clone(),
-                            tool_name: tc.name.clone(),
+                            tool_call_id: result.tc.id.clone(),
+                            tool_name: result.tc.name.clone(),
                             status: ToolStatus::Completed,
                             title: output.title.clone(),
                         }));
@@ -1209,7 +1211,7 @@ impl Agent {
                         if trace {
                             eprintln!(
                                 "[trace] tool_exec_done name={} id={}\n{}",
-                                tc.name, tc.id, output.output
+                                result.tc.name, result.tc.id, output.output
                             );
                         }
                         if print_output {
@@ -1221,11 +1223,11 @@ impl Agent {
                             println!("{}", preview.lines().next().unwrap_or("(done)"));
                         }
 
-                        let blocks = tool_output_to_content_blocks(tc.id, output);
+                        let blocks = tool_output_to_content_blocks(result.tc.id.clone(), output);
                         self.add_message_with_duration(
                             Role::User,
                             blocks,
-                            Some(tool_elapsed.as_millis() as u64),
+                            Some(result.elapsed.as_millis() as u64),
                         );
                         tool_results_dirty = true;
                     }
@@ -1234,8 +1236,8 @@ impl Agent {
                         Bus::global().publish(BusEvent::ToolUpdated(ToolEvent {
                             session_id: self.session.id.clone(),
                             message_id: message_id.clone(),
-                            tool_call_id: tc.id.clone(),
-                            tool_name: tc.name.clone(),
+                            tool_call_id: result.tc.id.clone(),
+                            tool_name: result.tc.name.clone(),
                             status: ToolStatus::Error,
                             title: None,
                         }));
@@ -1244,7 +1246,7 @@ impl Agent {
                         if trace {
                             eprintln!(
                                 "[trace] tool_exec_error name={} id={} {}",
-                                tc.name, tc.id, error_msg
+                                result.tc.name, result.tc.id, error_msg
                             );
                         }
                         if print_output {
@@ -1253,11 +1255,11 @@ impl Agent {
                         self.add_message_with_duration(
                             Role::User,
                             vec![ContentBlock::ToolResult {
-                                tool_use_id: tc.id,
+                                tool_use_id: result.tc.id.clone(),
                                 content: error_msg,
                                 is_error: Some(true),
                             }],
-                            Some(tool_elapsed.as_millis() as u64),
+                            Some(result.elapsed.as_millis() as u64),
                         );
                         tool_results_dirty = true;
                     }
