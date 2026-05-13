@@ -1546,6 +1546,10 @@ pub(super) fn handle_info_command(app: &mut App, trimmed: &str) -> bool {
             transport.as_deref().unwrap_or("default")
         ));
         context_report.push_str(&format!("- cwd: {}\n", cwd));
+        context_report.push_str(&format!(
+            "- prompt working dir: {}\n",
+            app.working_dir().as_deref().unwrap_or(cwd.as_str())
+        ));
         context_report.push_str(&format!("- terminal: {}\n", terminal_size));
         context_report.push_str(&format!(
             "- features: memory={}, swarm={}\n",

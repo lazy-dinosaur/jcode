@@ -15,6 +15,7 @@ static AMBIENT_INFO_CACHE: Mutex<Option<AmbientInfoCacheEntry>> = Mutex::new(Non
 #[derive(Clone)]
 pub(super) struct CachedContextInfo {
     pub session_key: String,
+    pub working_dir_key: Option<String>,
     pub is_remote: bool,
     pub display_messages_version: u64,
     pub message_count: usize,

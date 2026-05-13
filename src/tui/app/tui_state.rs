@@ -615,6 +615,13 @@ impl crate::tui::TuiState for App {
         } else {
             self.session.id.clone()
         };
+        let working_dir = self
+            .session
+            .working_dir
+            .as_deref()
+            .map(std::path::PathBuf::from)
+            .or_else(|| std::env::current_dir().ok());
+        let working_dir_key = working_dir.as_ref().map(|path| path.display().to_string());
         let message_count = if self.is_remote {
             self.display_messages.len()
         } else {
@@ -643,6 +650,7 @@ impl crate::tui::TuiState for App {
             && let Some((ts, cached)) = &*cache
             && ts.elapsed() < TTL
             && cached.session_key == session_key
+            && cached.working_dir_key == working_dir_key
             && cached.is_remote == self.is_remote
             && cached.display_messages_version == self.display_messages_version
             && cached.message_count == message_count
@@ -655,12 +663,6 @@ impl crate::tui::TuiState for App {
 
         let mut info = self.context_info.clone();
         if info.system_prompt_chars == 0 || info.instruction_sources.is_empty() {
-            let working_dir = self
-                .session
-                .working_dir
-                .as_deref()
-                .map(std::path::PathBuf::from)
-                .or_else(|| std::env::current_dir().ok());
             let (_, prompt_info) = crate::prompt::build_system_prompt_split(
                 None,
                 &[],
@@ -800,6 +802,8 @@ impl crate::tui::TuiState for App {
             + info.session_context_chars
             + info.project_agents_md_chars
             + info.global_agents_md_chars
+            + info.jcode_agents_md_chars
+            + info.jcode_harness_chars
             + info.skills_chars
             + info.selfdev_chars
             + info.memory_chars
@@ -815,6 +819,7 @@ impl crate::tui::TuiState for App {
                 Instant::now(),
                 CachedContextInfo {
                     session_key,
+                    working_dir_key,
                     is_remote: self.is_remote,
                     display_messages_version: self.display_messages_version,
                     message_count,
