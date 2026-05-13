@@ -620,6 +620,21 @@ fn test_info_widget_remote_openai_uses_remote_provider_for_usage_and_context() {
 }
 
 #[test]
+fn test_info_widget_remote_openai_gpt_5_5_uses_codex_oauth_context_window() {
+    let mut app = create_test_app();
+    app.is_remote = true;
+    app.remote_provider_name = Some("OpenAI".to_string());
+    app.remote_provider_model = Some("gpt-5.5".to_string());
+    app.update_context_limit_for_model("gpt-5.5");
+
+    let data = crate::tui::TuiState::info_widget_data(&app);
+
+    assert_eq!(data.provider_name.as_deref(), Some("OpenAI"));
+    assert_eq!(data.model.as_deref(), Some("gpt-5.5"));
+    assert_eq!(data.context_limit, Some(400_000));
+}
+
+#[test]
 fn test_info_widget_remote_model_falls_back_to_model_provider_detection() {
     let mut app = create_test_app();
     app.is_remote = true;

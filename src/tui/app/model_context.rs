@@ -247,11 +247,32 @@ impl App {
 
     pub(super) fn update_context_limit_for_model(&mut self, model: &str) {
         let limit = if self.is_remote {
-            crate::provider::context_limit_for_model_with_provider(
-                model,
-                self.remote_provider_name.as_deref(),
-            )
-            .unwrap_or(self.provider.context_window())
+            let normalized_provider = self
+                .remote_provider_name
+                .as_deref()
+                .unwrap_or_default()
+                .trim()
+                .to_ascii_lowercase();
+            let normalized_model = model.trim().to_ascii_lowercase();
+            if matches!(normalized_provider.as_str(), "openai" | "openai oauth")
+                && normalized_model
+                    .strip_suffix("[1m]")
+                    .unwrap_or(&normalized_model)
+                    .starts_with("gpt-5.5")
+            {
+                // Remote TUI clients only receive the provider label, not the
+                // server-side OpenAI credential mode. The built-in OpenAI remote
+                // path is ChatGPT/Codex OAuth for this UI surface, whose GPT-5.5
+                // window is 400K total (272K input + 128K reserved output), not
+                // the 1,050K API-key window from the generic static table.
+                400_000
+            } else {
+                crate::provider::context_limit_for_model_with_provider(
+                    model,
+                    self.remote_provider_name.as_deref(),
+                )
+                .unwrap_or(self.provider.context_window())
+            }
         } else {
             self.provider.context_window()
         };
