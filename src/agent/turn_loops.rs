@@ -58,6 +58,7 @@ impl Agent {
     /// M11 stage 6: a new user turn starts a fresh self-correction chain.
     pub(super) fn reset_lifecycle_deny_streak_for_user_turn(&mut self) {
         self.lifecycle_deny_streak = 0;
+        self.nested_private_instruction_keys.clear();
     }
 
     /// M11 stage 6 fix: continuation requires the conversation to end with a
@@ -1267,6 +1268,9 @@ impl Agent {
 
             if tool_results_dirty {
                 self.session.save()?;
+                if self.inject_nested_private_instructions_for_tool_calls(&tool_calls) {
+                    self.session.save()?;
+                }
             }
 
             if !generated_image_contexts.is_empty() {

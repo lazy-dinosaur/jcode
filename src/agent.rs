@@ -161,6 +161,8 @@ pub struct Agent {
     /// against `agents.max_lifecycle_deny_streak` (or env override) to prevent
     /// runaway self-correction loops.
     lifecycle_deny_streak: u8,
+    /// Private nested instruction files already injected during the current user turn.
+    nested_private_instruction_keys: HashSet<PathBuf>,
     /// Tool call ids observed in the current session transcript.
     tool_call_ids: HashSet<String>,
     /// Tool result ids observed in the current session transcript.
@@ -230,6 +232,7 @@ impl Agent {
             current_turn_system_reminder: None,
             pending_lifecycle_system_reminder: None,
             lifecycle_deny_streak: 0,
+            nested_private_instruction_keys: HashSet::new(),
             tool_call_ids: HashSet::new(),
             tool_result_ids: HashSet::new(),
             tool_output_scan_index: 0,
@@ -444,6 +447,7 @@ impl Agent {
         self.current_turn_system_reminder = None;
         self.pending_lifecycle_system_reminder = None;
         self.lifecycle_deny_streak = 0;
+        self.nested_private_instruction_keys.clear();
         self.reset_tool_output_tracking();
         if let Ok(mut queue) = self.soft_interrupt_queue.lock() {
             queue.clear();

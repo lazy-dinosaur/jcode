@@ -318,6 +318,89 @@ fn test_private_instruction_path_resolution_supports_project_jcode_prefix() {
 }
 
 #[test]
+fn test_nested_private_instructions_load_nearest_first_and_skip_static_root_agents() {
+    let project_dir = tempfile::TempDir::new().unwrap();
+    std::fs::create_dir_all(project_dir.path().join(".jcode")).unwrap();
+    std::fs::write(
+        project_dir.path().join(".jcode/AGENTS.md"),
+        "root static agents",
+    )
+    .unwrap();
+    std::fs::write(
+        project_dir.path().join(".jcode/instructions.md"),
+        "root dynamic instruction",
+    )
+    .unwrap();
+
+    let package_dir = project_dir.path().join("packages/foo");
+    std::fs::create_dir_all(package_dir.join("src")).unwrap();
+    std::fs::create_dir_all(package_dir.join(".jcode/rules")).unwrap();
+    std::fs::write(package_dir.join("src/lib.rs"), "fn main() {}").unwrap();
+    std::fs::write(package_dir.join(".jcode/AGENTS.md"), "package agents").unwrap();
+    std::fs::write(
+        package_dir.join(".jcode/instructions.md"),
+        "package instruction",
+    )
+    .unwrap();
+    std::fs::write(
+        package_dir.join(".jcode/rules/10-style.md"),
+        "package style",
+    )
+    .unwrap();
+
+    let prompt_config = crate::config::PromptConfig::default();
+    let nested = load_nested_private_instructions_for_paths_with_config(
+        Some(project_dir.path()),
+        [std::path::PathBuf::from("packages/foo/src/lib.rs")],
+        &prompt_config,
+    );
+    let content = nested
+        .iter()
+        .map(|item| item.content.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        content,
+        vec![
+            "package agents",
+            "package instruction",
+            "package style",
+            "root dynamic instruction",
+        ]
+    );
+    assert!(
+        nested
+            .iter()
+            .all(|item| item.label.contains("Nested Private Jcode Instruction"))
+    );
+    assert!(!content.contains(&"root static agents"));
+}
+
+#[test]
+fn test_nested_private_instructions_dedup_across_multiple_touched_files() {
+    let project_dir = tempfile::TempDir::new().unwrap();
+    let package_dir = project_dir.path().join("packages/foo");
+    std::fs::create_dir_all(package_dir.join("src")).unwrap();
+    std::fs::create_dir_all(package_dir.join(".jcode/rules")).unwrap();
+    std::fs::write(package_dir.join("src/a.rs"), "a").unwrap();
+    std::fs::write(package_dir.join("src/b.rs"), "b").unwrap();
+    std::fs::write(package_dir.join(".jcode/rules/10-style.md"), "shared style").unwrap();
+
+    let prompt_config = crate::config::PromptConfig::default();
+    let nested = load_nested_private_instructions_for_paths_with_config(
+        Some(project_dir.path()),
+        [
+            std::path::PathBuf::from("packages/foo/src/a.rs"),
+            std::path::PathBuf::from("packages/foo/src/b.rs"),
+        ],
+        &prompt_config,
+    );
+
+    assert_eq!(nested.len(), 1);
+    assert_eq!(nested[0].content, "shared style");
+}
+
+#[test]
 fn test_non_selfdev_prompt_includes_lightweight_selfdev_hint() {
     let prompt = build_system_prompt(None, &[]);
     assert!(prompt.contains("Self-Development Access"));

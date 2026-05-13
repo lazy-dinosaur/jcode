@@ -1154,6 +1154,9 @@ impl Agent {
 
             if tool_results_dirty {
                 self.session.save()?;
+                if self.inject_nested_private_instructions_for_tool_calls(&tool_calls) {
+                    self.session.save()?;
+                }
             }
 
             if !generated_image_contexts.is_empty() {

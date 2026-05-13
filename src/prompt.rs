@@ -116,6 +116,14 @@ pub struct PromptInstructionSource {
     pub reason: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NestedPromptInstruction {
+    pub label: String,
+    pub path: PathBuf,
+    pub content: String,
+    pub chars: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromptInstructionStatus {
     Loaded,
@@ -874,6 +882,135 @@ fn load_prompt_overlay_files_from_dir_with_config(
             sources,
         )
     }
+}
+
+pub fn load_nested_private_instructions_for_paths(
+    working_dir: Option<&Path>,
+    touched_paths: impl IntoIterator<Item = PathBuf>,
+) -> Vec<NestedPromptInstruction> {
+    let prompt_config = crate::config::config().prompt_for_working_dir(working_dir);
+    load_nested_private_instructions_for_paths_with_config(
+        working_dir,
+        touched_paths,
+        &prompt_config,
+    )
+}
+
+fn load_nested_private_instructions_for_paths_with_config(
+    working_dir: Option<&Path>,
+    touched_paths: impl IntoIterator<Item = PathBuf>,
+    prompt_config: &crate::config::PromptConfig,
+) -> Vec<NestedPromptInstruction> {
+    let project_dir = find_prompt_project_dir(working_dir)
+        .unwrap_or_else(|| working_dir.unwrap_or(Path::new(".")).to_path_buf());
+    let mut already_static =
+        loaded_private_static_instruction_keys(working_dir, &project_dir, prompt_config);
+    let mut loaded = BTreeSet::new();
+    let mut out = Vec::new();
+
+    for touched_path in touched_paths {
+        let resolved = resolve_touched_path(working_dir, &touched_path);
+        let start_dir = if resolved.is_dir() {
+            resolved.as_path()
+        } else {
+            resolved.parent().unwrap_or(resolved.as_path())
+        };
+
+        for ancestor in start_dir.ancestors() {
+            if !ancestor.starts_with(&project_dir) {
+                break;
+            }
+
+            for path in nested_private_instruction_candidates(ancestor) {
+                let key = dedupe_key(&path);
+                if already_static.contains(&key) || loaded.contains(&key) {
+                    continue;
+                }
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    let trimmed = content.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    let label = format!(
+                        "Nested Private Jcode Instruction ({})",
+                        private_instruction_label(&project_dir, &path)
+                    );
+                    loaded.insert(key.clone());
+                    already_static.insert(key);
+                    out.push(NestedPromptInstruction {
+                        label,
+                        path,
+                        content: trimmed.to_string(),
+                        chars: content.len(),
+                    });
+                }
+            }
+
+            if ancestor == project_dir {
+                break;
+            }
+        }
+    }
+
+    out
+}
+
+fn loaded_private_static_instruction_keys(
+    working_dir: Option<&Path>,
+    project_dir: &Path,
+    prompt_config: &crate::config::PromptConfig,
+) -> BTreeSet<PathBuf> {
+    let mut keys = BTreeSet::new();
+
+    let (_, agents_info) = load_agents_md_files_from_dir_with_config(working_dir, prompt_config);
+    for source in agents_info.instruction_sources {
+        if source.private && source.status == PromptInstructionStatus::Loaded {
+            keys.insert(dedupe_key(&source.path));
+        }
+    }
+
+    let (_, _, _, overlay_sources) =
+        load_prompt_overlay_files_from_dir_with_config(working_dir, prompt_config);
+    for source in overlay_sources {
+        if source.private && source.status == PromptInstructionStatus::Loaded {
+            keys.insert(dedupe_key(&source.path));
+        }
+    }
+
+    keys.insert(dedupe_key(&project_dir.join(".jcode").join("AGENTS.md")));
+    keys
+}
+
+fn resolve_touched_path(working_dir: Option<&Path>, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        working_dir.unwrap_or(Path::new(".")).join(path)
+    }
+}
+
+fn nested_private_instruction_candidates(dir: &Path) -> Vec<PathBuf> {
+    let jcode_dir = dir.join(".jcode");
+    let mut paths = Vec::new();
+    paths.push(jcode_dir.join("AGENTS.md"));
+    paths.push(jcode_dir.join("instructions.md"));
+
+    let mut rule_paths: Vec<PathBuf> = std::fs::read_dir(jcode_dir.join("rules"))
+        .ok()
+        .into_iter()
+        .flat_map(|entries| entries.filter_map(|entry| entry.ok()))
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.is_file()
+                && path
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
+        })
+        .collect();
+    rule_paths.sort();
+    paths.extend(rule_paths);
+    paths.into_iter().filter(|path| path.is_file()).collect()
 }
 
 fn expand_private_instruction_patterns(project_dir: &Path, patterns: &[String]) -> Vec<PathBuf> {

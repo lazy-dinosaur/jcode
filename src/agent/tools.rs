@@ -1,5 +1,7 @@
+use super::Agent;
 use crate::message::{ContentBlock, ToolCall};
 use crate::tool::ToolOutput;
+use std::path::PathBuf;
 
 pub(super) fn tool_output_to_content_blocks(
     tool_use_id: String,
@@ -60,4 +62,88 @@ pub(super) fn print_tool_summary(tool: &ToolCall) {
         }
         _ => {}
     }
+}
+
+impl Agent {
+    pub(super) fn inject_nested_private_instructions_for_tool_calls(
+        &mut self,
+        tool_calls: &[ToolCall],
+    ) -> bool {
+        let touched_paths = nested_instruction_touched_paths(tool_calls);
+        if touched_paths.is_empty() {
+            return false;
+        }
+
+        let instructions = crate::prompt::load_nested_private_instructions_for_paths(
+            self.working_dir().map(std::path::Path::new),
+            touched_paths,
+        );
+        if instructions.is_empty() {
+            return false;
+        }
+
+        let instructions: Vec<_> = instructions
+            .into_iter()
+            .filter(|instruction| {
+                let key = std::fs::canonicalize(&instruction.path)
+                    .unwrap_or_else(|_| instruction.path.clone());
+                if self.nested_private_instruction_keys.contains(&key) {
+                    false
+                } else {
+                    self.nested_private_instruction_keys.insert(key);
+                    true
+                }
+            })
+            .collect();
+        if instructions.is_empty() {
+            return false;
+        }
+
+        let mut text = String::from(
+            "# Nested Private Jcode Instructions\n\nThe following private `.jcode/` instructions are relevant to files just read/searched/edited in this turn. Follow them for the next steps.\n",
+        );
+        for instruction in instructions {
+            text.push_str("\n## ");
+            text.push_str(&instruction.label);
+            text.push_str("\n\n");
+            text.push_str(&instruction.content);
+            text.push('\n');
+        }
+
+        self.add_message(
+            crate::message::Role::User,
+            vec![ContentBlock::Text {
+                text,
+                cache_control: None,
+            }],
+        );
+        true
+    }
+}
+
+fn nested_instruction_touched_paths(tool_calls: &[ToolCall]) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for tool in tool_calls {
+        match tool.name.as_str() {
+            "read" | "write" | "edit" | "multiedit" => {
+                if let Some(path) = tool.input.get("file_path").and_then(|value| value.as_str()) {
+                    paths.push(PathBuf::from(path));
+                }
+            }
+            "grep" | "glob" | "ls" => {
+                if let Some(path) = tool.input.get("path").and_then(|value| value.as_str()) {
+                    paths.push(PathBuf::from(path));
+                }
+            }
+            "agentgrep" => {
+                if let Some(file) = tool.input.get("file").and_then(|value| value.as_str()) {
+                    paths.push(PathBuf::from(file));
+                } else if let Some(path) = tool.input.get("path").and_then(|value| value.as_str()) {
+                    paths.push(PathBuf::from(path));
+                }
+            }
+            _ => {}
+        }
+    }
+    paths
 }
