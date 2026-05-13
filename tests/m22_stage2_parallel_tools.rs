@@ -4,13 +4,15 @@ mod mock_provider;
 use anyhow::Result;
 use jcode::agent::{Agent, SoftInterruptMessage, SoftInterruptSource};
 use jcode::message::{ContentBlock, StreamEvent};
+use jcode::protocol::ServerEvent;
 use jcode::session::Session;
-use jcode::tool::Registry;
+use jcode::tool::{Registry, Tool, ToolContext, ToolOutput};
 use mock_provider::MockProvider;
 use serde_json::json;
 use std::ffi::OsString;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tokio::sync::{broadcast, mpsc};
 
 static JCODE_HOME_LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
 
@@ -123,6 +125,39 @@ async fn run_tool_turn(events: Vec<StreamEvent>) -> Result<(Agent, Duration)> {
     Ok((agent, started.elapsed()))
 }
 
+async fn new_agent_with_mock_provider(events: Vec<StreamEvent>) -> Result<Agent> {
+    let provider = MockProvider::new();
+    provider.queue_response(events);
+    provider.queue_response(vec![StreamEvent::MessageEnd {
+        stop_reason: Some("end_turn".to_string()),
+    }]);
+    let provider: Arc<dyn jcode::provider::Provider> = Arc::new(provider);
+    let registry = Registry::new(provider.clone()).await;
+    Ok(Agent::new(provider, registry))
+}
+
+async fn run_mpsc_tool_turn(mut agent: Agent, timeout: Duration) -> Result<(Agent, Duration)> {
+    let (event_tx, _event_rx) = mpsc::unbounded_channel::<ServerEvent>();
+    let started = Instant::now();
+    tokio::time::timeout(
+        timeout,
+        agent.run_once_streaming_mpsc("run streaming mpsc tools", vec![], None, event_tx),
+    )
+    .await??;
+    Ok((agent, started.elapsed()))
+}
+
+async fn run_broadcast_tool_turn(mut agent: Agent, timeout: Duration) -> Result<(Agent, Duration)> {
+    let (event_tx, _event_rx) = broadcast::channel::<ServerEvent>(64);
+    let started = Instant::now();
+    tokio::time::timeout(
+        timeout,
+        agent.run_once_streaming("run streaming broadcast tools", event_tx),
+    )
+    .await??;
+    Ok((agent, started.elapsed()))
+}
+
 fn tool_results(session: &Session) -> Vec<(String, String, Option<bool>)> {
     session
         .messages
@@ -137,6 +172,40 @@ fn tool_results(session: &Session) -> Vec<(String, String, Option<bool>)> {
             _ => None,
         })
         .collect()
+}
+
+fn text_blocks(session: &Session) -> Vec<String> {
+    session
+        .messages
+        .iter()
+        .flat_map(|message| message.content.iter())
+        .filter_map(|block| match block {
+            ContentBlock::Text { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+struct HangingSelfdevTool;
+
+#[async_trait::async_trait]
+impl Tool for HangingSelfdevTool {
+    fn name(&self) -> &str {
+        "selfdev"
+    }
+
+    fn description(&self) -> &str {
+        "Test selfdev tool that remains in-flight until aborted."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({"type":"object","properties":{}})
+    }
+
+    async fn execute(&self, _input: serde_json::Value, _ctx: ToolContext) -> Result<ToolOutput> {
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        Ok(ToolOutput::new("unexpected selfdev completion"))
+    }
 }
 
 #[tokio::test]
@@ -294,5 +363,174 @@ async fn t5_tool_results_preserve_tool_use_index_order() -> Result<()> {
         .map(|(id, _, _)| id)
         .collect();
     assert_eq!(ids, vec!["t5-first".to_string(), "t5-second".to_string()]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn t6_mpsc_single_tool_alt_b_moves_to_background() -> Result<()> {
+    let _env = setup_test_env()?;
+    let agent = new_agent_with_mock_provider(tool_turn(vec![tool_call(
+        "t6-bg",
+        "bash",
+        json!({"command":"python3 -c 'import time; time.sleep(1.5); print(\"late\")'","timeout":5000,"notify":false}),
+    )]))
+    .await?;
+    let background_signal = agent.background_tool_signal();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        background_signal.fire();
+    });
+
+    let (agent, elapsed) = run_mpsc_tool_turn(agent, Duration::from_secs(2)).await?;
+    assert!(
+        elapsed < Duration::from_millis(800),
+        "Alt+B handoff should return before the 1.5s tool completes; elapsed={elapsed:?}"
+    );
+    let session = Session::load(agent.session_id())?;
+    let results = tool_results(&session);
+    assert!(
+        results.iter().any(|(id, content, is_error)| {
+            id == "t6-bg"
+                && content.contains("moved to background")
+                && content.contains("task_id")
+                && is_error.is_none()
+        }),
+        "expected background handoff ToolResult; results={results:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn t7_mpsc_single_bash_reload_preserves_background_handoff() -> Result<()> {
+    let _env = setup_test_env()?;
+    let agent = new_agent_with_mock_provider(tool_turn(vec![tool_call(
+        "t7-bash",
+        "bash",
+        json!({"command":"python3 -c 'import time; time.sleep(0.15); print(\"reload-ok\")'","timeout":5000,"notify":false}),
+    )]))
+    .await?;
+    let shutdown_signal = agent.graceful_shutdown_signal();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        shutdown_signal.fire();
+    });
+
+    let (agent, elapsed) = run_mpsc_tool_turn(agent, Duration::from_secs(2)).await?;
+    assert!(
+        elapsed < Duration::from_millis(900),
+        "bash reload handoff should return promptly; elapsed={elapsed:?}"
+    );
+    let session = Session::load(agent.session_id())?;
+    let results = tool_results(&session);
+    assert!(
+        results.iter().any(|(id, content, is_error)| {
+            id == "t7-bash"
+                && content.contains("Command continued in background due to reload")
+                && content.contains("Task ID:")
+                && is_error.is_none()
+        }),
+        "expected bash reload background handoff; results={results:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn t8_mpsc_single_selfdev_reload_uses_clean_non_error_message() -> Result<()> {
+    let _env = setup_test_env()?;
+    let provider = MockProvider::new();
+    provider.queue_response(tool_turn(vec![tool_call(
+        "t8-selfdev",
+        "selfdev",
+        json!({"action":"reload","context":"test reload handoff"}),
+    )]));
+    provider.queue_response(vec![StreamEvent::MessageEnd {
+        stop_reason: Some("end_turn".to_string()),
+    }]);
+    let provider: Arc<dyn jcode::provider::Provider> = Arc::new(provider);
+    let registry = Registry::empty();
+    registry
+        .register("selfdev".to_string(), Arc::new(HangingSelfdevTool))
+        .await;
+    let agent = Agent::new(provider, registry);
+    let shutdown_signal = agent.graceful_shutdown_signal();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        shutdown_signal.fire();
+    });
+
+    let (agent, elapsed) = run_mpsc_tool_turn(agent, Duration::from_secs(2)).await?;
+    assert!(
+        elapsed < Duration::from_millis(900),
+        "selfdev reload handoff should return promptly; elapsed={elapsed:?}"
+    );
+    let session = Session::load(agent.session_id())?;
+    let results = tool_results(&session);
+    assert!(
+        results.iter().any(|(id, content, is_error)| {
+            id == "t8-selfdev"
+                && content == "Reload initiated. Process restarting..."
+                && *is_error == Some(false)
+        }),
+        "expected clean selfdev reload ToolResult; results={results:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn t9_urgent_interrupt_remaining_count_mpsc_and_broadcast() -> Result<()> {
+    async fn run_with_urgent_interrupt(streaming_kind: &str) -> Result<Vec<String>> {
+        let events = tool_turn(vec![
+            tool_call(
+                &format!("{streaming_kind}-fast"),
+                "bash",
+                json!({"command":"python3 -c 'import time; time.sleep(0.1); print(\"fast\")'","timeout":5000,"notify":false}),
+            ),
+            tool_call(
+                &format!("{streaming_kind}-slow-a"),
+                "bash",
+                json!({"command":"python3 -c 'import time; time.sleep(2); print(\"slow-a\")'","timeout":5000,"notify":false}),
+            ),
+            tool_call(
+                &format!("{streaming_kind}-slow-b"),
+                "bash",
+                json!({"command":"python3 -c 'import time; time.sleep(2); print(\"slow-b\")'","timeout":5000,"notify":false}),
+            ),
+        ]);
+        let agent = new_agent_with_mock_provider(events).await?;
+        let interrupt_queue = agent.soft_interrupt_queue();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            interrupt_queue.lock().unwrap().push(SoftInterruptMessage {
+                content: "stop remaining".to_string(),
+                urgent: true,
+                source: SoftInterruptSource::User,
+            });
+        });
+        let agent = if streaming_kind == "mpsc" {
+            run_mpsc_tool_turn(agent, Duration::from_secs(4)).await?.0
+        } else {
+            run_broadcast_tool_turn(agent, Duration::from_secs(4))
+                .await?
+                .0
+        };
+        Ok(text_blocks(&Session::load(agent.session_id())?))
+    }
+
+    let _env = setup_test_env()?;
+    let mpsc_texts = run_with_urgent_interrupt("mpsc").await?;
+    assert!(
+        mpsc_texts
+            .iter()
+            .any(|text| text.contains("[User interrupted: 2 remaining tool(s) skipped]")),
+        "mpsc should report exact remaining count; texts={mpsc_texts:?}"
+    );
+
+    let broadcast_texts = run_with_urgent_interrupt("broadcast").await?;
+    assert!(
+        broadcast_texts
+            .iter()
+            .any(|text| text.contains("[User interrupted: 2 remaining tool(s) skipped]")),
+        "broadcast should report exact remaining count; texts={broadcast_texts:?}"
+    );
     Ok(())
 }
