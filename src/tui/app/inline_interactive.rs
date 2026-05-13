@@ -189,12 +189,43 @@ impl App {
                     )
                 } else {
                     match crate::provider::provider_for_model(&model) {
-                        Some("claude") => (
-                            "Anthropic".to_string(),
-                            "claude-oauth".to_string(),
-                            auth.anthropic.has_oauth || auth.anthropic.has_api_key,
-                            String::new(),
-                        ),
+                        Some("claude") => {
+                            if auth.anthropic.has_oauth {
+                                let (available, detail) =
+                                    crate::provider::anthropic_oauth_route_availability(&model);
+                                routes.push(crate::provider::ModelRoute {
+                                    model: model.clone(),
+                                    provider: "Anthropic".to_string(),
+                                    api_method: "claude-oauth".to_string(),
+                                    available,
+                                    detail,
+                                    cheapness: None,
+                                });
+                            }
+                            if auth.anthropic.has_api_key {
+                                let (available, detail) =
+                                    crate::provider::anthropic_api_key_route_availability(&model);
+                                routes.push(crate::provider::ModelRoute {
+                                    model: model.clone(),
+                                    provider: "Anthropic".to_string(),
+                                    api_method: "api-key".to_string(),
+                                    available,
+                                    detail,
+                                    cheapness: None,
+                                });
+                            }
+                            if !auth.anthropic.has_oauth && !auth.anthropic.has_api_key {
+                                routes.push(crate::provider::ModelRoute {
+                                    model,
+                                    provider: "Anthropic".to_string(),
+                                    api_method: "claude-oauth".to_string(),
+                                    available: false,
+                                    detail: "no credentials".to_string(),
+                                    cheapness: None,
+                                });
+                            }
+                            continue;
+                        }
                         Some("openai") => unreachable!("OpenAI models are handled above"),
                         Some("gemini") => (
                             "Gemini".to_string(),

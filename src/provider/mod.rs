@@ -1038,18 +1038,9 @@ impl Provider for MultiProvider {
 
         // Anthropic models (oauth and/or api-key)
         for model in anthropic_models {
-            let (available, detail) = if has_oauth && !has_api_key {
-                anthropic_oauth_route_availability(&model)
-            } else {
-                (true, String::new())
-            };
-
             if has_oauth {
-                routes.push(build_anthropic_oauth_route(
-                    &model,
-                    available,
-                    detail.clone(),
-                ));
+                let (available, detail) = anthropic_oauth_route_availability(&model);
+                routes.push(build_anthropic_oauth_route(&model, available, detail));
             }
             if has_api_key {
                 let (ak_available, ak_detail) = anthropic_api_key_route_availability(&model);

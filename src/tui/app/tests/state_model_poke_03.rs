@@ -165,6 +165,14 @@ impl MixedModelRoutesProvider {
                 cheapness: None,
             },
             crate::provider::ModelRoute {
+                model: "claude-opus-4-7[1m]".to_string(),
+                provider: "Anthropic".to_string(),
+                api_method: "claude-oauth".to_string(),
+                available: false,
+                detail: "requires extra usage".to_string(),
+                cheapness: None,
+            },
+            crate::provider::ModelRoute {
                 model: "Qwen/Qwen3-Coder-480B-A35B-Instruct".to_string(),
                 provider: "Chutes".to_string(),
                 api_method: "openai-compatible:chutes".to_string(),
@@ -1042,6 +1050,19 @@ fn test_model_picker_state_space_preserves_provider_labels_after_route_hydration
         routes_by_model.get("claude-opus-4-6"),
         Some(&("Anthropic".to_string(), "claude-oauth".to_string()))
     );
+    assert_eq!(
+        routes_by_model.get("claude-opus-4-7[1m]"),
+        Some(&("Anthropic".to_string(), "claude-oauth".to_string())),
+        "disabled 1m routes should still be advertised in the main model picker"
+    );
+    let opus_1m = picker
+        .entries
+        .iter()
+        .find(|entry| entry.name == "claude-opus-4-7[1m]")
+        .expect("Opus 1m route should be visible");
+    let opus_1m_route = opus_1m.active_option().expect("Opus 1m active route");
+    assert!(!opus_1m_route.available);
+    assert_eq!(opus_1m_route.detail, "requires extra usage");
     assert_eq!(
         routes_by_model.get("Qwen/Qwen3-Coder-480B-A35B-Instruct"),
         Some(&(
