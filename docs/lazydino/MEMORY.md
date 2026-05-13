@@ -11,7 +11,7 @@
 4. **language**: 한국어 대화. 사용자가 잘못 본 거 정정해주면 즉시 사과하고 다시 확인.
 5. **추측 금지**: 이전 스크린샷/세션 잔여 정보로 새 사실 추측하지 말 것.
 6. **bg cargo**: `nohup ... > log 2>&1 & disown` + 폴링.
-7. **subagent**: round 당 1 spawn 만 (M22 by-design, 모델 emit 패턴).
+7. **subagent**: 현재 round 당 1 spawn (M22 Stage 2 남음 — turn loop sequential await).
 8. **세션 기록**: 진행은 `docs/lazydino/sessions/YYYY-MM-DD-*.md`,
    재사용 가능한 큰 작업은 `docs/lazydino/milestones/Mxx.md`.
 
@@ -37,18 +37,21 @@
   - Fix: 빈 string detail 을 explicit clear 로 contract 정립
     (provider/UI/agent 3 곳 동시에 mirror).
 
-- **M22 — same-round 두 번째 subagent deferred** (2026-05-13 by-design)
-  - ✅ DONE (docs only, fix 코드 없음).
-  - Root cause: (a) lock/race **부정** ─ `for tool_index in 0..tool_count`
-    는 sequential 이지만 turn-종료까지 잡는 long-lived lock 없음.
-    (b) **확정** ─ 모델 (Claude Opus 등) 자체가 한 turn 에 task tool 을
-    1개만 emit. 자연 실험 로그 (moose 00:28, koala 07:11~07:17) 가 입증.
-  - 사용자 체감: task tool 의 `execute()` 가 sub turn 끝까지 await →
-    "첫 번째 끝나야 두 번째 시작" 으로 보임. ESC로 background 보내도
-    다음 round 의 새 API call 이 시작되어야 두 번째 task 가 emit.
-  - 워크어라운드 `round 당 1 spawn` 은 곧 시스템의 자연 동작.
-  - 후속 (별개 카드 후보): fan-out 가능한 swarm spawn 사용 또는 prompt
-    엔지니어링으로 멀티 task emit 유도. 모두 회귀 위험 있어 보류.
+- **M22 — same-round 두 번째 subagent deferred** (2026-05-13 재오픈)
+  - 🔴 OPEN (Stage 1 만 DONE). 1차 by-design 판정 사용자 항의로 취소.
+  - 진단: 3 layer 중 1 만 해결됨.
+    - **Layer 1 (Provider emit)** — OpenAI Responses API `parallel_tool_calls`
+      toggle, default true (M22-1 이미 적용 — src/provider/openai.rs:712,
+      src/config/default_file.rs:182, env override 있음).
+    - **Layer 2 (Turn loop)** 이 sequential `for tool_index in 0..tool_count`
+      로 await. 모델이 multi-emit 해도 순차 처리. **이게 진짜 fix
+      포인트** — batch.rs 의 `FuturesUnordered` 패턴과 동일하게 전환.
+    - **Layer 3 (모델 emit 패턴)** — 조절 제한적 (system prompt 튜닝),
+      별개 카드.
+  - 사용자 체감: "같은 round 에 두 subagent 쓰면 한쪽 silence" — Layer 2
+    원인. fix 가능.
+  - 위험: 같은 파일 동시 write race, tool_use/tool_result ordering,
+    urgent_interrupt cancel 경로.
 - **M41 — server-initiated turn 첫 stream event 가 client redraw 안 깨움**
   - ✅ DONE (2026-05-12 라이브 검증). deploy `m41-eefa3744`.
   - 잔여 검증: thought-line + woke 조합 회귀 테스트, sibling fanout
