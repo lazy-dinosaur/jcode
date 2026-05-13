@@ -341,6 +341,23 @@ fn test_system_reminder_is_added_to_system_prompt_not_user_messages() {
 }
 
 #[test]
+fn test_tui_system_prompt_uses_session_working_dir_for_agents_md() {
+    let repo = tempfile::TempDir::new().expect("temp repo");
+    std::fs::write(repo.path().join("AGENTS.md"), "follow repo agents policy")
+        .expect("write AGENTS.md");
+
+    let mut app = create_test_app();
+    app.session.working_dir = Some(repo.path().display().to_string());
+
+    let split = app.build_system_prompt_split(None);
+
+    assert!(split.static_part.contains("follow repo agents policy"));
+    assert!(split.static_part.contains("# AGENTS and Private Instruction Priority"));
+    assert!(app.context_info.has_project_agents_md);
+    assert!(app.context_info.project_agents_md_chars > 0);
+}
+
+#[test]
 fn test_recover_session_without_tools_preserves_debug_and_canary_flags() {
     let mut app = create_test_app();
     app.session.is_debug = true;

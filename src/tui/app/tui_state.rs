@@ -654,6 +654,26 @@ impl crate::tui::TuiState for App {
         }
 
         let mut info = self.context_info.clone();
+        if info.system_prompt_chars == 0 || info.instruction_sources.is_empty() {
+            let working_dir = self
+                .session
+                .working_dir
+                .as_deref()
+                .map(std::path::PathBuf::from)
+                .or_else(|| std::env::current_dir().ok());
+            let (_, prompt_info) = crate::prompt::build_system_prompt_split(
+                None,
+                &[],
+                self.session.is_canary,
+                None,
+                working_dir.as_deref(),
+            );
+            let previous_tool_defs_chars = info.tool_defs_chars;
+            let previous_tool_defs_count = info.tool_defs_count;
+            info = prompt_info;
+            info.tool_defs_chars = previous_tool_defs_chars;
+            info.tool_defs_count = previous_tool_defs_count;
+        }
         info.session_context_chars = 0;
 
         // Compute dynamic stats from conversation
