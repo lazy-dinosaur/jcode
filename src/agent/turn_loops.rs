@@ -699,8 +699,7 @@ impl Agent {
                     .collect();
             }
 
-            for tool_index in 0..tool_calls.len() {
-                let tc = &tool_calls[tool_index];
+            for (tool_index, tc) in tool_calls.iter().enumerate() {
                 let message_id = assistant_message_id
                     .clone()
                     .unwrap_or_else(|| self.session.id.clone());

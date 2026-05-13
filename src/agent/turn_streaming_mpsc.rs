@@ -775,8 +775,7 @@ impl Agent {
                     .collect();
             }
 
-            for tool_index in 0..tool_calls.len() {
-                let tc = &tool_calls[tool_index];
+            for (tool_index, tc) in tool_calls.iter().enumerate() {
                 if let Some(preset) = preset_results.remove(&tool_index) {
                     match preset {
                         PresetToolResult::ValidationError(error_msg) => {

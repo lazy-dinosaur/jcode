@@ -742,11 +742,10 @@ fn parse_scheduled_tool_message(msg: &DisplayMessage) -> Option<ParsedScheduledT
         } else {
             (when_part.trim().to_string(), None)
         }
-    } else if let Some(rest) = first_line.strip_prefix("Scheduled ambient task ") {
+    } else {
+        let rest = first_line.strip_prefix("Scheduled ambient task ")?;
         let (id, when) = rest.split_once(" for ")?;
         (when.trim().to_string(), Some(id.trim().to_string()))
-    } else {
-        return None;
     };
 
     let mut working_dir = None;
