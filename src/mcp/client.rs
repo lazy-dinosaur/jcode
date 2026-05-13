@@ -729,6 +729,105 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn m44_http_mcp_call_tool_round_trips_arguments() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/mcp", listener.local_addr().unwrap());
+        let seen_call_args = Arc::new(StdMutex::new(None));
+        let seen_call_args_server = Arc::clone(&seen_call_args);
+
+        let server = tokio::spawn(async move {
+            for _ in 0..4 {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let (_headers, body) = read_http_request(&mut stream).await.unwrap();
+                let id = body.get("id").and_then(|value| value.as_u64()).unwrap_or(0);
+                let method = body.get("method").and_then(|value| value.as_str()).unwrap();
+                let response = match method {
+                    "initialize" => serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": {
+                            "protocolVersion": "2024-11-05",
+                            "capabilities": {"tools": {"listChanged": false}},
+                            "serverInfo": {"name": "mock-http", "version": "1.0.0"}
+                        }
+                    }),
+                    "notifications/initialized" => serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": {}
+                    }),
+                    "tools/list" => serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": {
+                            "tools": [{
+                                "name": "inspect_frame",
+                                "description": "Inspect a design frame",
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": {"node_id": {"type": "string"}},
+                                    "required": ["node_id"]
+                                }
+                            }]
+                        }
+                    }),
+                    "tools/call" => {
+                        let params = body.get("params").cloned().unwrap_or_default();
+                        *seen_call_args_server.lock().unwrap() = Some(params.clone());
+                        assert_eq!(
+                            params.get("name").and_then(|value| value.as_str()),
+                            Some("inspect_frame")
+                        );
+                        serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {
+                                "content": [{"type": "text", "text": "frame: hero"}],
+                                "isError": false
+                            }
+                        })
+                    }
+                    other => panic!("unexpected method {other}"),
+                };
+                write_json_response(&mut stream, response).await.unwrap();
+            }
+        });
+
+        let config = McpServerConfig {
+            command: String::new(),
+            args: Vec::new(),
+            env: HashMap::new(),
+            transport: Some(McpTransport::StreamableHttp),
+            url: Some(url),
+            headers: HashMap::new(),
+            auth: None,
+            shared: true,
+        };
+
+        let client = McpClient::connect("figma".to_string(), &config)
+            .await
+            .unwrap();
+        let result = client
+            .call_tool("inspect_frame", serde_json::json!({"node_id": "123:456"}))
+            .await
+            .unwrap();
+
+        assert!(!result.is_error);
+        match &result.content[0] {
+            ContentBlock::Text { text, .. } => assert_eq!(text, "frame: hero"),
+            other => panic!("expected text content, got {other:?}"),
+        }
+        let seen = seen_call_args.lock().unwrap().clone().unwrap();
+        assert_eq!(
+            seen.get("arguments")
+                .and_then(|args| args.get("node_id"))
+                .and_then(|value| value.as_str()),
+            Some("123:456")
+        );
+        server.await.unwrap();
+    }
+
     #[test]
     fn m44_http_mcp_oauth_auth_is_explicitly_unsupported_until_stage_3() {
         let config = McpServerConfig {
