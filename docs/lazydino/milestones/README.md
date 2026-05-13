@@ -19,7 +19,7 @@ self-contained handoff card. 다음 세션 시작 시 사용 패턴:
 | 6 | M22 | ✅ DONE 2026-05-13 (deploy `lazydino-93e25dae`) | OpenAI parallel_tool_calls + turn loop FuturesUnordered fan-out, 9 targeted tests PASS, mpsc Alt+B/reload preserved, fork pushed | [M22.md](./M22.md) |
 | 7 | M43 | ✅ DONE 2026-05-13 (deploy `lazydino-07905799`) | OAuth path 에서 `tools` 기반 광고 회복, bg/swarm canary 실측 통과 | [M43.md](./M43.md) |
 | 8 | M44 | **High** (MCP ecosystem/auth compatibility) | MCP OAuth/Auth discovery 설계 + streamable HTTP/SSE transport | [M44.md](./M44.md) |
-| 9 | M45 | **High** (instruction-following / monorepo UX) | opencode-style instruction discovery: CLAUDE fallback, custom instruction globs, nested AGENTS injection | [M45.md](./M45.md) |
+| 9 | M45 | **High** (private instruction-following / monorepo UX) | private `.jcode/` instruction stack 강화: custom globs, nested private rules, stronger visibility | [M45.md](./M45.md) |
 | 10 | M16 | Medium-High (구조 개선) | 4 sub-step | [M16.md](./M16.md) |
 | 11 | M2  | Medium-High | 재현부터 | [M2.md](./M2.md) |
 | 12 | M4  | Medium (BY-DESIGN) | UX caveat 정리 | [M4.md](./M4.md) |
