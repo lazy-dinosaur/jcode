@@ -14,11 +14,11 @@ self-contained handoff card. 다음 세션 시작 시 사용 패턴:
 | 1 | M11 | ✅ DONE (framework 게이트) | 6 stages complete, latest Stage 6 deployed | [M11.md](./M11.md) |
 | 2 | M41 | ✅ DONE (라이브 검증 + 배포 완료) | fix + 4 회귀 테스트, deploy `m41-eefa3744`, fork pushed | [M41.md](./M41.md) |
 | 3 | M42 | ✅ DONE 2026-05-13 (deploy `lazydino-6d81399a`) | stale `checking websocket` label clear (StatusDetail empty-string contract) | [M42.md](./M42.md) |
-| 4 | M40 | **High** (UX 직접 타격, 2 remaining sub-issue) | **NEXT: Phase 4 Opus 1m advertise**, then Phase 1-2 image silent fail. Phase 3 slash DONE | [M40.md](./M40.md) |
+| 4 | M40 | ✅ DONE 2026-05-13 | image paste live validation passed, leading-space slash fixed, Claude 1m picker advertise fixed, GPT-5.5 context split fixed | [M40.md](./M40.md) |
 | 5 | M17 | **High** (사용자 워크플로우) | A vs B1 결정 + ~50줄 ~ 수백줄 | [M17.md](./M17.md) |
 | 6 | M22 | ✅ DONE 2026-05-13 (deploy `lazydino-93e25dae`) | OpenAI parallel_tool_calls + turn loop FuturesUnordered fan-out, 9 targeted tests PASS, mpsc Alt+B/reload preserved, fork pushed | [M22.md](./M22.md) |
 | 7 | M43 | ✅ DONE 2026-05-13 (deploy `lazydino-07905799`) | OAuth path 에서 `tools` 기반 광고 회복, bg/swarm canary 실측 통과 | [M43.md](./M43.md) |
-| 8 | M44 | **High** (MCP ecosystem/auth compatibility) | MCP OAuth/Auth discovery 설계 + streamable HTTP/SSE transport | [M44.md](./M44.md) |
+| 8 | M44 | **High — NEXT** (MCP ecosystem/auth compatibility) | OAuth-required MCP for Figma/remote services: config foundation → authenticated HTTP/SSE/streamable transport → OAuth discovery/login | [M44.md](./M44.md) |
 | ✅ | M45 | — | DONE 2026-05-13: private `.jcode/` instruction stack 강화 completed: visibility, custom globs, nested private rules with turn dedup | [M45.md](./M45.md) |
 | 10 | M16 | Medium-High (구조 개선) | 4 sub-step | [M16.md](./M16.md) |
 | 11 | M2  | Medium-High | 재현부터 | [M2.md](./M2.md) |
@@ -70,6 +70,6 @@ self-contained handoff card. 다음 세션 시작 시 사용 패턴:
   9/9 PASS, `cargo +nightly build --release` PASS, `git diff --check` PASS.
 - 의도적으로 하지 않은 것: active server kill/restart. TUI 는 사용자가 close/reopen 해야
   새 binary 를 붙잡음.
-- 다음 추천: **M40 Phase 4 — Opus 1m main picker advertisement**.
-  이유: 메인 세션 context 한계에 직접 영향, subagent `variant=max` 는 이미 동작하므로
-  scope 가 비교적 선명함. 그 다음 M40 Phase 1-2 image attach silent fail.
+- 방금 완료: **M40** — image paste live validation, leading-space slash, Claude 1m picker advertisement, GPT-5.5 context policy/UI.
+- 다음 추천: **M44 — MCP OAuth/authenticated remote MCP support**.
+  이유: Figma 등 OAuth-required remote MCP 를 붙이려면 HTTP/SSE/streamable transport, bearer token, OAuth discovery/login foundation 이 필요함.

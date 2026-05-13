@@ -58,18 +58,16 @@
   - 잔여 검증: thought-line + woke 조합 회귀 테스트, sibling fanout
     다른 attached client redraw, auto-poke 동일 경로 확인 (모두
     선택적, 메인 케이스는 OK).
-- **M40 Phase 3 — `" /tmp/..."` leading-space 가 slash-mode 진입**
-  - ✅ DONE (2026-05-13). deploy `m40-862578f1`. `composer_mode` 에
-    `leading_space_escapes_slash()` 헬퍼: leading whitespace 면
-    무조건 Chat. 17개 ui::input_ui 테스트 통과. fork pushed.
-- **NEXT: M40 Phase 4 — Opus 1m 메인 picker 미advertise**
-  - 이유: 메인 세션 context 한계에 직접 영향. 코드/카탈로그에는 `[1m]` 등록,
-    subagent `variant=max` 는 동작 중. 남은 scope 는 main picker advertisement/
-    usage gate 쪽으로 좁혀져 있음.
-  - 시작 파일: `docs/lazydino/milestones/M40.md`, 특히 Phase 4 / Candidate D.
-- **그 다음: M40 Phase 1-2 — 이미지 첨부 silent fail**
-  - 먼저 진단 로그 + 사용자 피드백을 추가하고, live paste 로 실패 지점을 확인.
-- **M16 (구조 개선) 은 가장 마지막**
+- **M40 — image paste / leading-space slash / Claude 1m / GPT-5.5 context**
+  - ✅ DONE (2026-05-13). image paste live screenshot 검증 통과: 외부/attached client 에 실제 pixel bytes 전달 확인.
+  - Slash: leading whitespace before `/` 는 Chat 모드.
+  - Claude 1m: Opus/Sonnet `[1m]` picker advertise + disabled hint 정책 정리.
+  - GPT-5.5: API-key 1.05M, Codex/OAuth 400K, Fast/Priority opt-in.
+- **NEXT: M44 — MCP OAuth/authenticated remote MCP support**
+  - 목적: Figma 등 OAuth-required remote MCP 서버 연결.
+  - 시작 파일: `docs/lazydino/milestones/M44.md`.
+  - 우선순위: config/transport foundation → bearer/static token HTTP/SSE/streamable client → OAuth discovery/login.
+- **M16 (구조 개선) 은 M44 이후**
 
 ## 배포 절차 요약
 
