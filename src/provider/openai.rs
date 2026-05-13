@@ -31,7 +31,6 @@ const RESPONSES_PATH: &str = "responses";
 const DEFAULT_MODEL: &str = "gpt-5.5";
 const ORIGINATOR: &str = "codex_cli_rs";
 const CHATGPT_INSTRUCTIONS: &str = include_str!("../prompt/system_prompt.md");
-const SELFDEV_SECTION_HEADER: &str = "# Self-Development Mode";
 
 /// Maximum number of retries for transient errors
 const MAX_RETRIES: u32 = 3;
@@ -557,11 +556,19 @@ impl OpenAIProvider {
     }
 
     fn chatgpt_instructions_with_selfdev(system: &str) -> String {
-        if let Some(selfdev_section) = extract_selfdev_section(system) {
-            format!("{}\n\n{}", CHATGPT_INSTRUCTIONS.trim_end(), selfdev_section)
-        } else {
-            CHATGPT_INSTRUCTIONS.to_string()
+        let system = system.trim();
+        if system.is_empty() {
+            return CHATGPT_INSTRUCTIONS.to_string();
         }
+
+        // ChatGPT/Codex OAuth still uses the Responses `instructions` field as
+        // the real system prompt. Do not replace jcode's composed prompt here:
+        // it contains project AGENTS.md, private .jcode/* instructions, memory,
+        // skills, and self-dev sections. The previous implementation kept only
+        // the baked-in base prompt plus self-dev, which made private instruction
+        // loading appear to pass prompt-builder tests while disappearing from
+        // the actual OpenAI request.
+        system.to_string()
     }
 
     fn should_prefer_websocket(model: &str) -> bool {
@@ -828,21 +835,6 @@ impl OpenAIProvider {
             transport_mode,
             self.diagnostic_persistent_ws_summary()
         )
-    }
-}
-
-fn extract_selfdev_section(system: &str) -> Option<&str> {
-    let start = system.find(SELFDEV_SECTION_HEADER)?;
-    let end = if let Some(rel_end) = system[start + 1..].find("\n# ") {
-        start + 1 + rel_end
-    } else {
-        system.len()
-    };
-    let section = system[start..end].trim();
-    if section.is_empty() {
-        None
-    } else {
-        Some(section)
     }
 }
 
