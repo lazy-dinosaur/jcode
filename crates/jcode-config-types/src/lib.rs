@@ -455,6 +455,8 @@ pub struct PromptConfig {
     pub load_jcode_agents: bool,
     /// Load private project harness modules from `<project>/.jcode/harness/*.md`.
     pub load_harness_dir: bool,
+    /// Additional private instruction files or globs. Relative paths resolve under `<project>/.jcode/`.
+    pub private_instructions: Vec<String>,
 }
 
 impl Default for PromptConfig {
@@ -464,6 +466,7 @@ impl Default for PromptConfig {
             ignore_global_agents: false,
             load_jcode_agents: true,
             load_harness_dir: true,
+            private_instructions: Vec::new(),
         }
     }
 }

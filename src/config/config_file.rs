@@ -17,6 +17,7 @@ struct PartialPromptConfig {
     ignore_global_agents: Option<bool>,
     load_jcode_agents: Option<bool>,
     load_harness_dir: Option<bool>,
+    private_instructions: Option<Vec<String>>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -79,6 +80,9 @@ impl PartialPromptConfig {
         }
         if let Some(value) = self.load_harness_dir {
             prompt.load_harness_dir = value;
+        }
+        if let Some(value) = self.private_instructions {
+            prompt.private_instructions = value;
         }
     }
 }

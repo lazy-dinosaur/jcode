@@ -1,5 +1,6 @@
 //! System prompt management
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -742,6 +743,7 @@ fn load_prompt_overlay_files_from_dir_with_config(
     let mut total_chars = 0usize;
     let mut harness_chars = 0usize;
     let mut sources = Vec::new();
+    let mut loaded_paths = BTreeSet::new();
 
     let load_file = |path: &Path, label: &str| -> Option<(String, usize)> {
         if path.exists() {
@@ -765,6 +767,7 @@ fn load_prompt_overlay_files_from_dir_with_config(
         )
     {
         total_chars += size;
+        loaded_paths.insert(dedupe_key(&global_overlay));
         sources.push(PromptInstructionSource {
             label: "Global Prompt Overlay (~/.jcode/prompt-overlay.md)".to_string(),
             path: global_overlay,
@@ -786,6 +789,7 @@ fn load_prompt_overlay_files_from_dir_with_config(
             {
                 total_chars += size;
                 harness_chars += size;
+                loaded_paths.insert(dedupe_key(&path));
                 sources.push(PromptInstructionSource {
                     label: format!("Private Jcode Harness Module (.jcode/harness/{label})"),
                     path,
@@ -808,12 +812,47 @@ fn load_prompt_overlay_files_from_dir_with_config(
         });
     }
 
+    for path in
+        expand_private_instruction_patterns(&project_dir, &prompt_config.private_instructions)
+    {
+        let key = dedupe_key(&path);
+        if loaded_paths.contains(&key) {
+            continue;
+        }
+        if let Some((content, size)) = load_file(
+            &path,
+            &format!(
+                "Private Jcode Instruction ({})",
+                private_instruction_label(&project_dir, &path)
+            ),
+        ) {
+            total_chars += size;
+            loaded_paths.insert(key);
+            sources.push(PromptInstructionSource {
+                label: format!(
+                    "Private Jcode Instruction ({})",
+                    private_instruction_label(&project_dir, &path)
+                ),
+                path,
+                status: PromptInstructionStatus::Loaded,
+                chars: size,
+                private: true,
+                reason: None,
+            });
+            contents.push(content);
+        }
+    }
+
     let private_overlay = project_dir.join(".jcode").join("prompt-overlay.md");
-    if let Some((content, size)) = load_file(
-        &private_overlay,
-        "Private Jcode Prompt Overlay (.jcode/prompt-overlay.md)",
-    ) {
+    let private_overlay_key = dedupe_key(&private_overlay);
+    if !loaded_paths.contains(&private_overlay_key)
+        && let Some((content, size)) = load_file(
+            &private_overlay,
+            "Private Jcode Prompt Overlay (.jcode/prompt-overlay.md)",
+        )
+    {
         total_chars += size;
+        loaded_paths.insert(private_overlay_key);
         sources.push(PromptInstructionSource {
             label: "Private Jcode Prompt Overlay (.jcode/prompt-overlay.md)".to_string(),
             path: private_overlay,
@@ -835,6 +874,60 @@ fn load_prompt_overlay_files_from_dir_with_config(
             sources,
         )
     }
+}
+
+fn expand_private_instruction_patterns(project_dir: &Path, patterns: &[String]) -> Vec<PathBuf> {
+    let mut paths = BTreeSet::new();
+    for pattern in patterns
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        let resolved = resolve_private_instruction_pattern(project_dir, pattern);
+        let pattern_text = resolved.to_string_lossy().to_string();
+        if pattern_text.contains('*') || pattern_text.contains('?') || pattern_text.contains('[') {
+            if let Ok(entries) = glob::glob(&pattern_text) {
+                for entry in entries.filter_map(Result::ok) {
+                    if entry.is_file() {
+                        paths.insert(entry);
+                    }
+                }
+            }
+        } else if resolved.is_file() {
+            paths.insert(resolved);
+        }
+    }
+    paths.into_iter().collect()
+}
+
+fn resolve_private_instruction_pattern(project_dir: &Path, pattern: &str) -> PathBuf {
+    if let Some(rest) = pattern.strip_prefix("~/")
+        && let Some(home) = dirs::home_dir()
+    {
+        return home.join(rest);
+    }
+
+    let path = PathBuf::from(pattern);
+    if path.is_absolute() {
+        return path;
+    }
+
+    if pattern == ".jcode" || pattern.starts_with(".jcode/") {
+        project_dir.join(path)
+    } else {
+        project_dir.join(".jcode").join(path)
+    }
+}
+
+fn dedupe_key(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn private_instruction_label(project_dir: &Path, path: &Path) -> String {
+    path.strip_prefix(project_dir)
+        .unwrap_or(path)
+        .display()
+        .to_string()
 }
 
 fn find_prompt_project_dir(working_dir: Option<&Path>) -> Option<PathBuf> {

@@ -75,6 +75,7 @@ impl Config {
 - Ignore global ~/.AGENTS.md: {}
 - Load .jcode/AGENTS.md: {}
 - Load .jcode/harness/*.md: {}
+- Private instructions: {}
 
 **Agent models:**
 - Swarm / subagent: {}
@@ -198,6 +199,11 @@ impl Config {
             self.prompt.ignore_global_agents,
             self.prompt.load_jcode_agents,
             self.prompt.load_harness_dir,
+            if self.prompt.private_instructions.is_empty() {
+                "(none)".to_string()
+            } else {
+                self.prompt.private_instructions.join(", ")
+            },
             self.agents
                 .swarm_model
                 .as_deref()

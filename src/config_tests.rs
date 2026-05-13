@@ -301,6 +301,7 @@ fn test_prompt_config_deserializes_from_config() {
         ignore_global_agents = true
         load_jcode_agents = false
         load_harness_dir = false
+        private_instructions = ["rules/*.md", "extra.md"]
         "#,
     )
     .expect("config should deserialize");
@@ -309,6 +310,10 @@ fn test_prompt_config_deserializes_from_config() {
     assert!(cfg.prompt.ignore_global_agents);
     assert!(!cfg.prompt.load_jcode_agents);
     assert!(!cfg.prompt.load_harness_dir);
+    assert_eq!(
+        cfg.prompt.private_instructions,
+        vec!["rules/*.md".to_string(), "extra.md".to_string()]
+    );
 }
 
 #[test]
@@ -327,6 +332,7 @@ fn test_project_local_prompt_config_overrides_only_set_fields() {
 
     let mut cfg = Config::default();
     cfg.prompt.load_jcode_agents = false;
+    cfg.prompt.private_instructions = vec!["global.md".to_string()];
 
     let prompt = cfg.prompt_for_working_dir(Some(&project));
     assert!(prompt.ignore_project_agents);
@@ -335,6 +341,28 @@ fn test_project_local_prompt_config_overrides_only_set_fields() {
         "unset project fields should preserve global config"
     );
     assert!(prompt.load_harness_dir);
+    assert_eq!(prompt.private_instructions, vec!["global.md".to_string()]);
+}
+
+#[test]
+fn test_project_local_prompt_config_overrides_private_instructions() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let project = dir.path().join("project");
+    std::fs::create_dir_all(project.join(".jcode")).expect("create .jcode");
+    std::fs::write(
+        project.join(".jcode").join("config.local.toml"),
+        r#"
+        [prompt]
+        private_instructions = ["rules/*.md"]
+        "#,
+    )
+    .expect("write project config");
+
+    let mut cfg = Config::default();
+    cfg.prompt.private_instructions = vec!["global.md".to_string()];
+
+    let prompt = cfg.prompt_for_working_dir(Some(&project));
+    assert_eq!(prompt.private_instructions, vec!["rules/*.md".to_string()]);
 }
 
 #[test]

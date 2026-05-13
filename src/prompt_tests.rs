@@ -236,6 +236,88 @@ fn test_private_jcode_harness_modules_load_sorted() {
 }
 
 #[test]
+fn test_private_instruction_globs_load_sorted_and_dedup() {
+    let project_dir = tempfile::TempDir::new().unwrap();
+    let jcode_dir = project_dir.path().join(".jcode");
+    let rules_dir = jcode_dir.join("rules");
+    std::fs::create_dir_all(&rules_dir).unwrap();
+    std::fs::write(rules_dir.join("20-build.md"), "build rule").unwrap();
+    std::fs::write(rules_dir.join("10-style.md"), "style rule").unwrap();
+    std::fs::write(rules_dir.join("ignore.txt"), "ignored").unwrap();
+
+    let prompt_config = crate::config::PromptConfig {
+        private_instructions: vec![
+            "rules/*.md".to_string(),
+            "rules/10-style.md".to_string(),
+            "missing/*.md".to_string(),
+        ],
+        ..Default::default()
+    };
+
+    let (content, overlay_chars, harness_chars, sources) =
+        load_prompt_overlay_files_from_dir_with_config(Some(project_dir.path()), &prompt_config);
+    let content = content.expect("private instruction content");
+
+    assert!(overlay_chars > 0);
+    assert_eq!(harness_chars, 0);
+    assert!(content.contains("style rule"));
+    assert!(content.contains("build rule"));
+    assert!(!content.contains("ignored"));
+    assert_eq!(content.matches("style rule").count(), 1);
+    assert!(
+        content.find("style rule").unwrap() < content.find("build rule").unwrap(),
+        "private instruction globs should load in deterministic sorted order"
+    );
+
+    let private_instruction_sources: Vec<_> = sources
+        .iter()
+        .filter(|source| source.label.contains("Private Jcode Instruction"))
+        .collect();
+    assert_eq!(private_instruction_sources.len(), 2);
+    assert!(
+        private_instruction_sources
+            .iter()
+            .all(|source| source.private)
+    );
+    assert!(
+        private_instruction_sources[0]
+            .label
+            .contains(".jcode/rules/10-style.md")
+    );
+    assert!(
+        private_instruction_sources[1]
+            .label
+            .contains(".jcode/rules/20-build.md")
+    );
+}
+
+#[test]
+fn test_private_instruction_path_resolution_supports_project_jcode_prefix() {
+    let project_dir = tempfile::TempDir::new().unwrap();
+    let rules_dir = project_dir.path().join(".jcode/rules");
+    std::fs::create_dir_all(&rules_dir).unwrap();
+    std::fs::write(rules_dir.join("local.md"), "local private rule").unwrap();
+
+    let prompt_config = crate::config::PromptConfig {
+        private_instructions: vec![".jcode/rules/local.md".to_string()],
+        ..Default::default()
+    };
+
+    let (content, _overlay_chars, _harness_chars, sources) =
+        load_prompt_overlay_files_from_dir_with_config(Some(project_dir.path()), &prompt_config);
+    let content = content.expect("private instruction content");
+
+    assert!(content.contains("local private rule"));
+    assert_eq!(
+        sources
+            .iter()
+            .filter(|source| source.label.contains("Private Jcode Instruction"))
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn test_non_selfdev_prompt_includes_lightweight_selfdev_hint() {
     let prompt = build_system_prompt(None, &[]);
     assert!(prompt.contains("Self-Development Access"));

@@ -193,6 +193,9 @@ ignore_global_agents = false
 load_jcode_agents = true
 # Load private project harness modules from <project>/.jcode/harness/*.md in sorted order.
 load_harness_dir = true
+# Additional private instruction files/globs. Relative paths resolve under <project>/.jcode/.
+# Example: private_instructions = ["rules/*.md", "monorepo/*/AGENTS.md"]
+private_instructions = []
 
 [agents]
 # Default model override for spawned swarm/subagent sessions when no profile matches.

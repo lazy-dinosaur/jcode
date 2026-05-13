@@ -282,6 +282,8 @@ ignore_project_agents = {ignore_team_agents}
 ignore_global_agents = false
 load_jcode_agents = true
 load_harness_dir = true
+# Relative paths resolve under this private .jcode/ directory.
+private_instructions = []
 
 [hooks]
 enabled = true
