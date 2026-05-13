@@ -82,7 +82,10 @@ impl Agent {
             to_execute.push((index, tc.clone()));
         }
 
-        Ok(ClassifiedTools { presets, to_execute })
+        Ok(ClassifiedTools {
+            presets,
+            to_execute,
+        })
     }
 
     #[allow(dead_code)]
