@@ -705,9 +705,11 @@ impl Agent {
             let to_execute = classified.to_execute;
             let mut dispatched_results = HashMap::new();
             let mut urgent_interrupted = false;
+            let mut tools_remaining_on_interrupt = 0usize;
 
             if self.has_urgent_interrupt() && !to_execute.is_empty() {
                 urgent_interrupted = true;
+                tools_remaining_on_interrupt = to_execute.len();
                 for (index, tc) in to_execute {
                     dispatched_results.insert(
                         index,
@@ -745,6 +747,17 @@ impl Agent {
                     .dispatch_tools_parallel(to_execute, ctx_factory, per_tool_start, &cancel_token)
                     .await;
                 urgent_interrupted = self.has_urgent_interrupt();
+                if urgent_interrupted {
+                    tools_remaining_on_interrupt = results
+                        .iter()
+                        .filter(|result| {
+                            result.result.as_ref().err().is_some_and(|err| {
+                                let err = err.to_string();
+                                err.contains("user interrupted")
+                            })
+                        })
+                        .count();
+                }
                 dispatched_results = results
                     .into_iter()
                     .map(|result| (result.index, result))
@@ -845,14 +858,20 @@ impl Agent {
             if urgent_interrupted {
                 let injected = self.inject_soft_interrupts();
                 if !injected.is_empty() {
-                    for event in Self::build_soft_interrupt_events(injected, "C", Some(0)) {
+                    for event in Self::build_soft_interrupt_events(
+                        injected,
+                        "C",
+                        Some(tools_remaining_on_interrupt),
+                    ) {
                         let _ = event_tx.send(event);
                     }
                     self.add_message(
                         Role::User,
                         vec![ContentBlock::Text {
-                            text: "[User interrupted: pending tool(s) cancelled or skipped]"
-                                .to_string(),
+                            text: format!(
+                                "[User interrupted: {} remaining tool(s) skipped]",
+                                tools_remaining_on_interrupt
+                            ),
                             cache_control: None,
                         }],
                     );
