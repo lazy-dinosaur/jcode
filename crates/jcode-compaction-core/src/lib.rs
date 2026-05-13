@@ -232,10 +232,10 @@ pub fn safe_compaction_cutoff(messages: &[Message], initial_cutoff: usize) -> us
                     available_tool_ids.insert(id.clone());
                     missing_tool_ids.remove(id);
                 }
-                ContentBlock::ToolResult { tool_use_id, .. } => {
-                    if !available_tool_ids.contains(tool_use_id) {
-                        missing_tool_ids.insert(tool_use_id.clone());
-                    }
+                ContentBlock::ToolResult { tool_use_id, .. }
+                    if !available_tool_ids.contains(tool_use_id) =>
+                {
+                    missing_tool_ids.insert(tool_use_id.clone());
                 }
                 _ => {}
             }
@@ -255,10 +255,10 @@ pub fn safe_compaction_cutoff(messages: &[Message], initial_cutoff: usize) -> us
                     available_tool_ids.insert(id.clone());
                     missing_tool_ids.remove(id);
                 }
-                ContentBlock::ToolResult { tool_use_id, .. } => {
-                    if !available_tool_ids.contains(tool_use_id) {
-                        missing_tool_ids.insert(tool_use_id.clone());
-                    }
+                ContentBlock::ToolResult { tool_use_id, .. }
+                    if !available_tool_ids.contains(tool_use_id) =>
+                {
+                    missing_tool_ids.insert(tool_use_id.clone());
                 }
                 _ => {}
             }

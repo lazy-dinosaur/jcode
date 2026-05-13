@@ -66,17 +66,17 @@ impl Agent {
             self.validate_tool_allowed(&tc.name)?;
 
             let is_native_tool = JCODE_NATIVE_TOOLS.contains(&tc.name.as_str());
-            if let Some((content, is_error)) = sdk_tool_results.get(&tc.id) {
-                if !(is_native_tool && *is_error) {
-                    presets.push((
-                        index,
-                        PresetToolResult::SdkProvided {
-                            content: content.clone(),
-                            is_error: *is_error,
-                        },
-                    ));
-                    continue;
-                }
+            if let Some((content, is_error)) = sdk_tool_results.get(&tc.id)
+                && !(is_native_tool && *is_error)
+            {
+                presets.push((
+                    index,
+                    PresetToolResult::SdkProvided {
+                        content: content.clone(),
+                        is_error: *is_error,
+                    },
+                ));
+                continue;
             }
 
             to_execute.push((index, tc.clone()));
