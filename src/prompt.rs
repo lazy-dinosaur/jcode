@@ -658,7 +658,7 @@ fn load_agents_md_files_from_dir_with_config(
     if prompt_config.ignore_project_agents {
         info.instruction_sources.push(PromptInstructionSource {
             label: "Project Instructions (AGENTS.md)".to_string(),
-            path: project_agents_path,
+            path: project_agents_path.clone(),
             status: PromptInstructionStatus::Skipped,
             chars: 0,
             private: false,
@@ -673,13 +673,37 @@ fn load_agents_md_files_from_dir_with_config(
         info.project_agents_md_chars = size;
         info.instruction_sources.push(PromptInstructionSource {
             label: "Project Instructions (AGENTS.md)".to_string(),
-            path: project_agents_path,
+            path: project_agents_path.clone(),
             status: PromptInstructionStatus::Loaded,
             chars: size,
             private: false,
             reason: None,
         });
         contents.push(content);
+    }
+
+    if !prompt_config.ignore_project_agents {
+        for path in cwd_ancestor_agents_md_paths(working_dir, &project_dir) {
+            let key = dedupe_key(&path);
+            if key == dedupe_key(&project_agents_path) {
+                continue;
+            }
+            let label = format!(
+                "Nested Project Instructions ({})",
+                private_instruction_label(&project_dir, &path)
+            );
+            if let Some((content, size)) = load_file(&path, &label, false) {
+                info.instruction_sources.push(PromptInstructionSource {
+                    label,
+                    path,
+                    status: PromptInstructionStatus::Loaded,
+                    chars: size,
+                    private: false,
+                    reason: None,
+                });
+                contents.push(content);
+            }
+        }
     }
 
     // Home directory files
@@ -1105,6 +1129,36 @@ fn nested_public_instruction_candidates(dir: &Path) -> Vec<PathBuf> {
     } else {
         Vec::new()
     }
+}
+
+fn cwd_ancestor_agents_md_paths(working_dir: Option<&Path>, project_dir: &Path) -> Vec<PathBuf> {
+    let Some(working_dir) = working_dir else {
+        return Vec::new();
+    };
+    let start = if working_dir.is_file() {
+        working_dir.parent().unwrap_or(working_dir)
+    } else {
+        working_dir
+    };
+    if !start.starts_with(project_dir) {
+        return Vec::new();
+    }
+
+    let mut paths = Vec::new();
+    for ancestor in start.ancestors() {
+        if !ancestor.starts_with(project_dir) {
+            break;
+        }
+        let path = agents_md_path(ancestor);
+        if path.is_file() {
+            paths.push(path);
+        }
+        if ancestor == project_dir {
+            break;
+        }
+    }
+    paths.reverse();
+    paths
 }
 
 fn loaded_private_static_instruction_keys(

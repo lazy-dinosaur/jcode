@@ -190,6 +190,72 @@ fn test_lowercase_agents_md_is_discovered_and_priority_reminder_is_appended() {
 }
 
 #[test]
+fn test_startup_prompt_loads_cwd_ancestor_agents_chain() {
+    let project_dir = tempfile::TempDir::new().unwrap();
+    let package_dir = project_dir.path().join("packages/foo");
+    let src_dir = package_dir.join("src");
+    std::fs::create_dir_all(&src_dir).unwrap();
+    std::fs::create_dir_all(project_dir.path().join(".jcode")).unwrap();
+    std::fs::write(project_dir.path().join("AGENTS.md"), "root startup policy").unwrap();
+    std::fs::write(package_dir.join("AGENTS.md"), "package startup policy").unwrap();
+    std::fs::write(src_dir.join("agents.md"), "src startup policy").unwrap();
+
+    let (split, info) = build_system_prompt_split(None, &[], false, None, Some(&src_dir));
+
+    let root_pos = split
+        .static_part
+        .find("root startup policy")
+        .expect("root AGENTS should load");
+    let package_pos = split
+        .static_part
+        .find("package startup policy")
+        .expect("package AGENTS should load");
+    let src_pos = split
+        .static_part
+        .find("src startup policy")
+        .expect("src agents should load");
+    assert!(root_pos < package_pos);
+    assert!(package_pos < src_pos);
+    assert!(info.has_project_agents_md);
+    assert!(info.instruction_sources.iter().any(|source| {
+        source.label.contains("Nested Project Instructions")
+            && source.path.ends_with("packages/foo/AGENTS.md")
+    }));
+    assert!(info.instruction_sources.iter().any(|source| {
+        source.label.contains("Nested Project Instructions")
+            && source.path.ends_with("packages/foo/src/agents.md")
+    }));
+}
+
+#[test]
+fn test_startup_prompt_respects_ignore_project_agents_for_ancestor_chain() {
+    let project_dir = tempfile::TempDir::new().unwrap();
+    let package_dir = project_dir.path().join("packages/foo");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(project_dir.path().join("AGENTS.md"), "root public policy").unwrap();
+    std::fs::write(package_dir.join("AGENTS.md"), "package public policy").unwrap();
+    std::fs::create_dir_all(project_dir.path().join(".jcode")).unwrap();
+    std::fs::write(
+        project_dir.path().join(".jcode/config.toml"),
+        "[prompt]\nignore_project_agents = true\nload_jcode_agents = true\n",
+    )
+    .unwrap();
+    std::fs::write(
+        project_dir.path().join(".jcode/AGENTS.md"),
+        "private startup policy",
+    )
+    .unwrap();
+
+    let (split, info) = build_system_prompt_split(None, &[], false, None, Some(&package_dir));
+
+    assert!(!split.static_part.contains("root public policy"));
+    assert!(!split.static_part.contains("package public policy"));
+    assert!(split.static_part.contains("private startup policy"));
+    assert!(!info.has_project_agents_md);
+    assert!(info.has_jcode_agents_md);
+}
+
+#[test]
 fn test_private_jcode_agents_are_labeled_highest_priority() {
     let project_dir = tempfile::TempDir::new().unwrap();
     std::fs::create_dir_all(project_dir.path().join(".jcode")).unwrap();
@@ -287,7 +353,7 @@ fn test_nested_cwd_prefers_root_jcode_harness_over_nearby_agents_root() {
     assert!(agents_info.has_jcode_agents_md);
     assert!(agents_content.contains("root private jcode harness"));
     assert!(agents_content.contains("root team harness"));
-    assert!(!agents_content.contains("docs local harness"));
+    assert!(agents_content.contains("docs local harness"));
 
     let overlay_content = overlay_content.expect("harness content");
     assert!(harness_chars > 0);
