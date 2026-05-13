@@ -1,6 +1,7 @@
 use super::{
     build_resume_command, clear_ambient_info_cache_for_tests, extract_bracketed_system_message,
-    format_countdown_until, gather_ambient_info, partition_queued_messages, resume_invocation_args,
+    format_countdown_until, gather_ambient_info, image_bytes_match_mime, partition_queued_messages,
+    resume_invocation_args,
 };
 use crate::ambient::{AmbientManager, Priority, ScheduleRequest, ScheduleTarget};
 use crate::terminal_launch::{detected_resume_terminal, shell_command};
@@ -116,6 +117,25 @@ fn resume_invocation_args_omits_blank_socket() {
             "ses_123".to_string()
         ]
     );
+}
+
+#[test]
+fn image_bytes_match_mime_validates_common_magic_headers() {
+    assert!(image_bytes_match_mime(
+        "image/png",
+        b"\x89PNG\r\n\x1a\nrest"
+    ));
+    assert!(image_bytes_match_mime("image/jpeg", b"\xff\xd8\xffrest"));
+    assert!(image_bytes_match_mime("image/gif", b"GIF89arest"));
+    assert!(image_bytes_match_mime(
+        "image/webp",
+        b"RIFF\x10\x00\x00\x00WEBPrest"
+    ));
+    assert!(!image_bytes_match_mime("image/png", b"plain text"));
+    assert!(!image_bytes_match_mime(
+        "text/plain",
+        b"\x89PNG\r\n\x1a\nrest"
+    ));
 }
 
 #[test]

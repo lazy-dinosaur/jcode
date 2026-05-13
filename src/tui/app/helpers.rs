@@ -534,15 +534,44 @@ pub(super) fn clipboard_image() -> Option<(String, String)> {
             ("", "")
         };
 
-        if !mime.is_empty()
-            && let Ok(img_output) = std::process::Command::new("wl-paste")
-                .args(["--type", wl_type, "--no-newline"])
+        if !mime.is_empty() {
+            match std::process::Command::new("wl-paste")
+                .args(["--type", wl_type])
                 .output()
-            && img_output.status.success()
-            && !img_output.stdout.is_empty()
-        {
-            let b64 = base64::engine::general_purpose::STANDARD.encode(&img_output.stdout);
-            return Some((mime.to_string(), b64));
+            {
+                Ok(img_output) if img_output.status.success() && !img_output.stdout.is_empty() => {
+                    crate::logging::info(&format!(
+                        "clipboard_image: wl-paste read {} bytes as {}",
+                        img_output.stdout.len(),
+                        mime
+                    ));
+                    if image_bytes_match_mime(mime, &img_output.stdout) {
+                        let b64 =
+                            base64::engine::general_purpose::STANDARD.encode(&img_output.stdout);
+                        return Some((mime.to_string(), b64));
+                    }
+                    crate::logging::warn(&format!(
+                        "clipboard_image: wl-paste returned bytes that do not match {} magic header ({} bytes)",
+                        mime,
+                        img_output.stdout.len()
+                    ));
+                }
+                Ok(img_output) => {
+                    crate::logging::warn(&format!(
+                        "clipboard_image: wl-paste failed for {} status={} stdout={} stderr={}",
+                        mime,
+                        img_output.status,
+                        img_output.stdout.len(),
+                        String::from_utf8_lossy(&img_output.stderr).trim()
+                    ));
+                }
+                Err(err) => {
+                    crate::logging::warn(&format!(
+                        "clipboard_image: failed to run wl-paste for {}: {}",
+                        mime, err
+                    ));
+                }
+            }
         }
 
         // Fallback: check text/html for <img> tags (Discord copies HTML with image URLs)
@@ -692,6 +721,16 @@ pub(super) fn download_image_url(url: &str) -> Option<(String, String)> {
 
     let b64 = base64::engine::general_purpose::STANDARD.encode(data);
     Some((media_type.to_string(), b64))
+}
+
+pub(super) fn image_bytes_match_mime(media_type: &str, data: &[u8]) -> bool {
+    match media_type {
+        "image/png" => data.starts_with(&[0x89, 0x50, 0x4E, 0x47]),
+        "image/jpeg" => data.starts_with(&[0xFF, 0xD8, 0xFF]),
+        "image/gif" => data.starts_with(b"GIF8"),
+        "image/webp" => data.starts_with(b"RIFF") && data.len() > 12 && &data[8..12] == b"WEBP",
+        _ => false,
+    }
 }
 
 /// Encode raw RGBA pixel data as PNG bytes.

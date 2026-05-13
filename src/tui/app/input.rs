@@ -254,6 +254,14 @@ where
 {
     match kind {
         ClipboardPasteKind::Smart => {
+            // Prefer real image bytes over text when the clipboard advertises both.
+            // Several desktops/apps expose a screenshot as image/png plus a text/html
+            // or text/plain companion. opencode follows the same image-first policy
+            // for direct paste commands. If we read text first, the UI can silently
+            // paste only fallback text and drop the actual visual context.
+            if let Some((media_type, base64_data)) = read_image() {
+                return image_content(media_type, base64_data);
+            }
             if let Some(text) = read_text() {
                 if let Some(url) = super::extract_image_url(&text)
                     && let Some(content) = download_image_url(&url)
@@ -261,9 +269,6 @@ where
                     return content;
                 }
                 return ClipboardPasteContent::Text(text);
-            }
-            if let Some((media_type, base64_data)) = read_image() {
-                return image_content(media_type, base64_data);
             }
             ClipboardPasteContent::Empty
         }
@@ -301,11 +306,32 @@ mod tests {
     use crossterm::event::{KeyCode, KeyModifiers};
 
     #[test]
-    fn smart_paste_prefers_normal_text_when_clipboard_has_text() {
+    fn smart_paste_prefers_image_when_clipboard_has_text_and_image() {
         let content = read_clipboard_for_paste_with(
             &ClipboardPasteKind::Smart,
             || Some("plain text".to_string()),
             || Some(("image/png".to_string(), "base64".to_string())),
+            |_| None,
+        );
+
+        match content {
+            ClipboardPasteContent::Image {
+                media_type,
+                base64_data,
+            } => {
+                assert_eq!(media_type, "image/png");
+                assert_eq!(base64_data, "base64");
+            }
+            other => panic!("expected image paste, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn smart_paste_uses_text_when_no_image_is_available() {
+        let content = read_clipboard_for_paste_with(
+            &ClipboardPasteKind::Smart,
+            || Some("plain text".to_string()),
+            || None,
             |_| None,
         );
 
