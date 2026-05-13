@@ -6,6 +6,7 @@
 
 mod client;
 mod manager;
+pub mod oauth;
 pub mod pool;
 mod protocol;
 mod tool;

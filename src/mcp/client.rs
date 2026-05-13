@@ -22,7 +22,10 @@ fn first_sse_json_data(body: &str) -> Option<&str> {
     })
 }
 
-fn build_http_headers(config: &McpServerConfig) -> Result<reqwest::header::HeaderMap> {
+async fn build_http_headers(
+    server_name: &str,
+    config: &McpServerConfig,
+) -> Result<reqwest::header::HeaderMap> {
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(
         reqwest::header::ACCEPT,
@@ -60,7 +63,13 @@ fn build_http_headers(config: &McpServerConfig) -> Result<reqwest::header::Heade
             );
         }
         Some(McpAuthConfig::OAuth { .. }) => {
-            anyhow::bail!("MCP OAuth auth is configured but login/refresh is not implemented yet")
+            let token =
+                crate::mcp::oauth::load_or_refresh_access_token(server_name, config).await?;
+            headers.insert(
+                reqwest::header::AUTHORIZATION,
+                reqwest::header::HeaderValue::from_str(&format!("Bearer {}", token))
+                    .context("Invalid MCP OAuth access token")?,
+            );
         }
         None => {}
     }
@@ -425,7 +434,7 @@ impl McpClient {
             .url
             .clone()
             .with_context(|| format!("MCP remote server '{}' is missing url", name))?;
-        let headers = build_http_headers(config)?;
+        let headers = build_http_headers(&name, config).await?;
         crate::logging::info(&format!(
             "MCP: Connecting to '{}' ({})",
             name,
@@ -828,8 +837,8 @@ mod tests {
         server.await.unwrap();
     }
 
-    #[test]
-    fn m44_http_mcp_oauth_auth_is_explicitly_unsupported_until_stage_3() {
+    #[tokio::test]
+    async fn m44_http_mcp_oauth_auth_requires_login_tokens() {
         let config = McpServerConfig {
             command: String::new(),
             args: Vec::new(),
@@ -839,13 +848,22 @@ mod tests {
             headers: HashMap::new(),
             auth: Some(McpAuthConfig::OAuth {
                 client_id: Some("client".to_string()),
+                client_secret: None,
                 scopes: Vec::new(),
+                authorization_url: Some("https://auth.example/authorize".to_string()),
+                token_url: Some("https://auth.example/token".to_string()),
+                resource_metadata_url: None,
+                authorization_server_metadata_url: None,
+                redirect_uri: None,
             }),
             shared: true,
         };
 
-        let error = build_http_headers(&config).unwrap_err().to_string();
-        assert!(error.contains("OAuth auth is configured"));
+        let error = build_http_headers("missing-oauth", &config)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("No MCP OAuth tokens found"));
     }
 
     #[test]

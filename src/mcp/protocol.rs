@@ -191,7 +191,19 @@ pub enum McpAuthConfig {
         #[serde(default)]
         client_id: Option<String>,
         #[serde(default)]
+        client_secret: Option<String>,
+        #[serde(default)]
         scopes: Vec<String>,
+        #[serde(default)]
+        authorization_url: Option<String>,
+        #[serde(default)]
+        token_url: Option<String>,
+        #[serde(default)]
+        resource_metadata_url: Option<String>,
+        #[serde(default)]
+        authorization_server_metadata_url: Option<String>,
+        #[serde(default)]
+        redirect_uri: Option<String>,
     },
 }
 

@@ -21,6 +21,8 @@ struct McpToolInput {
     args: Option<Vec<String>>,
     #[serde(default)]
     env: Option<HashMap<String, String>>,
+    #[serde(default)]
+    no_browser: bool,
 }
 
 pub struct McpManagementTool {
@@ -59,7 +61,7 @@ impl Tool for McpManagementTool {
                 "intent": super::intent_schema_property(),
                 "action": {
                     "type": "string",
-                    "enum": ["list", "connect", "disconnect", "reload"],
+                    "enum": ["list", "connect", "disconnect", "reload", "login"],
                     "description": "Action."
                 },
                 "server": {
@@ -79,6 +81,10 @@ impl Tool for McpManagementTool {
                     "type": "object",
                     "additionalProperties": {"type": "string"},
                     "description": "Server env."
+                },
+                "no_browser": {
+                    "type": "boolean",
+                    "description": "Print auth URL without opening a browser for OAuth login."
                 }
             },
             "required": ["action"]
@@ -93,8 +99,9 @@ impl Tool for McpManagementTool {
             "connect" => self.connect_server(params, &ctx.session_id).await,
             "disconnect" => self.disconnect_server(params).await,
             "reload" => self.reload_config(&ctx.session_id).await,
+            "login" => self.login_server(params).await,
             _ => Ok(ToolOutput::new(format!(
-                "Unknown action: {}. Use 'list', 'connect', 'disconnect', or 'reload'.",
+                "Unknown action: {}. Use 'list', 'connect', 'disconnect', 'reload', or 'login'.",
                 params.action
             ))),
         }
@@ -346,6 +353,30 @@ impl McpManagementTool {
         }
 
         Ok(ToolOutput::new(output).with_title("MCP: Reloaded"))
+    }
+
+    async fn login_server(&self, params: McpToolInput) -> Result<ToolOutput> {
+        let server_name = params
+            .server
+            .ok_or_else(|| anyhow::anyhow!("'server' is required for login action"))?;
+        let config = McpConfig::load();
+        let server_config = config
+            .servers
+            .get(&server_name)
+            .ok_or_else(|| anyhow::anyhow!("MCP server '{}' not found in config", server_name))?;
+
+        match crate::mcp::oauth::login(&server_name, server_config, params.no_browser).await {
+            Ok(tokens) => Ok(ToolOutput::new(format!(
+                "Logged in to MCP server '{}'. Token expires at {}. Use {{\"action\": \"reload\"}} to reconnect with OAuth.",
+                server_name, tokens.expires_at
+            ))
+            .with_title(format!("MCP: OAuth login {}", server_name))),
+            Err(err) => Ok(ToolOutput::new(format!(
+                "Failed to login to MCP server '{}': {}",
+                server_name, err
+            ))
+            .with_title("MCP: OAuth login failed")),
+        }
     }
 }
 

@@ -188,7 +188,9 @@ fn test_m44_remote_mcp_config_roundtrip() {
     assert_eq!(server.resolved_transport(), McpTransport::Sse);
     assert_eq!(server.url.as_deref(), Some("https://example.com/sse"));
     match server.auth.as_ref().unwrap() {
-        McpAuthConfig::OAuth { client_id, scopes } => {
+        McpAuthConfig::OAuth {
+            client_id, scopes, ..
+        } => {
             assert_eq!(client_id.as_deref(), Some("abc"));
             assert_eq!(scopes, &vec!["files:read".to_string()]);
         }
