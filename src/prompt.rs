@@ -75,6 +75,8 @@ pub struct ContextInfo {
     pub memory_chars: usize,
     /// Prompt overlay section size (chars)
     pub prompt_overlay_chars: usize,
+    /// Ordered instruction/overlay sources considered while building the prompt.
+    pub instruction_sources: Vec<PromptInstructionSource>,
 
     // === Dynamic (Conversation) ===
     /// Tool definitions sent to API (chars)
@@ -100,6 +102,32 @@ pub struct ContextInfo {
 
     /// Total system prompt size (chars)
     pub total_chars: usize,
+}
+
+/// Visibility metadata for project, global, and private instruction files.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptInstructionSource {
+    pub label: String,
+    pub path: PathBuf,
+    pub status: PromptInstructionStatus,
+    pub chars: usize,
+    pub private: bool,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptInstructionStatus {
+    Loaded,
+    Skipped,
+}
+
+impl PromptInstructionStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Loaded => "loaded",
+            Self::Skipped => "skipped",
+        }
+    }
 }
 
 impl ContextInfo {
@@ -240,15 +268,17 @@ pub fn build_system_prompt_full(
     info.global_agents_md_chars = md_info.global_agents_md_chars;
     info.has_jcode_agents_md = md_info.has_jcode_agents_md;
     info.jcode_agents_md_chars = md_info.jcode_agents_md_chars;
+    info.instruction_sources.extend(md_info.instruction_sources);
 
     // Add optional prompt overlays from ~/.jcode/ and ./.jcode/
-    let (overlay_content, overlay_chars, harness_chars) =
+    let (overlay_content, overlay_chars, harness_chars, overlay_sources) =
         load_prompt_overlay_files_from_dir(working_dir);
     if let Some(content) = overlay_content {
         info.prompt_overlay_chars = overlay_chars;
         info.jcode_harness_chars = harness_chars;
         parts.push(content);
     }
+    info.instruction_sources.extend(overlay_sources);
 
     if let Some(memory) = memory_prompt {
         info.memory_chars = memory.len();
@@ -318,15 +348,17 @@ pub fn build_system_prompt_split(
     info.global_agents_md_chars = md_info.global_agents_md_chars;
     info.has_jcode_agents_md = md_info.has_jcode_agents_md;
     info.jcode_agents_md_chars = md_info.jcode_agents_md_chars;
+    info.instruction_sources.extend(md_info.instruction_sources);
 
     // Add optional prompt overlays from ~/.jcode/ and ./.jcode/
-    let (overlay_content, overlay_chars, harness_chars) =
+    let (overlay_content, overlay_chars, harness_chars, overlay_sources) =
         load_prompt_overlay_files_from_dir(working_dir);
     if let Some(content) = overlay_content {
         info.prompt_overlay_chars = overlay_chars;
         info.jcode_harness_chars = harness_chars;
         static_parts.push(content);
     }
+    info.instruction_sources.extend(overlay_sources);
 
     // Add available skills list (fairly static)
     if !available_skills.is_empty() {
@@ -604,38 +636,86 @@ fn load_agents_md_files_from_dir_with_config(
     // Project-level files (from specified working directory or current directory)
     let project_dir = find_prompt_project_dir(working_dir)
         .unwrap_or_else(|| working_dir.unwrap_or(Path::new(".")).to_path_buf());
-    if !prompt_config.ignore_project_agents
-        && let Some((content, size)) = load_file(
-            &project_dir.join("AGENTS.md"),
-            "Project Instructions (AGENTS.md)",
-        )
+    let project_agents_path = project_dir.join("AGENTS.md");
+    if prompt_config.ignore_project_agents {
+        info.instruction_sources.push(PromptInstructionSource {
+            label: "Project Instructions (AGENTS.md)".to_string(),
+            path: project_agents_path,
+            status: PromptInstructionStatus::Skipped,
+            chars: 0,
+            private: false,
+            reason: Some("prompt.ignore_project_agents=true".to_string()),
+        });
+    } else if let Some((content, size)) =
+        load_file(&project_agents_path, "Project Instructions (AGENTS.md)")
     {
         info.has_project_agents_md = true;
         info.project_agents_md_chars = size;
+        info.instruction_sources.push(PromptInstructionSource {
+            label: "Project Instructions (AGENTS.md)".to_string(),
+            path: project_agents_path,
+            status: PromptInstructionStatus::Loaded,
+            chars: size,
+            private: false,
+            reason: None,
+        });
         contents.push(content);
     }
 
     // Home directory files
-    if !prompt_config.ignore_global_agents
-        && let Ok(global_agents_md) = crate::storage::user_home_path("AGENTS.md")
-        && let Some((content, size)) =
+    if let Ok(global_agents_md) = crate::storage::user_home_path("AGENTS.md") {
+        if prompt_config.ignore_global_agents {
+            info.instruction_sources.push(PromptInstructionSource {
+                label: "Global Instructions (~/.AGENTS.md)".to_string(),
+                path: global_agents_md,
+                status: PromptInstructionStatus::Skipped,
+                chars: 0,
+                private: false,
+                reason: Some("prompt.ignore_global_agents=true".to_string()),
+            });
+        } else if let Some((content, size)) =
             load_file(&global_agents_md, "Global Instructions (~/.AGENTS.md)")
-    {
-        info.has_global_agents_md = true;
-        info.global_agents_md_chars = size;
-        contents.push(content);
+        {
+            info.has_global_agents_md = true;
+            info.global_agents_md_chars = size;
+            info.instruction_sources.push(PromptInstructionSource {
+                label: "Global Instructions (~/.AGENTS.md)".to_string(),
+                path: global_agents_md,
+                status: PromptInstructionStatus::Loaded,
+                chars: size,
+                private: false,
+                reason: None,
+            });
+            contents.push(content);
+        }
     }
 
     // Private local jcode harness instructions. These are intentionally loaded after project and
     // global AGENTS.md so they have higher prompt priority for the local user.
-    if prompt_config.load_jcode_agents
-        && let Some((content, size)) = load_file(
-            &project_dir.join(".jcode").join("AGENTS.md"),
-            "Private Jcode Harness (.jcode/AGENTS.md)",
-        )
-    {
+    let jcode_agents_path = project_dir.join(".jcode").join("AGENTS.md");
+    if !prompt_config.load_jcode_agents {
+        info.instruction_sources.push(PromptInstructionSource {
+            label: "Private Jcode Harness (.jcode/AGENTS.md)".to_string(),
+            path: jcode_agents_path,
+            status: PromptInstructionStatus::Skipped,
+            chars: 0,
+            private: true,
+            reason: Some("prompt.load_jcode_agents=false".to_string()),
+        });
+    } else if let Some((content, size)) = load_file(
+        &jcode_agents_path,
+        "Private Jcode Harness (.jcode/AGENTS.md)",
+    ) {
         info.has_jcode_agents_md = true;
         info.jcode_agents_md_chars = size;
+        info.instruction_sources.push(PromptInstructionSource {
+            label: "Private Jcode Harness (.jcode/AGENTS.md)".to_string(),
+            path: jcode_agents_path,
+            status: PromptInstructionStatus::Loaded,
+            chars: size,
+            private: true,
+            reason: None,
+        });
         contents.push(content);
     }
 
@@ -649,7 +729,7 @@ fn load_agents_md_files_from_dir_with_config(
 /// Load optional prompt overlay markdown from ~/.jcode/ and ./.jcode/
 fn load_prompt_overlay_files_from_dir(
     working_dir: Option<&Path>,
-) -> (Option<String>, usize, usize) {
+) -> (Option<String>, usize, usize, Vec<PromptInstructionSource>) {
     let prompt_config = crate::config::config().prompt_for_working_dir(working_dir);
     load_prompt_overlay_files_from_dir_with_config(working_dir, &prompt_config)
 }
@@ -657,10 +737,11 @@ fn load_prompt_overlay_files_from_dir(
 fn load_prompt_overlay_files_from_dir_with_config(
     working_dir: Option<&Path>,
     prompt_config: &crate::config::PromptConfig,
-) -> (Option<String>, usize, usize) {
+) -> (Option<String>, usize, usize, Vec<PromptInstructionSource>) {
     let mut contents = vec![];
     let mut total_chars = 0usize;
     let mut harness_chars = 0usize;
+    let mut sources = Vec::new();
 
     let load_file = |path: &Path, label: &str| -> Option<(String, usize)> {
         if path.exists() {
@@ -684,6 +765,14 @@ fn load_prompt_overlay_files_from_dir_with_config(
         )
     {
         total_chars += size;
+        sources.push(PromptInstructionSource {
+            label: "Global Prompt Overlay (~/.jcode/prompt-overlay.md)".to_string(),
+            path: global_overlay,
+            status: PromptInstructionStatus::Loaded,
+            chars: size,
+            private: false,
+            reason: None,
+        });
         contents.push(content);
     }
 
@@ -697,23 +786,54 @@ fn load_prompt_overlay_files_from_dir_with_config(
             {
                 total_chars += size;
                 harness_chars += size;
+                sources.push(PromptInstructionSource {
+                    label: format!("Private Jcode Harness Module (.jcode/harness/{label})"),
+                    path,
+                    status: PromptInstructionStatus::Loaded,
+                    chars: size,
+                    private: true,
+                    reason: None,
+                });
                 contents.push(content);
             }
         }
+    } else {
+        sources.push(PromptInstructionSource {
+            label: "Private Jcode Harness Modules (.jcode/harness/*.md)".to_string(),
+            path: project_dir.join(".jcode").join("harness"),
+            status: PromptInstructionStatus::Skipped,
+            chars: 0,
+            private: true,
+            reason: Some("prompt.load_harness_dir=false".to_string()),
+        });
     }
 
+    let private_overlay = project_dir.join(".jcode").join("prompt-overlay.md");
     if let Some((content, size)) = load_file(
-        &project_dir.join(".jcode").join("prompt-overlay.md"),
+        &private_overlay,
         "Private Jcode Prompt Overlay (.jcode/prompt-overlay.md)",
     ) {
         total_chars += size;
+        sources.push(PromptInstructionSource {
+            label: "Private Jcode Prompt Overlay (.jcode/prompt-overlay.md)".to_string(),
+            path: private_overlay,
+            status: PromptInstructionStatus::Loaded,
+            chars: size,
+            private: true,
+            reason: None,
+        });
         contents.push(content);
     }
 
     if contents.is_empty() {
-        (None, 0, 0)
+        (None, 0, 0, sources)
     } else {
-        (Some(contents.join("\n\n")), total_chars, harness_chars)
+        (
+            Some(contents.join("\n\n")),
+            total_chars,
+            harness_chars,
+            sources,
+        )
     }
 }
 

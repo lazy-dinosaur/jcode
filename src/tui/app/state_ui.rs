@@ -1212,6 +1212,38 @@ fn format_cache_stats(app: &App) -> String {
     lines.join("\n")
 }
 
+fn format_instruction_sources(context: &crate::prompt::ContextInfo) -> String {
+    if context.instruction_sources.is_empty() {
+        return "- none loaded or skipped\n".to_string();
+    }
+
+    let mut lines = String::new();
+    for (index, source) in context.instruction_sources.iter().enumerate() {
+        let visibility = if source.private { "private" } else { "shared" };
+        let chars = if source.status == crate::prompt::PromptInstructionStatus::Loaded {
+            format!("; {} chars", source.chars)
+        } else {
+            String::new()
+        };
+        let reason = source
+            .reason
+            .as_deref()
+            .map(|reason| format!("; reason: {reason}"))
+            .unwrap_or_default();
+        lines.push_str(&format!(
+            "{}. {} [{}; {}{}{}] `{}`\n",
+            index + 1,
+            source.label,
+            source.status.as_str(),
+            visibility,
+            chars,
+            reason,
+            source.path.display()
+        ));
+    }
+    lines
+}
+
 pub(super) fn handle_info_command(app: &mut App, trimmed: &str) -> bool {
     if trimmed == "/version" {
         let version = env!("JCODE_VERSION");
@@ -1334,6 +1366,10 @@ pub(super) fn handle_info_command(app: &mut App, trimmed: &str) -> bool {
             if app.memory_enabled { "on" } else { "off" },
             if app.swarm_enabled { "on" } else { "off" }
         ));
+
+        let context = app.context_info();
+        info.push_str("\n**Instructions:**\n");
+        info.push_str(&format_instruction_sources(&context));
 
         if let Some(ref model) = app.remote_provider_model {
             info.push_str(&format!("**Model:** {}\n", model));
@@ -1571,6 +1607,8 @@ pub(super) fn handle_info_command(app: &mut App, trimmed: &str) -> bool {
             context.tool_results_chars,
             context.tool_results_count,
         ));
+        context_report.push_str("\n## Instructions\n");
+        context_report.push_str(&format_instruction_sources(&context));
         context_report.push_str("\n## Compaction\n");
         context_report.push_str(&compaction_summary);
         context_report.push_str("\n\n## Session State\n");

@@ -181,6 +181,25 @@ fn test_prompt_config_can_ignore_project_agents_and_keep_private_harness() {
     assert!(info.has_jcode_agents_md);
     assert!(!content.contains("team harness"));
     assert!(content.contains("personal harness"));
+
+    let skipped_team = info
+        .instruction_sources
+        .iter()
+        .find(|source| source.label.contains("Project Instructions"))
+        .expect("project AGENTS.md source should be reported as skipped");
+    assert_eq!(skipped_team.status, PromptInstructionStatus::Skipped);
+    assert_eq!(
+        skipped_team.reason.as_deref(),
+        Some("prompt.ignore_project_agents=true")
+    );
+
+    let private_agents = info
+        .instruction_sources
+        .iter()
+        .find(|source| source.label.contains(".jcode/AGENTS.md"))
+        .expect("private .jcode/AGENTS.md source should be reported as loaded");
+    assert_eq!(private_agents.status, PromptInstructionStatus::Loaded);
+    assert!(private_agents.private);
 }
 
 #[test]
@@ -193,7 +212,7 @@ fn test_private_jcode_harness_modules_load_sorted() {
     std::fs::write(harness_dir.join("ignore.txt"), "ignored").unwrap();
 
     let prompt_config = crate::config::PromptConfig::default();
-    let (content, _overlay_chars, harness_chars) =
+    let (content, _overlay_chars, harness_chars, _sources) =
         load_prompt_overlay_files_from_dir_with_config(Some(project_dir.path()), &prompt_config);
     let content = content.expect("harness content");
 
@@ -205,6 +224,15 @@ fn test_private_jcode_harness_modules_load_sorted() {
         content.find("planner module").unwrap() < content.find("coder module").unwrap(),
         "harness modules should load in sorted filename order"
     );
+
+    let loaded_sources: Vec<_> = _sources
+        .iter()
+        .filter(|source| source.status == PromptInstructionStatus::Loaded)
+        .collect();
+    assert_eq!(loaded_sources.len(), 2);
+    assert!(loaded_sources.iter().all(|source| source.private));
+    assert!(loaded_sources[0].label.contains("10-planner.md"));
+    assert!(loaded_sources[1].label.contains("20-coder.md"));
 }
 
 #[test]
