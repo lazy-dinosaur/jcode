@@ -11,7 +11,7 @@
 4. **language**: 한국어 대화. 사용자가 잘못 본 거 정정해주면 즉시 사과하고 다시 확인.
 5. **추측 금지**: 이전 스크린샷/세션 잔여 정보로 새 사실 추측하지 말 것.
 6. **bg cargo**: `nohup ... > log 2>&1 & disown` + 폴링.
-7. **subagent**: 현재 round 당 1 spawn (M22 Stage 2 남음 — turn loop sequential await).
+7. **subagent**: M22 완료. 같은 turn 에 여러 tool/subagent 가 emit 되면 `FuturesUnordered` fan-out. 단 multi-emit 여부는 모델/provider 결정.
 8. **세션 기록**: 진행은 `docs/lazydino/sessions/YYYY-MM-DD-*.md`,
    재사용 가능한 큰 작업은 `docs/lazydino/milestones/Mxx.md`.
 
@@ -37,21 +37,19 @@
   - Fix: 빈 string detail 을 explicit clear 로 contract 정립
     (provider/UI/agent 3 곳 동시에 mirror).
 
-- **M22 — same-round 두 번째 subagent deferred** (2026-05-13 재오픈)
-  - 🔴 OPEN (Stage 1 만 DONE). 1차 by-design 판정 사용자 항의로 취소.
-  - 진단: 3 layer 중 1 만 해결됨.
-    - **Layer 1 (Provider emit)** — OpenAI Responses API `parallel_tool_calls`
-      toggle, default true (M22-1 이미 적용 — src/provider/openai.rs:712,
-      src/config/default_file.rs:182, env override 있음).
-    - **Layer 2 (Turn loop)** 이 sequential `for tool_index in 0..tool_count`
-      로 await. 모델이 multi-emit 해도 순차 처리. **이게 진짜 fix
-      포인트** — batch.rs 의 `FuturesUnordered` 패턴과 동일하게 전환.
-    - **Layer 3 (모델 emit 패턴)** — 조절 제한적 (system prompt 튜닝),
-      별개 카드.
-  - 사용자 체감: "같은 round 에 두 subagent 쓰면 한쪽 silence" — Layer 2
-    원인. fix 가능.
-  - 위험: 같은 파일 동시 write race, tool_use/tool_result ordering,
-    urgent_interrupt cancel 경로.
+- **M22 — same-round 두 번째 subagent deferred** (2026-05-13 fix)
+  - ✅ DONE. 1차 by-design 판정 취소 후 실제 fix 완료.
+  - Stage 1: OpenAI Responses API `parallel_tool_calls` toggle default true.
+  - Stage 2: turn loop `for tool_index ... await` 순차 실행을
+    `FuturesUnordered` fan-out 으로 전환 (broadcast/mpsc/loops mirror).
+  - 보존: Anthropic tool_result ordering, SDK-provided results, validation
+    errors, urgent interrupt remaining count, global write_serializer,
+    mpsc Alt+B background handoff, graceful reload bash 750ms handoff,
+    selfdev reload clean message, loops SubagentStatus/ToolUpdated.
+  - 검증: `cargo +nightly test --release --test m22_stage2_parallel_tools`
+    9/9 PASS, `cargo +nightly build --release` PASS, mermaid string count unchanged.
+  - 주의: `clippy --all-targets -D warnings` 는 deploy branch 의 M22 무관
+    기존 lint 다수로 실패. M22 targeted/build 는 PASS.
 - **M41 — server-initiated turn 첫 stream event 가 client redraw 안 깨움**
   - ✅ DONE (2026-05-12 라이브 검증). deploy `m41-eefa3744`.
   - 잔여 검증: thought-line + woke 조합 회귀 테스트, sibling fanout

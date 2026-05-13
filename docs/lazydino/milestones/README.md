@@ -16,7 +16,7 @@ self-contained handoff card. 다음 세션 시작 시 사용 패턴:
 | 3 | M42 | ✅ DONE 2026-05-13 (deploy `lazydino-6d81399a`) | stale `checking websocket` label clear (StatusDetail empty-string contract) | [M42.md](./M42.md) |
 | 4 | M40 | **High** (UX 직접 타격, 3 sub-issue) | Phase 1-4, image/slash/1m | [M40.md](./M40.md) |
 | 5 | M17 | **High** (사용자 워크플로우) | A vs B1 결정 + ~50줄 ~ 수백줄 | [M17.md](./M17.md) |
-| 6 | M22 | 🔴 OPEN (재오픈, Stage 1 만 DONE) | Stage 1 (OpenAI parallel_tool_calls toggle) ✅. Stage 2 (turn loop FuturesUnordered) 남음. 1차 by-design 판정 취소 | [M22.md](./M22.md) |
+| 6 | M22 | ✅ DONE 2026-05-13 (deploy integration) | OpenAI parallel_tool_calls + turn loop FuturesUnordered fan-out, 9 targeted tests PASS, mpsc Alt+B/reload preserved | [M22.md](./M22.md) |
 | 7 | M43 | ✅ DONE 2026-05-13 (deploy `lazydino-07905799`) | OAuth path 에서 `tools` 기반 광고 회복, bg/swarm canary 실측 통과 | [M43.md](./M43.md) |
 | 8 | M16 | Medium-High (구조 개선) | 4 sub-step | [M16.md](./M16.md) |
 | 9 | M2  | Medium-High | 재현부터 | [M2.md](./M2.md) |
@@ -49,7 +49,7 @@ self-contained handoff card. 다음 세션 시작 시 사용 패턴:
   ```
 - **fork push**: `./scripts/fork-push.sh deploy/m9-m10 patch/<name>`
 - **사용자 액션**: TUI close+reopen 은 *사용자 본인이* (절대 server kill 금지)
-- **subagent**: 현재 round 당 1 spawn (M22 Stage 2 fix 필요, turn loop 가 sequential await)
+- **subagent**: M22 완료. 같은 turn 에 여러 tool/subagent 가 emit 되면 turn loop 가 `FuturesUnordered` 로 fan-out. 단 모델이 multi-emits 할지는 provider/model 결정.
 
 ## 우리 fork 상태 (참고)
 
