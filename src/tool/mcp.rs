@@ -161,6 +161,10 @@ impl McpManagementTool {
             command,
             args: params.args.unwrap_or_default(),
             env: params.env.unwrap_or_default(),
+            transport: None,
+            url: None,
+            headers: std::collections::HashMap::new(),
+            auth: None,
             shared: true,
         };
 

@@ -166,19 +166,87 @@ pub struct ResourceContent {
     pub blob: Option<String>,
 }
 
+/// MCP transport type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum McpTransport {
+    Stdio,
+    Http,
+    Sse,
+    StreamableHttp,
+}
+
+/// MCP server auth configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum McpAuthConfig {
+    Bearer {
+        #[serde(default, alias = "bearer_token_env")]
+        token_env: Option<String>,
+        #[serde(default, alias = "bearer_token")]
+        token: Option<String>,
+    },
+    #[serde(rename = "oauth")]
+    OAuth {
+        #[serde(default)]
+        client_id: Option<String>,
+        #[serde(default)]
+        scopes: Vec<String>,
+    },
+}
+
 /// MCP server configuration
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct McpServerConfig {
+    /// Stdio command for local MCP servers. Kept as a string for backward
+    /// compatibility; remote transports leave it empty.
+    #[serde(default)]
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
     #[serde(default)]
     pub env: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub transport: Option<McpTransport>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub headers: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub auth: Option<McpAuthConfig>,
     /// Whether this server can be shared across sessions (default: true).
     /// Stateless API wrappers (Todoist, Canvas) should be shared.
     /// Stateful servers (Playwright browser) should not be shared.
     #[serde(default = "default_shared")]
     pub shared: bool,
+}
+
+impl McpServerConfig {
+    pub fn resolved_transport(&self) -> McpTransport {
+        self.transport.unwrap_or(McpTransport::Stdio)
+    }
+
+    pub fn is_stdio(&self) -> bool {
+        self.resolved_transport() == McpTransport::Stdio
+    }
+
+    pub fn redacted_summary(&self) -> String {
+        let transport = self.resolved_transport();
+        match transport {
+            McpTransport::Stdio => format!("stdio command={} args={:?}", self.command, self.args),
+            McpTransport::Http | McpTransport::Sse | McpTransport::StreamableHttp => format!(
+                "{:?} url={} headers={} auth={}",
+                transport,
+                self.url.as_deref().unwrap_or("<missing>"),
+                self.headers.len(),
+                if self.auth.is_some() {
+                    "configured"
+                } else {
+                    "none"
+                }
+            ),
+        }
+    }
 }
 
 fn default_shared() -> bool {

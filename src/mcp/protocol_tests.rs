@@ -106,6 +106,94 @@ fn test_mcp_config_deserialization() {
     assert_eq!(server.command, "/usr/bin/test-mcp");
     assert_eq!(server.args, vec!["--port", "8080"]);
     assert_eq!(server.env.get("API_KEY"), Some(&"secret".to_string()));
+    assert_eq!(server.resolved_transport(), McpTransport::Stdio);
+}
+
+#[test]
+fn test_m44_remote_mcp_config_deserialization() {
+    let json = r#"{
+            "servers": {
+                "figma": {
+                    "transport": "streamable_http",
+                    "url": "https://example.com/mcp",
+                    "headers": {"X-Workspace": "design"},
+                    "auth": {
+                        "type": "bearer",
+                        "token_env": "FIGMA_MCP_TOKEN"
+                    },
+                    "shared": true
+                }
+            }
+        }"#;
+
+    let config: McpConfig = serde_json::from_str(json).unwrap();
+    let server = config.servers.get("figma").unwrap();
+
+    assert_eq!(server.command, "");
+    assert_eq!(server.resolved_transport(), McpTransport::StreamableHttp);
+    assert_eq!(server.url.as_deref(), Some("https://example.com/mcp"));
+    assert_eq!(
+        server.headers.get("X-Workspace"),
+        Some(&"design".to_string())
+    );
+    match server.auth.as_ref().unwrap() {
+        McpAuthConfig::Bearer { token_env, token } => {
+            assert_eq!(token_env.as_deref(), Some("FIGMA_MCP_TOKEN"));
+            assert!(token.is_none());
+        }
+        McpAuthConfig::OAuth { .. } => panic!("expected bearer auth"),
+    }
+}
+
+#[test]
+fn test_m44_remote_mcp_config_aliases_and_redaction() {
+    let json = r#"{
+            "command": "",
+            "transport": "http",
+            "url": "https://example.com/mcp",
+            "auth": {
+                "type": "bearer",
+                "bearer_token_env": "REMOTE_TOKEN",
+                "bearer_token": "super-secret"
+            }
+        }"#;
+
+    let server: McpServerConfig = serde_json::from_str(json).unwrap();
+    assert_eq!(server.resolved_transport(), McpTransport::Http);
+
+    let summary = server.redacted_summary();
+    assert!(summary.contains("Http"));
+    assert!(summary.contains("auth=configured"));
+    assert!(!summary.contains("super-secret"));
+    assert!(!summary.contains("REMOTE_TOKEN"));
+}
+
+#[test]
+fn test_m44_remote_mcp_config_roundtrip() {
+    let json = r#"{
+            "servers": {
+                "remote": {
+                    "transport": "sse",
+                    "url": "https://example.com/sse",
+                    "auth": {"type": "oauth", "client_id": "abc", "scopes": ["files:read"]}
+                }
+            }
+        }"#;
+
+    let config: McpConfig = serde_json::from_str(json).unwrap();
+    let serialized = serde_json::to_string(&config).unwrap();
+    let reparsed: McpConfig = serde_json::from_str(&serialized).unwrap();
+    let server = reparsed.servers.get("remote").unwrap();
+
+    assert_eq!(server.resolved_transport(), McpTransport::Sse);
+    assert_eq!(server.url.as_deref(), Some("https://example.com/sse"));
+    match server.auth.as_ref().unwrap() {
+        McpAuthConfig::OAuth { client_id, scopes } => {
+            assert_eq!(client_id.as_deref(), Some("abc"));
+            assert_eq!(scopes, &vec!["files:read".to_string()]);
+        }
+        McpAuthConfig::Bearer { .. } => panic!("expected oauth auth"),
+    }
 }
 
 #[test]

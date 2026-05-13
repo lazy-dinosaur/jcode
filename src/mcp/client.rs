@@ -125,9 +125,18 @@ pub struct McpClient {
 impl McpClient {
     /// Connect to an MCP server
     pub async fn connect(name: String, config: &McpServerConfig) -> Result<Self> {
+        if !config.is_stdio() {
+            anyhow::bail!(
+                "MCP remote transport for '{}' is configured ({:?}) but not implemented yet",
+                name,
+                config.resolved_transport()
+            );
+        }
+
         crate::logging::info(&format!(
-            "MCP: Connecting to '{}' ({} {:?})",
-            name, config.command, config.args
+            "MCP: Connecting to '{}' ({})",
+            name,
+            config.redacted_summary()
         ));
 
         let mut env: HashMap<String, String> = std::env::vars().collect();
