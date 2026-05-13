@@ -56,15 +56,15 @@ mod tests {
 
     #[test]
     fn anthropic_1m_routes_are_advertisable_with_extra_usage_hint_when_unknown() {
-        let (oauth_available, oauth_detail) =
-            anthropic_oauth_route_availability("claude-opus-4-7[1m]");
-        let (api_key_available, api_key_detail) =
-            anthropic_api_key_route_availability("claude-opus-4-7[1m]");
+        for model in ["claude-opus-4-7[1m]", "claude-sonnet-4-6[1m]"] {
+            let (oauth_available, oauth_detail) = anthropic_oauth_route_availability(model);
+            let (api_key_available, api_key_detail) = anthropic_api_key_route_availability(model);
 
-        assert!(!oauth_available);
-        assert_eq!(oauth_detail, "requires extra usage");
-        assert!(!api_key_available);
-        assert_eq!(api_key_detail, "requires extra usage");
+            assert!(!oauth_available, "{model} should be visible but disabled");
+            assert_eq!(oauth_detail, "requires extra usage");
+            assert!(!api_key_available, "{model} should be visible but disabled");
+            assert_eq!(api_key_detail, "requires extra usage");
+        }
     }
 
     #[test]

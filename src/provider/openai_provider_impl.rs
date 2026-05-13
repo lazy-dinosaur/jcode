@@ -676,7 +676,12 @@ impl Provider for OpenAIProvider {
 
     fn context_window(&self) -> usize {
         let model = self.model();
-        crate::provider::context_limit_for_model_with_provider(&model, Some(self.name()))
+        let is_chatgpt_mode = self
+            .credentials
+            .try_read()
+            .map(|credentials| OpenAIProvider::is_chatgpt_mode(&credentials))
+            .unwrap_or(true);
+        OpenAIProvider::context_limit_for_model_and_auth_mode(&model, is_chatgpt_mode)
             .unwrap_or(crate::provider::DEFAULT_CONTEXT_LIMIT)
     }
 

@@ -796,7 +796,7 @@ fn test_context_limit_spark_vs_codex() {
         context_limit_for_model("gpt-5.3-codex-spark"),
         Some(128_000)
     );
-    assert_eq!(context_limit_for_model("gpt-5.5"), Some(272_000));
+    assert_eq!(context_limit_for_model("gpt-5.5"), Some(1_050_000));
     assert_eq!(context_limit_for_model("gpt-5.3-codex"), Some(272_000));
     assert_eq!(context_limit_for_model("gpt-5.2-codex"), Some(272_000));
     assert_eq!(context_limit_for_model("gpt-5-codex"), Some(272_000));
@@ -814,6 +814,10 @@ fn test_context_limit_respects_provider_hint() {
     assert_eq!(
         context_limit_for_model_with_provider("gpt-5.4", Some("openai")),
         Some(1_000_000)
+    );
+    assert_eq!(
+        context_limit_for_model_with_provider("gpt-5.5", Some("openai")),
+        Some(1_050_000)
     );
     assert_eq!(
         context_limit_for_model_with_provider("gpt-5.4", Some("copilot")),

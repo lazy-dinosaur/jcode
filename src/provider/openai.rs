@@ -551,8 +551,26 @@ impl OpenAIProvider {
         self.credentials.read().await.access_token.clone()
     }
 
-    fn is_chatgpt_mode(credentials: &CodexCredentials) -> bool {
+    pub(crate) fn is_chatgpt_mode(credentials: &CodexCredentials) -> bool {
         !credentials.refresh_token.is_empty() || credentials.id_token.is_some()
+    }
+
+    pub(crate) fn context_limit_for_model_and_auth_mode(
+        model: &str,
+        is_chatgpt_mode: bool,
+    ) -> Option<usize> {
+        let normalized = model.trim().to_ascii_lowercase();
+        let normalized = normalized.strip_suffix("[1m]").unwrap_or(&normalized);
+
+        if is_chatgpt_mode && normalized.starts_with("gpt-5.5") {
+            // OpenAI API docs advertise gpt-5.5 as a 1,050,000-token model, but
+            // the ChatGPT/Codex OAuth surface documents a 400K total window
+            // (272K input budget + 128K reserved output). Keep the full-window
+            // value here; compaction thresholds can reserve their own headroom.
+            return Some(400_000);
+        }
+
+        crate::provider::context_limit_for_model_with_provider(model, Some("openai"))
     }
 
     fn chatgpt_instructions_with_selfdev(system: &str) -> String {

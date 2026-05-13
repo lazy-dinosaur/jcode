@@ -173,6 +173,14 @@ impl MixedModelRoutesProvider {
                 cheapness: None,
             },
             crate::provider::ModelRoute {
+                model: "claude-sonnet-4-6[1m]".to_string(),
+                provider: "Anthropic".to_string(),
+                api_method: "claude-oauth".to_string(),
+                available: false,
+                detail: "requires extra usage".to_string(),
+                cheapness: None,
+            },
+            crate::provider::ModelRoute {
                 model: "Qwen/Qwen3-Coder-480B-A35B-Instruct".to_string(),
                 provider: "Chutes".to_string(),
                 api_method: "openai-compatible:chutes".to_string(),
@@ -1063,6 +1071,14 @@ fn test_model_picker_state_space_preserves_provider_labels_after_route_hydration
     let opus_1m_route = opus_1m.active_option().expect("Opus 1m active route");
     assert!(!opus_1m_route.available);
     assert_eq!(opus_1m_route.detail, "requires extra usage");
+    let sonnet_1m = picker
+        .entries
+        .iter()
+        .find(|entry| entry.name == "claude-sonnet-4-6[1m]")
+        .expect("Sonnet 1m route should be visible");
+    let sonnet_1m_route = sonnet_1m.active_option().expect("Sonnet 1m active route");
+    assert!(!sonnet_1m_route.available);
+    assert_eq!(sonnet_1m_route.detail, "requires extra usage");
     assert_eq!(
         routes_by_model.get("Qwen/Qwen3-Coder-480B-A35B-Instruct"),
         Some(&(

@@ -170,6 +170,13 @@ pub fn context_limit_for_model_with_provider_and_cache(
         return Some(128_000);
     }
 
+    // GPT-5.5 API models advertise a 1,050,000 token context window.
+    // ChatGPT/Codex OAuth intentionally uses a smaller 400k total window; the
+    // OpenAI provider applies that auth-mode-specific override at runtime.
+    if model.starts_with("gpt-5.5") {
+        return Some(1_050_000);
+    }
+
     // GPT-5.4-family models should default to the long-context window.
     // The live Codex OAuth catalog can still override this via the dynamic cache above.
     if model.starts_with("gpt-5.4") {

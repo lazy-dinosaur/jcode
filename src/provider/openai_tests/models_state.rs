@@ -57,6 +57,29 @@ fn test_openai_switching_models_include_dynamic_catalog_entries() {
 }
 
 #[test]
+fn test_gpt_5_5_context_window_depends_on_openai_auth_mode() {
+    let api_key_provider = OpenAIProvider::new(CodexCredentials {
+        access_token: "test".to_string(),
+        refresh_token: String::new(),
+        id_token: None,
+        account_id: None,
+        expires_at: None,
+    });
+    api_key_provider.set_model("gpt-5.5").expect("set model");
+    assert_eq!(api_key_provider.context_window(), 1_050_000);
+
+    let chatgpt_provider = OpenAIProvider::new(CodexCredentials {
+        access_token: "test".to_string(),
+        refresh_token: "refresh".to_string(),
+        id_token: None,
+        account_id: None,
+        expires_at: None,
+    });
+    chatgpt_provider.set_model("gpt-5.5").expect("set model");
+    assert_eq!(chatgpt_provider.context_window(), 400_000);
+}
+
+#[test]
 fn test_summarize_ws_input_counts_tool_outputs() {
     let items = vec![
         serde_json::json!({
