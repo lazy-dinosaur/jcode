@@ -1,6 +1,132 @@
 use super::*;
+use tokio_util::sync::CancellationToken;
+
+#[allow(dead_code)]
+pub(super) struct ClassifiedTools {
+    /// Original tool_calls index plus a pre-decided result that must not be executed locally.
+    pub presets: Vec<(usize, PresetToolResult)>,
+    /// Original tool_calls index plus a cloned ToolCall that must be executed locally.
+    pub to_execute: Vec<(usize, ToolCall)>,
+}
+
+#[allow(dead_code)]
+pub(super) enum PresetToolResult {
+    ValidationError(String),
+    SdkProvided { content: String, is_error: bool },
+}
+
+#[allow(dead_code)]
+pub(super) struct DispatchedToolResult {
+    pub index: usize,
+    pub tc: ToolCall,
+    pub started_at: Instant,
+    pub elapsed: Duration,
+    pub result: Result<crate::tool::ToolOutput>,
+}
 
 impl Agent {
+    #[allow(dead_code)]
+    pub(super) fn classify_tool_calls(
+        &self,
+        tool_calls: &[ToolCall],
+        sdk_tool_results: &HashMap<String, (String, bool)>,
+    ) -> Result<ClassifiedTools> {
+        let mut presets = Vec::new();
+        let mut to_execute = Vec::new();
+
+        for (index, tc) in tool_calls.iter().enumerate() {
+            if let Some(error_msg) = tc.validation_error() {
+                presets.push((index, PresetToolResult::ValidationError(error_msg)));
+                continue;
+            }
+
+            self.validate_tool_allowed(&tc.name)?;
+
+            let is_native_tool = JCODE_NATIVE_TOOLS.contains(&tc.name.as_str());
+            if let Some((content, is_error)) = sdk_tool_results.get(&tc.id) {
+                if !(is_native_tool && *is_error) {
+                    presets.push((
+                        index,
+                        PresetToolResult::SdkProvided {
+                            content: content.clone(),
+                            is_error: *is_error,
+                        },
+                    ));
+                    continue;
+                }
+            }
+
+            to_execute.push((index, tc.clone()));
+        }
+
+        Ok(ClassifiedTools { presets, to_execute })
+    }
+
+    #[allow(dead_code)]
+    pub(super) async fn dispatch_tools_parallel(
+        &self,
+        to_execute: Vec<(usize, ToolCall)>,
+        ctx_factory: impl Fn(&ToolCall) -> ToolContext + Send + Sync,
+        per_tool_start: impl Fn(&ToolCall) + Send + Sync,
+        cancel_token: &CancellationToken,
+    ) -> Vec<DispatchedToolResult> {
+        let mut stream: futures::stream::FuturesUnordered<_> = to_execute
+            .into_iter()
+            .map(|(index, tc)| {
+                let registry = self.registry.clone();
+                let ctx = ctx_factory(&tc);
+                let write_serializer = self.write_serializer.clone();
+                let needs_write_lock = matches!(
+                    tc.name.as_str(),
+                    "write" | "edit" | "apply_patch" | "multiedit"
+                );
+                let cancel = cancel_token.child_token();
+                per_tool_start(&tc);
+                let started_at = Instant::now();
+                async move {
+                    let _write_guard = if needs_write_lock {
+                        Some(write_serializer.lock_owned().await)
+                    } else {
+                        None
+                    };
+
+                    if cancel.is_cancelled() {
+                        return DispatchedToolResult {
+                            index,
+                            tc,
+                            started_at,
+                            elapsed: started_at.elapsed(),
+                            result: Err(anyhow::anyhow!("[Skipped: user interrupted]")),
+                        };
+                    }
+
+                    let result = tokio::select! {
+                        result = registry.execute(&tc.name, tc.input.clone(), ctx) => result,
+                        _ = cancel.cancelled() => Err(anyhow::anyhow!("[Cancelled: user interrupted]")),
+                    };
+
+                    DispatchedToolResult {
+                        index,
+                        tc,
+                        started_at,
+                        elapsed: started_at.elapsed(),
+                        result,
+                    }
+                }
+            })
+            .collect();
+
+        let mut out = Vec::with_capacity(stream.len());
+        while let Some(result) = stream.next().await {
+            if self.has_urgent_interrupt() {
+                cancel_token.cancel();
+            }
+            out.push(result);
+        }
+        out.sort_by_key(|result| result.index);
+        out
+    }
+
     /// Run a single turn with the given user message
     pub async fn run_once(&mut self, user_message: &str) -> Result<()> {
         self.add_message(
