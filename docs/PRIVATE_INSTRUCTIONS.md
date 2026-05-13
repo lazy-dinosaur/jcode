@@ -20,7 +20,10 @@ Jcode reads these at prompt construction time when available:
 - `~/.AGENTS.md` or `~/.agents.md`
 - `<project>/.jcode/AGENTS.md` or `<project>/.jcode/agents.md`
 - `<project>/.jcode/harness/*.md`
-- `[prompt].private_instructions` globs, resolved under `<project>/.jcode/` by default
+- `<dir>/.jcode/private_instructions`
+- `<dir>/.jcode/private_instructions.md`
+- `<dir>/.jcode/rules/*.md`
+- Additional `[prompt].private_instructions` globs, resolved under `<project>/.jcode/` by default
 
 Jcode also injects nearby private rules after file-local tools touch paths:
 
@@ -39,7 +42,7 @@ For private harness usage, put this in `<project>/.jcode/config.toml`:
 ignore_project_agents = true
 load_jcode_agents = true
 load_harness_dir = true
-private_instructions = ["rules/*.md", "monorepo/*/AGENTS.md"]
+private_instructions = ["private_instructions", "private_instructions.md", "rules/*.md", "monorepo/*/AGENTS.md"]
 ```
 
 With `ignore_project_agents = true`, team repo `AGENTS.md` is skipped, while private `.jcode` instructions remain loaded and highest-priority.

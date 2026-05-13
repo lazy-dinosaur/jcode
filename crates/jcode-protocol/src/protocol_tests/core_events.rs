@@ -359,6 +359,7 @@ fn test_history_event_roundtrip_preserves_side_panel_snapshot() -> Result<()> {
         subagent_model: None,
         autoreview_enabled: None,
         autojudge_enabled: None,
+        working_dir: Some("/tmp/demo".to_string()),
         compaction_mode: jcode_config_types::CompactionMode::Reactive,
         activity: None,
         side_panel: jcode_side_panel_types::SidePanelSnapshot {

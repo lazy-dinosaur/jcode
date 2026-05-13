@@ -207,8 +207,9 @@ load_jcode_agents = true
 load_harness_dir = true
 # Additional private instruction files/globs. Relative paths resolve under <project>/.jcode/.
 # These are also labeled as highest-priority private instructions.
-# Example: private_instructions = ["rules/*.md", "monorepo/*/AGENTS.md"]
-private_instructions = []
+# Default private instruction discovery. Relative paths are under <project>/.jcode/.
+# Set to [] to disable these default private instruction files/globs.
+private_instructions = ["private_instructions", "private_instructions.md", "rules/*.md"]
 
 [agents]
 # Default model override for spawned swarm/subagent sessions when no profile matches.

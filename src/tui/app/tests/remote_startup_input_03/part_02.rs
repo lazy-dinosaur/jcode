@@ -86,6 +86,7 @@ fn test_initial_history_bootstrap_preserves_restored_interleave_state() {
                 upstream_provider: None,
                 reasoning_effort: None,
                 service_tier: None,
+                working_dir: None,
                 compaction_mode: crate::config::CompactionMode::Reactive,
                 activity: None,
                 side_panel: crate::side_panel::SidePanelSnapshot::default(),
@@ -107,6 +108,76 @@ fn test_initial_history_bootstrap_preserves_restored_interleave_state() {
             "restored pending interrupts should remain represented by interleave + queue state"
         );
     });
+}
+
+#[test]
+fn test_remote_history_working_dir_drives_context_instruction_loading() {
+    let repo = tempfile::TempDir::new().expect("temp repo");
+    std::fs::write(repo.path().join("AGENTS.md"), "follow remote repo agents policy").unwrap();
+    std::fs::create_dir_all(repo.path().join(".jcode/rules")).unwrap();
+    std::fs::write(
+        repo.path().join(".jcode/rules/private.md"),
+        "follow remote private policy",
+    )
+    .unwrap();
+
+    let mut app = App::new_for_remote(Some("session_remote_context_cwd".to_string()));
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+
+    app.handle_server_event(
+        crate::protocol::ServerEvent::History {
+            id: 1,
+            session_id: "session_remote_context_cwd".to_string(),
+            messages: vec![],
+            images: vec![],
+            provider_name: Some("openai".to_string()),
+            provider_model: Some("gpt-5.5".to_string()),
+            subagent_model: None,
+            autoreview_enabled: None,
+            autojudge_enabled: None,
+            working_dir: Some(repo.path().display().to_string()),
+            available_models: vec![],
+            available_model_routes: vec![],
+            mcp_servers: vec![],
+            skills: vec![],
+            total_tokens: None,
+            all_sessions: vec![],
+            client_count: None,
+            is_canary: None,
+            server_version: None,
+            server_name: None,
+            server_icon: None,
+            server_has_update: None,
+            was_interrupted: None,
+            reload_recovery: None,
+            connection_type: Some("websocket".to_string()),
+            status_detail: None,
+            upstream_provider: None,
+            reasoning_effort: None,
+            service_tier: None,
+            compaction_mode: crate::config::CompactionMode::Reactive,
+            activity: None,
+            side_panel: crate::side_panel::SidePanelSnapshot::default(),
+        },
+        &mut remote,
+    );
+
+    assert_eq!(app.session.working_dir.as_deref(), Some(repo.path().to_str().unwrap()));
+    let info = <App as crate::tui::TuiState>::context_info(&app);
+    assert!(info.has_project_agents_md);
+    assert!(info.project_agents_md_chars > 0);
+    assert!(
+        info.instruction_sources
+            .iter()
+            .any(|source| source.private && source.chars > 0)
+    );
+    assert!(
+        info.instruction_sources
+            .iter()
+            .any(|source| source.path.ends_with(".jcode/rules/private.md"))
+    );
 }
 
 #[test]
@@ -175,6 +246,7 @@ fn test_initial_history_bootstrap_skips_resubmit_when_prompt_already_in_history(
                 upstream_provider: None,
                 reasoning_effort: None,
                 service_tier: None,
+                working_dir: None,
                 compaction_mode: crate::config::CompactionMode::Reactive,
                 activity: None,
                 side_panel: crate::side_panel::SidePanelSnapshot::default(),

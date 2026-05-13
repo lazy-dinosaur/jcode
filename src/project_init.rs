@@ -283,7 +283,7 @@ ignore_global_agents = false
 load_jcode_agents = true
 load_harness_dir = true
 # Relative paths resolve under this private .jcode/ directory.
-private_instructions = []
+private_instructions = ["private_instructions", "private_instructions.md", "rules/*.md"]
 
 [hooks]
 enabled = true

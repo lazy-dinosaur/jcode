@@ -1114,6 +1114,9 @@ pub enum ServerEvent {
         /// Session-scoped automatic judge toggle.
         #[serde(skip_serializing_if = "Option::is_none")]
         autojudge_enabled: Option<bool>,
+        /// Session working directory used for prompt/instruction discovery.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        working_dir: Option<String>,
         /// Active compaction mode for this session
         #[serde(default)]
         compaction_mode: jcode_config_types::CompactionMode,

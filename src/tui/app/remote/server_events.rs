@@ -648,6 +648,7 @@ pub(in crate::tui::app) fn handle_server_event(
             subagent_model,
             autoreview_enabled,
             autojudge_enabled,
+            working_dir,
             available_models,
             available_model_routes,
             mcp_servers,
@@ -744,6 +745,9 @@ pub(in crate::tui::app) fn handle_server_event(
             app.session.subagent_model = subagent_model;
             app.session.autoreview_enabled = autoreview_enabled;
             app.session.autojudge_enabled = autojudge_enabled;
+            if working_dir.is_some() || session_changed {
+                app.session.working_dir = working_dir;
+            }
             app.autoreview_enabled =
                 autoreview_enabled.unwrap_or(crate::config::config().autoreview.enabled);
             app.autojudge_enabled =
