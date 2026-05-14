@@ -13,6 +13,10 @@ pub struct McpOAuthTokens {
     pub expires_at: i64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub scopes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_secret: Option<String>,
 }
 
 impl McpOAuthTokens {
@@ -25,6 +29,7 @@ impl McpOAuthTokens {
 pub struct McpOAuthEndpoints {
     pub authorization_url: String,
     pub token_url: String,
+    pub registration_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -37,6 +42,21 @@ struct ProtectedResourceMetadata {
 struct AuthorizationServerMetadata {
     authorization_endpoint: String,
     token_endpoint: String,
+    #[serde(default)]
+    registration_endpoint: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct McpOAuthClientCredentials {
+    client_id: String,
+    client_secret: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DynamicClientRegistrationResponse {
+    client_id: String,
+    #[serde(default)]
+    client_secret: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -90,7 +110,9 @@ fn oauth_config(config: &McpServerConfig) -> Result<&McpAuthConfig> {
         .ok_or_else(|| anyhow::anyhow!("MCP server is not configured for OAuth"))
 }
 
-fn oauth_fields(config: &McpServerConfig) -> Result<(&str, Option<&str>, &[String], Option<&str>)> {
+fn oauth_fields(
+    config: &McpServerConfig,
+) -> Result<(Option<&str>, Option<&str>, &[String], Option<&str>)> {
     match oauth_config(config)? {
         McpAuthConfig::OAuth {
             client_id,
@@ -99,9 +121,7 @@ fn oauth_fields(config: &McpServerConfig) -> Result<(&str, Option<&str>, &[Strin
             redirect_uri,
             ..
         } => Ok((
-            client_id
-                .as_deref()
-                .ok_or_else(|| anyhow::anyhow!("MCP OAuth config requires client_id"))?,
+            client_id.as_deref(),
             client_secret.as_deref(),
             scopes,
             redirect_uri.as_deref(),
@@ -125,6 +145,7 @@ pub async fn discover_endpoints(config: &McpServerConfig) -> Result<McpOAuthEndp
                 return Ok(McpOAuthEndpoints {
                     authorization_url: authorization_url.clone(),
                     token_url: token_url.clone(),
+                    registration_url: None,
                 });
             }
             (
@@ -188,6 +209,7 @@ pub async fn discover_endpoints(config: &McpServerConfig) -> Result<McpOAuthEndp
     Ok(McpOAuthEndpoints {
         authorization_url: metadata.authorization_endpoint,
         token_url: metadata.token_endpoint,
+        registration_url: metadata.registration_endpoint,
     })
 }
 
@@ -216,11 +238,13 @@ fn normalize_authorization_server_metadata_url(value: &str) -> Result<String> {
 pub fn build_auth_url(
     endpoints: &McpOAuthEndpoints,
     config: &McpServerConfig,
+    client_id: &str,
     redirect_uri: &str,
     challenge: &str,
     state: &str,
 ) -> Result<String> {
-    let (client_id, _client_secret, scopes, _configured_redirect_uri) = oauth_fields(config)?;
+    let (_configured_client_id, _client_secret, scopes, _configured_redirect_uri) =
+        oauth_fields(config)?;
     let mut url = Url::parse(&endpoints.authorization_url)?;
     {
         let mut qp = url.query_pairs_mut();
@@ -266,7 +290,15 @@ pub async fn login(
             anyhow::anyhow!("MCP OAuth login requires redirect_uri or a local callback listener")
         })?;
 
-    let auth_url = build_auth_url(&endpoints, config, &redirect_uri, &challenge, &state)?;
+    let client_credentials = resolve_client_credentials(config, &endpoints, &redirect_uri).await?;
+    let auth_url = build_auth_url(
+        &endpoints,
+        config,
+        &client_credentials.client_id,
+        &redirect_uri,
+        &challenge,
+        &state,
+    )?;
     eprintln!("\nOpen this MCP OAuth URL for '{server_name}':\n\n{auth_url}\n");
     let browser_opened = if crate::auth::browser_suppressed(no_browser) {
         false
@@ -297,7 +329,15 @@ pub async fn login(
         )
     };
 
-    let tokens = exchange_code(config, &endpoints, &verifier, &code, &redirect_uri).await?;
+    let tokens = exchange_code(
+        config,
+        &endpoints,
+        &client_credentials,
+        &verifier,
+        &code,
+        &redirect_uri,
+    )
+    .await?;
     save_tokens(server_name, &tokens)?;
     Ok(tokens)
 }
@@ -305,20 +345,21 @@ pub async fn login(
 async fn exchange_code(
     config: &McpServerConfig,
     endpoints: &McpOAuthEndpoints,
+    client_credentials: &McpOAuthClientCredentials,
     verifier: &str,
     code: &str,
     redirect_uri: &str,
 ) -> Result<McpOAuthTokens> {
-    let (client_id, client_secret, scopes, _redirect_uri) = oauth_fields(config)?;
+    let (_client_id, _client_secret, scopes, _redirect_uri) = oauth_fields(config)?;
     let mut form = vec![
         ("grant_type", "authorization_code".to_string()),
-        ("client_id", client_id.to_string()),
+        ("client_id", client_credentials.client_id.clone()),
         ("code", code.to_string()),
         ("code_verifier", verifier.to_string()),
         ("redirect_uri", redirect_uri.to_string()),
     ];
-    if let Some(client_secret) = client_secret {
-        form.push(("client_secret", client_secret.to_string()));
+    if let Some(client_secret) = &client_credentials.client_secret {
+        form.push(("client_secret", client_secret.clone()));
     }
 
     let resp = crate::provider::shared_http_client()
@@ -335,7 +376,67 @@ async fn exchange_code(
         .json()
         .await
         .context("Failed to parse MCP OAuth token response")?;
-    Ok(token_response_to_tokens(token, scopes))
+    let mut tokens = token_response_to_tokens(token, scopes);
+    tokens.client_id = Some(client_credentials.client_id.clone());
+    tokens.client_secret = client_credentials.client_secret.clone();
+    Ok(tokens)
+}
+
+async fn resolve_client_credentials(
+    config: &McpServerConfig,
+    endpoints: &McpOAuthEndpoints,
+    redirect_uri: &str,
+) -> Result<McpOAuthClientCredentials> {
+    let (client_id, client_secret, scopes, _redirect_uri) = oauth_fields(config)?;
+    if let Some(client_id) = client_id {
+        return Ok(McpOAuthClientCredentials {
+            client_id: client_id.to_string(),
+            client_secret: client_secret.map(ToOwned::to_owned),
+        });
+    }
+
+    let registration_url = endpoints.registration_url.as_deref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "MCP OAuth config has no client_id and authorization metadata did not provide registration_endpoint"
+        )
+    })?;
+    register_dynamic_client(registration_url, redirect_uri, scopes).await
+}
+
+async fn register_dynamic_client(
+    registration_url: &str,
+    redirect_uri: &str,
+    scopes: &[String],
+) -> Result<McpOAuthClientCredentials> {
+    let mut body = serde_json::json!({
+        "client_name": "jcode",
+        "redirect_uris": [redirect_uri],
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": "client_secret_post"
+    });
+    if !scopes.is_empty() {
+        body["scope"] = serde_json::Value::String(scopes.join(" "));
+    }
+
+    let resp = crate::provider::shared_http_client()
+        .post(registration_url)
+        .json(&body)
+        .send()
+        .await
+        .with_context(|| format!("Failed to register MCP OAuth client at {registration_url}"))?;
+    if !resp.status().is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        anyhow::bail!("MCP OAuth dynamic client registration failed: {text}");
+    }
+    let registered: DynamicClientRegistrationResponse = resp
+        .json()
+        .await
+        .context("Failed to parse MCP OAuth dynamic client registration response")?;
+    Ok(McpOAuthClientCredentials {
+        client_id: registered.client_id,
+        client_secret: registered.client_secret,
+    })
 }
 
 pub async fn load_or_refresh_access_token(
@@ -358,14 +459,24 @@ pub async fn refresh_tokens(
         anyhow::anyhow!("MCP OAuth token for '{server_name}' has no refresh_token; rerun mcp login")
     })?;
     let endpoints = discover_endpoints(config).await?;
-    let (client_id, client_secret, scopes, _redirect_uri) = oauth_fields(config)?;
+    let (configured_client_id, configured_client_secret, scopes, _redirect_uri) =
+        oauth_fields(config)?;
+    let client_id = configured_client_id
+        .map(ToOwned::to_owned)
+        .or_else(|| tokens.client_id.clone())
+        .ok_or_else(|| {
+            anyhow::anyhow!("MCP OAuth token for '{server_name}' has no client_id; rerun mcp login")
+        })?;
+    let client_secret = configured_client_secret
+        .map(ToOwned::to_owned)
+        .or_else(|| tokens.client_secret.clone());
     let mut form = vec![
         ("grant_type", "refresh_token".to_string()),
-        ("client_id", client_id.to_string()),
+        ("client_id", client_id.clone()),
         ("refresh_token", refresh_token.to_string()),
     ];
-    if let Some(client_secret) = client_secret {
-        form.push(("client_secret", client_secret.to_string()));
+    if let Some(client_secret) = &client_secret {
+        form.push(("client_secret", client_secret.clone()));
     }
 
     let resp = crate::provider::shared_http_client()
@@ -386,6 +497,8 @@ pub async fn refresh_tokens(
     if refreshed.refresh_token.is_none() {
         refreshed.refresh_token = tokens.refresh_token.clone();
     }
+    refreshed.client_id = Some(client_id);
+    refreshed.client_secret = client_secret;
     save_tokens(server_name, &refreshed)?;
     Ok(refreshed)
 }
@@ -403,6 +516,8 @@ fn token_response_to_tokens(token: TokenResponse, configured_scopes: &[String]) 
         refresh_token: token.refresh_token,
         expires_at,
         scopes,
+        client_id: None,
+        client_secret: None,
     }
 }
 
@@ -462,12 +577,14 @@ mod tests {
         let endpoints = McpOAuthEndpoints {
             authorization_url: "https://auth.example/authorize".to_string(),
             token_url: "https://auth.example/token".to_string(),
+            registration_url: Some("https://auth.example/register".to_string()),
         };
         let config = oauth_config();
 
         let url = build_auth_url(
             &endpoints,
             &config,
+            "figma-client",
             "http://127.0.0.1:7777/callback",
             "challenge",
             "state",
@@ -506,6 +623,8 @@ mod tests {
             refresh_token: Some("refresh".to_string()),
             expires_at: chrono::Utc::now().timestamp_millis() + 3600_000,
             scopes: vec!["files:read".to_string()],
+            client_id: Some("client".to_string()),
+            client_secret: Some("secret".to_string()),
         };
 
         save_tokens("figma/team", &tokens).unwrap();
@@ -514,5 +633,6 @@ mod tests {
         let loaded = load_tokens("figma/team").unwrap();
         assert_eq!(loaded.access_token, "access");
         assert_eq!(loaded.refresh_token.as_deref(), Some("refresh"));
+        assert_eq!(loaded.client_id.as_deref(), Some("client"));
     }
 }
