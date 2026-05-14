@@ -526,6 +526,9 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::path::Path;
+    use std::sync::{Arc, Mutex as StdMutex};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     struct EnvVarGuard {
         key: &'static str,
@@ -570,6 +573,62 @@ mod tests {
             }),
             shared: true,
         }
+    }
+
+    async fn read_http_request(
+        stream: &mut tokio::net::TcpStream,
+    ) -> anyhow::Result<(String, Vec<u8>)> {
+        let mut buffer = Vec::new();
+        let header_end = loop {
+            let mut chunk = [0u8; 1024];
+            let n = stream.read(&mut chunk).await?;
+            anyhow::ensure!(n > 0, "connection closed before headers");
+            buffer.extend_from_slice(&chunk[..n]);
+            if let Some(pos) = buffer.windows(4).position(|window| window == b"\r\n\r\n") {
+                break pos + 4;
+            }
+        };
+
+        let headers = String::from_utf8_lossy(&buffer[..header_end]).to_string();
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().ok())
+                    .flatten()
+            })
+            .unwrap_or(0);
+
+        while buffer.len() < header_end + content_length {
+            let mut chunk = vec![0u8; header_end + content_length - buffer.len()];
+            let n = stream.read(&mut chunk).await?;
+            anyhow::ensure!(n > 0, "connection closed before body");
+            buffer.extend_from_slice(&chunk[..n]);
+        }
+
+        Ok((
+            headers,
+            buffer[header_end..header_end + content_length].to_vec(),
+        ))
+    }
+
+    async fn write_json_response(
+        stream: &mut tokio::net::TcpStream,
+        body: serde_json::Value,
+    ) -> anyhow::Result<()> {
+        let body = serde_json::to_string(&body)?;
+        stream
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                )
+                .as_bytes(),
+            )
+            .await?;
+        Ok(())
     }
 
     #[test]
@@ -634,5 +693,122 @@ mod tests {
         assert_eq!(loaded.access_token, "access");
         assert_eq!(loaded.refresh_token.as_deref(), Some("refresh"));
         assert_eq!(loaded.client_id.as_deref(), Some("client"));
+    }
+
+    #[tokio::test]
+    async fn m44_mcp_oauth_refresh_uses_metadata_and_persists_new_tokens() {
+        let _env_lock = crate::storage::lock_test_env();
+        let home = tempfile::tempdir().expect("home tempdir");
+        let _home_guard = EnvVarGuard::set_path("JCODE_HOME", home.path());
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let seen_paths = Arc::new(StdMutex::new(Vec::new()));
+        let seen_paths_server = Arc::clone(&seen_paths);
+        let seen_form = Arc::new(StdMutex::new(String::new()));
+        let seen_form_server = Arc::clone(&seen_form);
+        let server_base_url = base_url.clone();
+
+        let server = tokio::spawn(async move {
+            for _ in 0..3 {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let (headers, body) = read_http_request(&mut stream).await.unwrap();
+                let request_line = headers.lines().next().unwrap_or_default().to_string();
+                seen_paths_server.lock().unwrap().push(request_line.clone());
+
+                if request_line.starts_with("GET /.well-known/oauth-protected-resource ") {
+                    write_json_response(
+                        &mut stream,
+                        serde_json::json!({
+                            "authorization_servers": [server_base_url]
+                        }),
+                    )
+                    .await
+                    .unwrap();
+                } else if request_line.starts_with("GET /.well-known/oauth-authorization-server ") {
+                    write_json_response(
+                        &mut stream,
+                        serde_json::json!({
+                            "authorization_endpoint": format!("{server_base_url}/authorize"),
+                            "token_endpoint": format!("{server_base_url}/token"),
+                            "registration_endpoint": format!("{server_base_url}/register")
+                        }),
+                    )
+                    .await
+                    .unwrap();
+                } else if request_line.starts_with("POST /token ") {
+                    let form = String::from_utf8(body).unwrap();
+                    *seen_form_server.lock().unwrap() = form.clone();
+                    assert!(form.contains("grant_type=refresh_token"));
+                    assert!(form.contains("client_id=stored-client"));
+                    assert!(form.contains("client_secret=stored-secret"));
+                    assert!(form.contains("refresh_token=old-refresh"));
+                    write_json_response(
+                        &mut stream,
+                        serde_json::json!({
+                            "access_token": "new-access",
+                            "expires_in": 7200,
+                            "scope": "files:read comments:read"
+                        }),
+                    )
+                    .await
+                    .unwrap();
+                } else {
+                    panic!("unexpected request: {request_line}");
+                }
+            }
+        });
+
+        let config = McpServerConfig {
+            command: String::new(),
+            args: Vec::new(),
+            env: HashMap::new(),
+            transport: Some(super::super::protocol::McpTransport::StreamableHttp),
+            url: Some(format!("{base_url}/mcp")),
+            headers: HashMap::new(),
+            auth: Some(McpAuthConfig::OAuth {
+                client_id: None,
+                client_secret: None,
+                scopes: vec!["files:read".to_string()],
+                authorization_url: None,
+                token_url: None,
+                resource_metadata_url: None,
+                authorization_server_metadata_url: None,
+                redirect_uri: None,
+            }),
+            shared: true,
+        };
+        save_tokens(
+            "figma-refresh",
+            &McpOAuthTokens {
+                access_token: "old-access".to_string(),
+                refresh_token: Some("old-refresh".to_string()),
+                expires_at: chrono::Utc::now().timestamp_millis() - 1_000,
+                scopes: vec!["files:read".to_string()],
+                client_id: Some("stored-client".to_string()),
+                client_secret: Some("stored-secret".to_string()),
+            },
+        )
+        .unwrap();
+
+        let access_token = load_or_refresh_access_token("figma-refresh", &config)
+            .await
+            .unwrap();
+        assert_eq!(access_token, "new-access");
+
+        let loaded = load_tokens("figma-refresh").unwrap();
+        assert_eq!(loaded.access_token, "new-access");
+        assert_eq!(loaded.refresh_token.as_deref(), Some("old-refresh"));
+        assert_eq!(loaded.client_id.as_deref(), Some("stored-client"));
+        assert_eq!(loaded.client_secret.as_deref(), Some("stored-secret"));
+        assert_eq!(loaded.scopes, vec!["files:read", "comments:read"]);
+        assert!(!seen_form.lock().unwrap().is_empty());
+
+        server.await.unwrap();
+        let paths = seen_paths.lock().unwrap();
+        assert_eq!(paths.len(), 3);
+        assert!(paths[0].starts_with("GET /.well-known/oauth-protected-resource "));
+        assert!(paths[1].starts_with("GET /.well-known/oauth-authorization-server "));
+        assert!(paths[2].starts_with("POST /token "));
     }
 }
