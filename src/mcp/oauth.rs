@@ -25,7 +25,7 @@ impl McpOAuthTokens {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpOAuthEndpoints {
     pub authorization_url: String,
     pub token_url: String,
@@ -46,10 +46,21 @@ struct AuthorizationServerMetadata {
     registration_endpoint: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct McpOAuthClientCredentials {
     client_id: String,
     client_secret: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct McpOAuthPendingLogin {
+    verifier: String,
+    state: String,
+    redirect_uri: String,
+    endpoints: McpOAuthEndpoints,
+    client_credentials: McpOAuthClientCredentials,
+    scopes: Vec<String>,
+    auth_url: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -71,7 +82,19 @@ struct TokenResponse {
 }
 
 pub fn tokens_path(server_name: &str) -> Result<std::path::PathBuf> {
-    let safe_name: String = server_name
+    Ok(crate::storage::jcode_dir()?
+        .join("mcp_oauth")
+        .join(format!("{}.json", safe_server_name(server_name))))
+}
+
+fn pending_login_path(server_name: &str) -> Result<std::path::PathBuf> {
+    Ok(crate::storage::jcode_dir()?
+        .join("mcp_oauth")
+        .join(format!("{}.pending.json", safe_server_name(server_name))))
+}
+
+fn safe_server_name(server_name: &str) -> String {
+    server_name
         .chars()
         .map(|ch| {
             if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
@@ -80,10 +103,7 @@ pub fn tokens_path(server_name: &str) -> Result<std::path::PathBuf> {
                 '_'
             }
         })
-        .collect();
-    Ok(crate::storage::jcode_dir()?
-        .join("mcp_oauth")
-        .join(format!("{safe_name}.json")))
+        .collect()
 }
 
 pub fn load_tokens(server_name: &str) -> Result<McpOAuthTokens> {
@@ -101,6 +121,32 @@ pub fn load_tokens(server_name: &str) -> Result<McpOAuthTokens> {
 pub fn save_tokens(server_name: &str, tokens: &McpOAuthTokens) -> Result<()> {
     let path = tokens_path(server_name)?;
     crate::storage::write_json_secret(&path, tokens)
+}
+
+fn save_pending_login(server_name: &str, pending: &McpOAuthPendingLogin) -> Result<()> {
+    crate::storage::write_json_secret(&pending_login_path(server_name)?, pending)
+}
+
+fn load_pending_login(server_name: &str) -> Result<McpOAuthPendingLogin> {
+    let path = pending_login_path(server_name)?;
+    if !path.exists() {
+        anyhow::bail!(
+            "No pending MCP OAuth login found for '{server_name}'. Start with mcp action=\"login\" first."
+        );
+    }
+    crate::storage::harden_secret_file_permissions(&path);
+    crate::storage::read_json(&path).with_context(|| {
+        format!(
+            "Failed to read pending MCP OAuth login from {}",
+            path.display()
+        )
+    })
+}
+
+fn remove_pending_login(server_name: &str) {
+    if let Ok(path) = pending_login_path(server_name) {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 fn oauth_config(config: &McpServerConfig) -> Result<&McpAuthConfig> {
@@ -299,6 +345,19 @@ pub async fn login(
         &challenge,
         &state,
     )?;
+    let (_configured_client_id, _client_secret, scopes, _configured_redirect_uri) =
+        oauth_fields(config)?;
+    let pending = McpOAuthPendingLogin {
+        verifier: verifier.clone(),
+        state: state.clone(),
+        redirect_uri: redirect_uri.clone(),
+        endpoints: endpoints.clone(),
+        client_credentials: client_credentials.clone(),
+        scopes: scopes.to_vec(),
+        auth_url: auth_url.clone(),
+    };
+    save_pending_login(server_name, &pending)?;
+
     eprintln!("\nOpen this MCP OAuth URL for '{server_name}':\n\n{auth_url}\n");
     let browser_opened = if crate::auth::browser_suppressed(no_browser) {
         false
@@ -315,8 +374,12 @@ pub async fn login(
             .await
             {
                 Ok(Ok(code)) => code,
-                Ok(Err(err)) => anyhow::bail!("MCP OAuth callback failed: {err}"),
-                Err(_) => anyhow::bail!("Timed out waiting for MCP OAuth callback"),
+                Ok(Err(err)) => anyhow::bail!(
+                    "MCP OAuth callback failed: {err}. Pending login saved; paste the full callback URL with mcp action=\"login\", server=\"{server_name}\", callback_url=\"...\"."
+                ),
+                Err(_) => anyhow::bail!(
+                    "Timed out waiting for MCP OAuth callback. Pending login saved; paste the full callback URL with mcp action=\"login\", server=\"{server_name}\", callback_url=\"...\"."
+                ),
             }
         } else {
             anyhow::bail!(
@@ -325,7 +388,7 @@ pub async fn login(
         }
     } else {
         anyhow::bail!(
-            "Browser launch suppressed or failed. Use the printed URL in a browser, then rerun with a supported local redirect flow."
+            "Browser launch suppressed or failed. Pending login saved; open the printed URL in a browser, then paste the full callback URL with mcp action=\"login\", server=\"{server_name}\", callback_url=\"...\"."
         )
     };
 
@@ -339,6 +402,33 @@ pub async fn login(
     )
     .await?;
     save_tokens(server_name, &tokens)?;
+    remove_pending_login(server_name);
+    Ok(tokens)
+}
+
+pub async fn complete_pending_login(
+    server_name: &str,
+    callback_input: &str,
+) -> Result<McpOAuthTokens> {
+    let pending = load_pending_login(server_name)?;
+    let (code, callback_state) =
+        crate::auth::oauth::parse_callback_input_with_state(callback_input)?;
+    if callback_state != pending.state {
+        anyhow::bail!(
+            "MCP OAuth state mismatch. Start login again and use the latest callback URL."
+        );
+    }
+    let tokens = exchange_code_with_scopes(
+        &pending.endpoints,
+        &pending.client_credentials,
+        &pending.verifier,
+        &code,
+        &pending.redirect_uri,
+        &pending.scopes,
+    )
+    .await?;
+    save_tokens(server_name, &tokens)?;
+    remove_pending_login(server_name);
     Ok(tokens)
 }
 
@@ -351,6 +441,25 @@ async fn exchange_code(
     redirect_uri: &str,
 ) -> Result<McpOAuthTokens> {
     let (_client_id, _client_secret, scopes, _redirect_uri) = oauth_fields(config)?;
+    exchange_code_with_scopes(
+        endpoints,
+        client_credentials,
+        verifier,
+        code,
+        redirect_uri,
+        scopes,
+    )
+    .await
+}
+
+async fn exchange_code_with_scopes(
+    endpoints: &McpOAuthEndpoints,
+    client_credentials: &McpOAuthClientCredentials,
+    verifier: &str,
+    code: &str,
+    redirect_uri: &str,
+    scopes: &[String],
+) -> Result<McpOAuthTokens> {
     let mut form = vec![
         ("grant_type", "authorization_code".to_string()),
         ("client_id", client_credentials.client_id.clone()),
@@ -810,5 +919,79 @@ mod tests {
         assert!(paths[0].starts_with("GET /.well-known/oauth-protected-resource "));
         assert!(paths[1].starts_with("GET /.well-known/oauth-authorization-server "));
         assert!(paths[2].starts_with("POST /token "));
+    }
+
+    #[tokio::test]
+    async fn m44_mcp_oauth_completes_pending_login_from_callback_url() {
+        let _env_lock = crate::storage::lock_test_env();
+        let home = tempfile::tempdir().expect("home tempdir");
+        let _home_guard = EnvVarGuard::set_path("JCODE_HOME", home.path());
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let seen_form = Arc::new(StdMutex::new(String::new()));
+        let seen_form_server = Arc::clone(&seen_form);
+
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let (headers, body) = read_http_request(&mut stream).await.unwrap();
+            let request_line = headers.lines().next().unwrap_or_default().to_string();
+            assert!(request_line.starts_with("POST /token "));
+            let form = String::from_utf8(body).unwrap();
+            *seen_form_server.lock().unwrap() = form.clone();
+            assert!(form.contains("grant_type=authorization_code"));
+            assert!(form.contains("client_id=pending-client"));
+            assert!(form.contains("client_secret=pending-secret"));
+            assert!(form.contains("code=callback-code"));
+            assert!(form.contains("code_verifier=pending-verifier"));
+            write_json_response(
+                &mut stream,
+                serde_json::json!({
+                    "access_token": "pending-access",
+                    "refresh_token": "pending-refresh",
+                    "expires_in": 3600,
+                    "scope": "files:read"
+                }),
+            )
+            .await
+            .unwrap();
+        });
+
+        save_pending_login(
+            "figma-pending",
+            &McpOAuthPendingLogin {
+                verifier: "pending-verifier".to_string(),
+                state: "expected-state".to_string(),
+                redirect_uri: "http://127.0.0.1:7777".to_string(),
+                endpoints: McpOAuthEndpoints {
+                    authorization_url: format!("{base_url}/authorize"),
+                    token_url: format!("{base_url}/token"),
+                    registration_url: None,
+                },
+                client_credentials: McpOAuthClientCredentials {
+                    client_id: "pending-client".to_string(),
+                    client_secret: Some("pending-secret".to_string()),
+                },
+                scopes: vec!["files:read".to_string()],
+                auth_url: format!("{base_url}/authorize"),
+            },
+        )
+        .unwrap();
+
+        let tokens = complete_pending_login(
+            "figma-pending",
+            "http://127.0.0.1:7777/?code=callback-code&state=expected-state",
+        )
+        .await
+        .unwrap();
+        assert_eq!(tokens.access_token, "pending-access");
+        assert_eq!(tokens.refresh_token.as_deref(), Some("pending-refresh"));
+
+        let loaded = load_tokens("figma-pending").unwrap();
+        assert_eq!(loaded.access_token, "pending-access");
+        assert_eq!(loaded.client_id.as_deref(), Some("pending-client"));
+        assert!(!pending_login_path("figma-pending").unwrap().exists());
+        assert!(!seen_form.lock().unwrap().is_empty());
+        server.await.unwrap();
     }
 }

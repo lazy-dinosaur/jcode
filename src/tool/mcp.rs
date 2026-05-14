@@ -23,6 +23,8 @@ struct McpToolInput {
     env: Option<HashMap<String, String>>,
     #[serde(default)]
     no_browser: bool,
+    #[serde(default)]
+    callback_url: Option<String>,
 }
 
 pub struct McpManagementTool {
@@ -85,6 +87,10 @@ impl Tool for McpManagementTool {
                 "no_browser": {
                     "type": "boolean",
                     "description": "Print auth URL without opening a browser for OAuth login."
+                },
+                "callback_url": {
+                    "type": "string",
+                    "description": "For MCP OAuth login, paste the full callback URL or query string from a previously started no-browser login to finish the pending login."
                 }
             },
             "required": ["action"]
@@ -365,17 +371,34 @@ impl McpManagementTool {
             .get(&server_name)
             .ok_or_else(|| anyhow::anyhow!("MCP server '{}' not found in config", server_name))?;
 
-        match crate::mcp::oauth::login(&server_name, server_config, params.no_browser).await {
+        let result = if let Some(callback_url) = params.callback_url.as_deref() {
+            crate::mcp::oauth::complete_pending_login(&server_name, callback_url).await
+        } else {
+            crate::mcp::oauth::login(&server_name, server_config, params.no_browser).await
+        };
+
+        match result {
             Ok(tokens) => Ok(ToolOutput::new(format!(
                 "Logged in to MCP server '{}'. Token expires at {}. Use {{\"action\": \"reload\"}} to reconnect with OAuth.",
                 server_name, tokens.expires_at
             ))
             .with_title(format!("MCP: OAuth login {}", server_name))),
-            Err(err) => Ok(ToolOutput::new(format!(
-                "Failed to login to MCP server '{}': {}",
-                server_name, err
-            ))
-            .with_title("MCP: OAuth login failed")),
+            Err(err) => {
+                let message = err.to_string();
+                if message.contains("Pending login saved") {
+                    Ok(ToolOutput::new(format!(
+                        "MCP OAuth login for '{}' is pending. {}",
+                        server_name, message
+                    ))
+                    .with_title("MCP: OAuth login pending"))
+                } else {
+                    Ok(ToolOutput::new(format!(
+                        "Failed to login to MCP server '{}': {}",
+                        server_name, message
+                    ))
+                    .with_title("MCP: OAuth login failed"))
+                }
+            }
         }
     }
 }
