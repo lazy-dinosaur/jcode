@@ -78,6 +78,7 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     RegisteredCommand::public("/memory", "Toggle memory feature"),
     RegisteredCommand::public("/goals", "Open goals overview / resume tracked goals"),
     RegisteredCommand::public("/swarm", "Toggle swarm feature"),
+    RegisteredCommand::public("/swarm-now", "Spawn a one-shot swarm worker immediately"),
     RegisteredCommand::public("/overnight", "Run a supervised overnight coordinator"),
     RegisteredCommand::public("/context", "Show the full session context snapshot"),
     RegisteredCommand::public("/version", "Show current version"),
@@ -888,6 +889,13 @@ impl App {
                     ("/swarm status".into(), "Show swarm feature status"),
                 ],
             );
+        }
+
+        if prefix_trimmed == "/swarm-now" {
+            return vec![(
+                "/swarm-now ".into(),
+                "Spawn a swarm worker with a prompt immediately",
+            )];
         }
 
         if prefix.starts_with("/overnight ") {

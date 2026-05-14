@@ -888,6 +888,125 @@ fn handle_btw_command(app: &mut App, trimmed: &str) -> bool {
     true
 }
 
+fn handle_swarm_now_command(app: &mut App, trimmed: &str) -> bool {
+    if trimmed != "/swarm-now" && !trimmed.starts_with("/swarm-now ") {
+        return false;
+    }
+    let prompt = trimmed
+        .strip_prefix("/swarm-now")
+        .unwrap_or_default()
+        .trim();
+    if prompt.is_empty() {
+        app.push_display_message(DisplayMessage::error(
+            "Usage: `/swarm-now <prompt>`".to_string(),
+        ));
+        return true;
+    }
+
+    let tool_call = crate::message::ToolCall {
+        id: id::new_id("call"),
+        name: "swarm".to_string(),
+        input: serde_json::json!({
+            "action": "spawn",
+            "prompt": prompt,
+            "command": "/swarm-now",
+        }),
+        intent: None,
+    };
+
+    app.push_display_message(DisplayMessage::system(format!(
+        "→ spawning swarm worker for: {}",
+        crate::util::truncate_str(prompt, 80)
+    )));
+    app.push_display_message(DisplayMessage {
+        role: "tool".to_string(),
+        content: tool_call.name.clone(),
+        tool_calls: vec![],
+        duration_secs: None,
+        title: None,
+        tool_data: Some(tool_call.clone()),
+    });
+
+    let content_blocks = vec![ContentBlock::ToolUse {
+        id: tool_call.id.clone(),
+        name: tool_call.name.clone(),
+        input: tool_call.input.clone(),
+    }];
+    app.add_provider_message(Message {
+        role: Role::Assistant,
+        content: content_blocks.clone(),
+        timestamp: Some(chrono::Utc::now()),
+        tool_duration_ms: None,
+    });
+    let message_id = app.session.add_message(Role::Assistant, content_blocks);
+    let _ = app.session.save();
+    app.set_status_notice("Spawning swarm worker");
+
+    let registry = app.registry.clone();
+    let session_id = app.session.id.clone();
+    let working_dir = app.session.working_dir.clone();
+    let tool_call_for_task = tool_call.clone();
+    tokio::spawn(async move {
+        Bus::global().publish(BusEvent::ToolUpdated(ToolEvent {
+            session_id: session_id.clone(),
+            message_id: message_id.clone(),
+            tool_call_id: tool_call_for_task.id.clone(),
+            tool_name: tool_call_for_task.name.clone(),
+            status: ToolStatus::Running,
+            title: None,
+        }));
+
+        let ctx = crate::tool::ToolContext {
+            session_id: session_id.clone(),
+            message_id: message_id.clone(),
+            tool_call_id: tool_call_for_task.id.clone(),
+            working_dir: working_dir.as_deref().map(PathBuf::from),
+            stdin_request_tx: None,
+            graceful_shutdown_signal: None,
+            execution_mode: crate::tool::ToolExecutionMode::Direct,
+        };
+
+        let start = Instant::now();
+        let result = registry
+            .execute(
+                &tool_call_for_task.name,
+                tool_call_for_task.input.clone(),
+                ctx,
+            )
+            .await;
+        let duration_ms = start.elapsed().as_millis() as u64;
+        let (output, is_error, title, status) = match result {
+            Ok(output) => {
+                crate::telemetry::record_tool_call();
+                (output.output, false, output.title, ToolStatus::Completed)
+            }
+            Err(error) => {
+                crate::telemetry::record_tool_failure();
+                (format!("Error: {}", error), true, None, ToolStatus::Error)
+            }
+        };
+
+        Bus::global().publish(BusEvent::ToolUpdated(ToolEvent {
+            session_id: session_id.clone(),
+            message_id,
+            tool_call_id: tool_call_for_task.id.clone(),
+            tool_name: tool_call_for_task.name.clone(),
+            status,
+            title: title.clone(),
+        }));
+        Bus::global().publish(BusEvent::ManualToolCompleted(ManualToolCompleted {
+            session_id,
+            tool_call: tool_call_for_task,
+            output,
+            is_error,
+            title,
+            duration_ms,
+        }));
+    });
+
+    true
+}
+
 fn load_catchup_candidates(app: &App) -> Vec<crate::tui::session_picker::SessionInfo> {
     let current_session_id = active_session_id(app);
     crate::tui::session_picker::load_sessions()
@@ -1180,6 +1299,7 @@ pub(super) fn handle_session_command(app: &mut App, trimmed: &str) -> bool {
         || super::commands_overnight::handle_overnight_command(app, trimmed)
         || super::split_view::handle_split_view_command(app, trimmed)
         || handle_btw_command(app, trimmed)
+        || handle_swarm_now_command(app, trimmed)
         || handle_transcript_command(app, trimmed)
         || handle_git_command(app, trimmed)
         || handle_catchup_command(app, trimmed)

@@ -1,8 +1,8 @@
 use super::client_actions::{
     AgentTaskContext, NotifySessionContext, handle_agent_task, handle_compact, handle_input_shell,
-    handle_notify_session, handle_rename_session, handle_run_subagent, handle_set_feature,
-    handle_set_subagent_model, handle_split, handle_stdin_response, handle_transfer,
-    handle_trigger_memory_extraction,
+    handle_notify_session, handle_rename_session, handle_run_subagent, handle_run_swarm_now,
+    handle_set_feature, handle_set_subagent_model, handle_split, handle_stdin_response,
+    handle_transfer, handle_trigger_memory_extraction,
 };
 use super::client_comm::{
     handle_comm_channel_members, handle_comm_list, handle_comm_list_channels, handle_comm_message,
@@ -1997,6 +1997,10 @@ pub(super) async fn handle_client(
                     &agent,
                     &client_event_tx,
                 );
+            }
+
+            Request::RunSwarmNow { id, prompt } => {
+                handle_run_swarm_now(id, prompt, &agent, &client_event_tx);
             }
 
             Request::SetReasoningEffort { id, effort } => {

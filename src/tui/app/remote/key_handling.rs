@@ -1465,6 +1465,26 @@ async fn handle_remote_key_internal(
                     return Ok(());
                 }
 
+                if trimmed == "/swarm-now" || trimmed.starts_with("/swarm-now ") {
+                    let prompt = trimmed
+                        .strip_prefix("/swarm-now")
+                        .unwrap_or_default()
+                        .trim();
+                    if prompt.is_empty() {
+                        app.push_display_message(DisplayMessage::error(
+                            "Usage: `/swarm-now <prompt>`".to_string(),
+                        ));
+                        return Ok(());
+                    }
+                    remote.run_swarm_now(prompt.to_string()).await?;
+                    app.push_display_message(DisplayMessage::system(format!(
+                        "→ spawning swarm worker for: {}",
+                        crate::util::truncate_str(prompt, 80)
+                    )));
+                    app.set_status_notice("Spawning swarm worker");
+                    return Ok(());
+                }
+
                 if trimmed == "/swarm" || trimmed == "/swarm status" {
                     let default_enabled = crate::config::config().features.swarm;
                     app.push_display_message(DisplayMessage::system(format!(

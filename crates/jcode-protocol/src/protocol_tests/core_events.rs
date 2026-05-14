@@ -169,6 +169,25 @@ fn test_rename_session_clear_request_roundtrip_omits_title() -> Result<()> {
 }
 
 #[test]
+fn test_run_swarm_now_request_roundtrip() -> Result<()> {
+    let req = Request::RunSwarmNow {
+        id: 17,
+        prompt: "grep the docs while main turn continues".to_string(),
+    };
+    let json = serde_json::to_string(&req)?;
+    assert!(json.contains("\"type\":\"run_swarm_now\""));
+    assert!(json.contains("grep the docs"));
+
+    let decoded = parse_request_json(&json)?;
+    assert_eq!(decoded.id(), 17);
+    let Request::RunSwarmNow { prompt, .. } = decoded else {
+        return Err(anyhow!("wrong request type"));
+    };
+    assert_eq!(prompt, "grep the docs while main turn continues");
+    Ok(())
+}
+
+#[test]
 fn test_event_roundtrip() -> Result<()> {
     let event = ServerEvent::TextDelta {
         text: "hello".to_string(),

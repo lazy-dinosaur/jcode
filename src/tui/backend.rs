@@ -563,6 +563,16 @@ impl RemoteConnection {
         self.send_request(request).await
     }
 
+    /// Spawn a swarm worker immediately with the supplied prompt.
+    pub async fn run_swarm_now(&mut self, prompt: String) -> Result<()> {
+        let request = Request::RunSwarmNow {
+            id: self.next_request_id,
+            prompt,
+        };
+        self.next_request_id += 1;
+        self.send_request(request).await
+    }
+
     /// Set Copilot premium request conservation mode on the server
     pub async fn set_premium_mode(&mut self, mode: u8) -> Result<()> {
         let request = Request::SetPremiumMode {

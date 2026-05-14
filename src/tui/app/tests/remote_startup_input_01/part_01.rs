@@ -581,6 +581,9 @@ fn test_subagent_command_suggestions_include_manual_launch_and_model_policy() {
 
     let autojudge = app.get_suggestions_for("/autojudge");
     assert!(autojudge.iter().any(|(cmd, _)| cmd == "/autojudge status"));
+
+    let swarm_now = app.get_suggestions_for("/swarm-now");
+    assert!(swarm_now.iter().any(|(cmd, _)| cmd == "/swarm-now "));
 }
 
 fn configure_test_remote_models_with_copilot(app: &mut App) {

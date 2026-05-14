@@ -338,6 +338,10 @@ pub enum Request {
         session_id: Option<String>,
     },
 
+    /// Spawn a swarm worker immediately with an initial prompt, without queueing a normal turn.
+    #[serde(rename = "run_swarm_now")]
+    RunSwarmNow { id: u64, prompt: String },
+
     /// Set reasoning effort for OpenAI models (none|low|medium|high|xhigh)
     #[serde(rename = "set_reasoning_effort")]
     SetReasoningEffort { id: u64, effort: String },
@@ -2127,6 +2131,7 @@ impl Request {
             Request::SetSubagentModel { id, .. } => *id,
             Request::ActivateSkill { id, .. } => *id,
             Request::RunSubagent { id, .. } => *id,
+            Request::RunSwarmNow { id, .. } => *id,
             Request::SetReasoningEffort { id, .. } => *id,
             Request::SetServiceTier { id, .. } => *id,
             Request::SetTransport { id, .. } => *id,
