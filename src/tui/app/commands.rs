@@ -1302,6 +1302,7 @@ pub(super) fn handle_session_command(app: &mut App, trimmed: &str) -> bool {
         || handle_swarm_now_command(app, trimmed)
         || handle_transcript_command(app, trimmed)
         || handle_git_command(app, trimmed)
+        || handle_cwd_command(app, trimmed)
         || handle_catchup_command(app, trimmed)
         || handle_back_command(app, trimmed)
         || handle_autoreview_command_local(app, trimmed)
@@ -1692,6 +1693,76 @@ pub(super) fn handle_session_command(app: &mut App, trimmed: &str) -> bool {
     }
 
     false
+}
+
+fn set_session_working_dir(app: &mut App, dir: std::path::PathBuf) -> Result<(), String> {
+    app.session.working_dir = Some(dir.display().to_string());
+    app.session.refresh_initial_session_context_message();
+    app.session.updated_at = chrono::Utc::now();
+    app.session
+        .save()
+        .map_err(|error| format!("failed to save session: {}", error))?;
+    let working_dir = app.session.working_dir.as_deref().map(std::path::Path::new);
+    let reloaded =
+        crate::project_commands::ProjectCommandRegistry::load_for_working_dir(working_dir);
+    app.project_commands = std::sync::Arc::new(reloaded.clone());
+    if let Ok(mut shared) =
+        crate::project_commands::ProjectCommandRegistry::shared_registry().try_write()
+    {
+        *shared = reloaded;
+    }
+    crate::tui::session_picker::invalidate_session_list_cache();
+    Ok(())
+}
+
+fn handle_cwd_command(app: &mut App, trimmed: &str) -> bool {
+    let Some(command) = crate::cwd::parse_cwd_command(trimmed) else {
+        return false;
+    };
+
+    if app.is_remote {
+        app.push_display_message(DisplayMessage::error(
+            "`/cwd` is currently available only in local sessions. Remote sessions need server-side cwd synchronization before switching safely.".to_string(),
+        ));
+        return true;
+    }
+
+    let command = match command {
+        Ok(command) => command,
+        Err(error) => {
+            app.push_display_message(DisplayMessage::error(error));
+            return true;
+        }
+    };
+
+    match command {
+        crate::cwd::CwdCommand::Show => {
+            app.push_display_message(DisplayMessage::system(crate::cwd::format_cwd(
+                active_working_dir(app).as_deref(),
+            )));
+            app.set_status_notice("Session cwd");
+        }
+        crate::cwd::CwdCommand::Set { path } => {
+            match crate::cwd::resolve_cwd_path(active_working_dir(app).as_deref(), &path) {
+                Ok(dir) => match set_session_working_dir(app, dir.clone()) {
+                    Ok(()) => {
+                        app.push_display_message(DisplayMessage::system(format!(
+                            "✓ Session cwd switched to `{}`. Conversation context was preserved.",
+                            dir.display()
+                        )));
+                        app.set_status_notice("Cwd switched");
+                    }
+                    Err(error) => app.push_display_message(DisplayMessage::error(error)),
+                },
+                Err(error) => app.push_display_message(DisplayMessage::error(format!(
+                    "Failed to switch cwd: {}",
+                    error
+                ))),
+            }
+        }
+    }
+
+    true
 }
 
 fn handle_selfdev_command(app: &mut App, trimmed: &str) -> bool {

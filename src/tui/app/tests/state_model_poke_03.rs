@@ -2140,3 +2140,40 @@ fn test_overnight_start_queues_remote_turn_without_stuck_sending() {
         assert!(app.queued_messages[0].contains("visible Overnight Coordinator"));
     });
 }
+
+#[test]
+fn test_cwd_command_updates_session_working_dir_and_preserves_context() {
+    with_temp_jcode_home(|| {
+        let current = tempfile::tempdir().expect("current dir");
+        let next = tempfile::tempdir().expect("next dir");
+        let next = next.path().canonicalize().expect("canonical next");
+        let mut app = create_test_app();
+        app.session.working_dir = Some(current.path().display().to_string());
+
+        assert!(super::commands::handle_session_command(
+            &mut app,
+            &format!("/cwd {}", next.display())
+        ));
+
+        assert_eq!(app.session.working_dir.as_deref(), Some(next.to_str().unwrap()));
+        let msg = app.display_messages().last().expect("missing switch message");
+        assert_eq!(msg.role, "system");
+        assert!(msg.content.contains("Session cwd switched"));
+        assert!(msg.content.contains("Conversation context was preserved"));
+    });
+}
+
+#[test]
+fn test_cwd_command_rejects_remote_sessions() {
+    let mut app = create_test_app();
+    app.is_remote = true;
+
+    assert!(super::commands::handle_session_command(
+        &mut app,
+        "/cwd /tmp"
+    ));
+
+    let msg = app.display_messages().last().expect("missing remote error");
+    assert_eq!(msg.role, "error");
+    assert!(msg.content.contains("local sessions"));
+}
