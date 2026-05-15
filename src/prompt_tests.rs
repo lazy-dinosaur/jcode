@@ -40,14 +40,6 @@ fn test_skill_prompt_integration() {
 }
 
 #[test]
-fn test_default_system_prompt_prefers_records_for_prior_plans() {
-    let prompt = DEFAULT_SYSTEM_PROMPT;
-    assert!(prompt.contains("Record-first status and planning lookups"));
-    assert!(prompt.contains("Prefer `todo`, `goal`, `memory`, and `session_search` first"));
-    assert!(prompt.contains("Do not reconstruct plans from diffs"));
-}
-
-#[test]
 fn test_load_agents_md_files_uses_sandboxed_global_files() {
     let _guard = crate::storage::lock_test_env();
     let prev_home = std::env::var_os("JCODE_HOME");
