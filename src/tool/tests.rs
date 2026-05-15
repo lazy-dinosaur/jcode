@@ -157,14 +157,14 @@ fn test_resolve_tool_name_oauth_aliases() {
 async fn test_batch_resolves_oauth_names() {
     let provider: Arc<dyn Provider> = Arc::new(MockProvider);
     let registry = Registry::new(provider).await;
-    let temp_dir = std::env::temp_dir();
-    let temp_dir_str = temp_dir.to_string_lossy().to_string();
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let temp_dir_str = temp_dir.path().to_string_lossy().to_string();
 
     let ctx = ToolContext {
         session_id: "test".to_string(),
         message_id: "test".to_string(),
         tool_call_id: "test".to_string(),
-        working_dir: Some(temp_dir),
+        working_dir: Some(temp_dir.path().to_path_buf()),
         stdin_request_tx: None,
         graceful_shutdown_signal: None,
         execution_mode: ToolExecutionMode::Direct,

@@ -229,6 +229,17 @@ impl SelfDevTool {
         .await;
 
         loop {
+            if let Some(attached) = BuildRequest::load(&request_id)?
+                && attached.state == BuildRequestState::Cancelled
+            {
+                let error = attached
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "Cancelled by user".to_string());
+                Self::append_output_line(&mut file, &error).await;
+                return Ok(TaskResult::failed(None, error));
+            }
+
             let Some(original) = BuildRequest::load(&original_request_id)? else {
                 anyhow::bail!("Original build request {} disappeared", original_request_id);
             };
@@ -834,8 +845,14 @@ impl SelfDevTool {
             )));
         }
 
-        let cancelled_task = if let Some(task_id) = request.background_task_id.as_deref() {
-            background::global().cancel(task_id).await?
+        let is_attached_watcher = request.attached_to_request_id.is_some()
+            || request.state == BuildRequestState::Attached;
+        let cancelled_task = if !is_attached_watcher {
+            if let Some(task_id) = request.background_task_id.as_deref() {
+                background::global().cancel(task_id).await?
+            } else {
+                false
+            }
         } else {
             false
         };
