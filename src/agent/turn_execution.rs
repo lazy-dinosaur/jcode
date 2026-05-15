@@ -531,9 +531,11 @@ impl Agent {
     pub fn add_manual_tool_result(
         &mut self,
         tool_call_id: String,
+        tool_name: String,
         output: crate::tool::ToolOutput,
         duration_ms: u64,
     ) -> Result<()> {
+        self.apply_tool_output_side_effects(&tool_name, &output)?;
         let blocks = tool_output_to_content_blocks(tool_call_id, output);
         self.add_message_with_duration(Role::User, blocks, Some(duration_ms));
         self.session.save()?;

@@ -746,7 +746,7 @@ impl Tool for CommunicateTool {
     }
 
     fn description(&self) -> &str {
-        "Coordinate agents. For spawn, prefer providing a prompt so the new agent starts with a concrete task instead of idling. Spawned/assigned agents automatically report their final response back to the owning coordinator."
+        "Coordinate agents. For spawn, prefer providing a prompt so the new agent starts with a concrete task instead of idling. Use action='spawn_now' as the LLM/tool equivalent of the TUI `/swarm-now <prompt>` command. Spawned/assigned agents automatically report their final response back to the owning coordinator."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -758,11 +758,11 @@ impl Tool for CommunicateTool {
                 "action": {
                     "type": "string",
                     "enum": ["share", "share_append", "read", "message", "broadcast", "dm", "channel", "list", "list_channels", "channel_members",
-                             "propose_plan", "approve_plan", "reject_plan", "spawn", "stop", "assign_role",
+                             "propose_plan", "approve_plan", "reject_plan", "spawn", "spawn_now", "swarm_now", "stop", "assign_role",
                              "status", "report", "plan_status", "summary", "read_context", "resync_plan", "assign_task", "assign_next", "fill_slots", "run_plan", "cleanup",
                              "start", "start_task", "wake", "resume", "retry", "reassign", "replace", "salvage",
                              "subscribe_channel", "unsubscribe_channel", "await_members"],
-                    "description": "Action. For spawn, prefer including prompt with the initial task so the new agent starts useful work immediately."
+                    "description": "Action. For spawn, prefer including prompt with the initial task so the new agent starts useful work immediately. action=spawn_now/swarm_now is the LLM/tool equivalent of `/swarm-now <prompt>` and requires prompt or initial_message."
                 },
                 "key": {
                     "type": "string"
@@ -1187,7 +1187,15 @@ impl Tool for CommunicateTool {
                 }
             }
 
-            "spawn" => {
+            "spawn" | "spawn_now" | "swarm_now" => {
+                if matches!(params.action.as_str(), "spawn_now" | "swarm_now")
+                    && params.spawn_initial_message().is_none()
+                {
+                    return Err(anyhow::anyhow!(
+                        "'prompt' or 'initial_message' is required for action={}",
+                        params.action
+                    ));
+                }
                 let request = Request::CommSpawn {
                     id: REQUEST_ID,
                     session_id: ctx.session_id.clone(),
@@ -1197,8 +1205,13 @@ impl Tool for CommunicateTool {
                     run_id: params.run_id.clone(),
                 };
 
-                match send_spawn_request_with_coordinator_retry(&ctx, request, "spawn agent").await
-                {
+                let operation = if matches!(params.action.as_str(), "spawn_now" | "swarm_now") {
+                    "spawn swarm-now agent"
+                } else {
+                    "spawn agent"
+                };
+
+                match send_spawn_request_with_coordinator_retry(&ctx, request, operation).await {
                     Ok(ServerEvent::CommSpawnResponse {
                         new_session_id,
                         active_count,

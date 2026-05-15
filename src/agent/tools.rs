@@ -65,6 +65,41 @@ pub(super) fn print_tool_summary(tool: &ToolCall) {
 }
 
 impl Agent {
+    pub(super) fn apply_tool_output_side_effects(
+        &mut self,
+        tool_name: &str,
+        output: &ToolOutput,
+    ) -> anyhow::Result<()> {
+        if !matches!(tool_name, "cwd" | "pwd" | "cd") {
+            return Ok(());
+        }
+
+        let Some(session_cwd) = output
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("session_cwd"))
+        else {
+            return Ok(());
+        };
+        let Some(working_dir) = session_cwd
+            .get("working_dir")
+            .and_then(|value| value.as_str())
+        else {
+            return Ok(());
+        };
+
+        self.set_working_dir_and_save(working_dir)?;
+        if session_cwd
+            .get("refresh_skills")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false)
+        {
+            let _ = self.refresh_skills_for_working_dir()?;
+        }
+        crate::tui::session_picker::invalidate_session_list_cache();
+        Ok(())
+    }
+
     pub(super) fn inject_nested_instructions_for_tool_calls(
         &mut self,
         tool_calls: &[ToolCall],

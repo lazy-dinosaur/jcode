@@ -385,13 +385,18 @@ pub(super) fn handle_run_subagent(
                 let output_text = output.output.clone();
                 let _ = tx.send(ServerEvent::ToolDone {
                     id: tool_call_id.clone(),
-                    name: tool_name,
+                    name: tool_name.clone(),
                     output: output_text,
                     error: None,
                 });
                 let persist = {
                     let mut agent_guard = agent.lock().await;
-                    agent_guard.add_manual_tool_result(tool_call_id, output, duration_ms)
+                    agent_guard.add_manual_tool_result(
+                        tool_call_id,
+                        tool_name.clone(),
+                        output,
+                        duration_ms,
+                    )
                 };
                 if let Err(error) = persist {
                     let _ = tx.send(ServerEvent::Error {
@@ -407,7 +412,7 @@ pub(super) fn handle_run_subagent(
                 let error_msg = format!("Error: {}", error);
                 let _ = tx.send(ServerEvent::ToolDone {
                     id: tool_call_id.clone(),
-                    name: tool_name,
+                    name: tool_name.clone(),
                     output: error_msg.clone(),
                     error: Some(error_msg.clone()),
                 });
@@ -514,13 +519,18 @@ pub(super) fn handle_run_swarm_now(
                 let output_text = output.output.clone();
                 let _ = tx.send(ServerEvent::ToolDone {
                     id: tool_call_id.clone(),
-                    name: tool_name,
+                    name: tool_name.clone(),
                     output: output_text,
                     error: None,
                 });
                 let persist = {
                     let mut agent_guard = agent.lock().await;
-                    agent_guard.add_manual_tool_result(tool_call_id, output, duration_ms)
+                    agent_guard.add_manual_tool_result(
+                        tool_call_id,
+                        tool_name.clone(),
+                        output,
+                        duration_ms,
+                    )
                 };
                 if let Err(error) = persist {
                     let _ = tx.send(ServerEvent::Error {
@@ -536,7 +546,7 @@ pub(super) fn handle_run_swarm_now(
                 let error_msg = format!("Error: {}", error);
                 let _ = tx.send(ServerEvent::ToolDone {
                     id: tool_call_id.clone(),
-                    name: tool_name,
+                    name: tool_name.clone(),
                     output: error_msg.clone(),
                     error: Some(error_msg.clone()),
                 });

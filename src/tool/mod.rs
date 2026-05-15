@@ -9,6 +9,7 @@ mod browser;
 pub(crate) mod codesearch;
 mod communicate;
 mod conversation_search;
+mod cwd_tool;
 mod debug_socket;
 mod edit;
 mod glob;
@@ -145,6 +146,7 @@ impl Registry {
             Self::insert_tool_timed(&mut m, &mut timings, "glob", glob::GlobTool::new);
             Self::insert_tool_timed(&mut m, &mut timings, "grep", grep::GrepTool::new);
             Self::insert_tool_timed(&mut m, &mut timings, "ls", ls::LsTool::new);
+            Self::insert_tool_timed(&mut m, &mut timings, "cwd", cwd_tool::CwdTool::new);
             Self::insert_tool_timed(&mut m, &mut timings, "bash", bash::BashTool::new);
             Self::insert_tool_timed(&mut m, &mut timings, "browser", browser::BrowserTool::new);
             Self::insert_tool_timed(&mut m, &mut timings, "open", open::OpenTool::new);
@@ -319,7 +321,8 @@ impl Registry {
     /// correctly.
     fn resolve_tool_name(name: &str) -> &str {
         match name {
-            "communicate" => "swarm",
+            "communicate" | "swarm_now" => "swarm",
+            "pwd" | "cd" => "cwd",
             "task" | "task_runner" => "subagent",
             "launch" => "open",
             "shell_exec" => "bash",

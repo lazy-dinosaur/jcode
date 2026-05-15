@@ -223,6 +223,18 @@ fn schema_advertises_supported_swarm_fields() {
         schema["properties"]["action"]["enum"]
             .as_array()
             .expect("action enum")
+            .contains(&json!("spawn_now"))
+    );
+    assert!(
+        schema["properties"]["action"]["enum"]
+            .as_array()
+            .expect("action enum")
+            .contains(&json!("swarm_now"))
+    );
+    assert!(
+        schema["properties"]["action"]["enum"]
+            .as_array()
+            .expect("action enum")
             .contains(&json!("status"))
     );
     assert!(

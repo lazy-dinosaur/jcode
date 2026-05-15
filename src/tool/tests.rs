@@ -142,6 +142,8 @@ fn test_resolve_tool_name_oauth_aliases() {
     assert_eq!(Registry::resolve_tool_name("shell_exec"), "bash");
     assert_eq!(Registry::resolve_tool_name("task_runner"), "subagent");
     assert_eq!(Registry::resolve_tool_name("task"), "subagent");
+    assert_eq!(Registry::resolve_tool_name("pwd"), "cwd");
+    assert_eq!(Registry::resolve_tool_name("cd"), "cwd");
     assert_eq!(Registry::resolve_tool_name("launch"), "open");
     assert_eq!(Registry::resolve_tool_name("todo_read"), "todo");
     assert_eq!(Registry::resolve_tool_name("todo_write"), "todo");
@@ -207,6 +209,7 @@ async fn test_definitions_keep_batch_schema_generic() {
 #[test]
 fn resolve_tool_name_maps_communicate_to_swarm() {
     assert_eq!(Registry::resolve_tool_name("communicate"), "swarm");
+    assert_eq!(Registry::resolve_tool_name("swarm_now"), "swarm");
 }
 
 #[tokio::test]
