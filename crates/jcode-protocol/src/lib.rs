@@ -342,6 +342,14 @@ pub enum Request {
     #[serde(rename = "run_swarm_now")]
     RunSwarmNow { id: u64, prompt: String },
 
+    /// Show or change the active session working directory on the server.
+    #[serde(rename = "set_cwd")]
+    SetCwd {
+        id: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+    },
+
     /// Set reasoning effort for OpenAI models (none|low|medium|high|xhigh)
     #[serde(rename = "set_reasoning_effort")]
     SetReasoningEffort { id: u64, effort: String },
@@ -991,6 +999,15 @@ pub enum ServerEvent {
         id: u64,
         name: String,
         description: String,
+    },
+
+    /// Session working directory was shown or changed on the server.
+    #[serde(rename = "session_cwd")]
+    SessionCwd {
+        id: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        working_dir: Option<String>,
+        message: String,
     },
 
     /// Client debug command forwarded from debug socket to TUI
@@ -2132,6 +2149,7 @@ impl Request {
             Request::ActivateSkill { id, .. } => *id,
             Request::RunSubagent { id, .. } => *id,
             Request::RunSwarmNow { id, .. } => *id,
+            Request::SetCwd { id, .. } => *id,
             Request::SetReasoningEffort { id, .. } => *id,
             Request::SetServiceTier { id, .. } => *id,
             Request::SetTransport { id, .. } => *id,

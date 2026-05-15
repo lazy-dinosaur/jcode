@@ -573,6 +573,16 @@ impl RemoteConnection {
         self.send_request(request).await
     }
 
+    /// Show or change the active remote session working directory.
+    pub async fn set_cwd(&mut self, path: Option<String>) -> Result<()> {
+        let request = Request::SetCwd {
+            id: self.next_request_id,
+            path,
+        };
+        self.next_request_id += 1;
+        self.send_request(request).await
+    }
+
     /// Set Copilot premium request conservation mode on the server
     pub async fn set_premium_mode(&mut self, mode: u8) -> Result<()> {
         let request = Request::SetPremiumMode {

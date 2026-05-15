@@ -558,6 +558,59 @@ pub(super) fn handle_run_swarm_now(
     });
 }
 
+pub(super) async fn handle_set_cwd(
+    id: u64,
+    path: Option<String>,
+    agent: &Arc<Mutex<Agent>>,
+    client_event_tx: &mpsc::UnboundedSender<ServerEvent>,
+) {
+    let result = {
+        let mut agent_guard = agent.lock().await;
+        let current = agent_guard.working_dir().map(std::path::PathBuf::from);
+
+        (|| -> anyhow::Result<(Option<String>, String)> {
+            match path {
+                None => Ok((
+                    current.as_ref().map(|dir| dir.display().to_string()),
+                    crate::cwd::format_cwd(current.as_deref()),
+                )),
+                Some(raw) => {
+                    let dir = crate::cwd::resolve_cwd_path(current.as_deref(), &raw)?;
+                    let dir_string = dir.display().to_string();
+                    agent_guard.set_working_dir_and_save(&dir_string)?;
+                    let _ = agent_guard.refresh_skills_for_working_dir()?;
+                    crate::tui::session_picker::invalidate_session_list_cache();
+                    Ok((
+                        Some(dir_string.clone()),
+                        format!(
+                            "✓ Session cwd switched to `{}`. Conversation context was preserved.",
+                            dir_string
+                        ),
+                    ))
+                }
+            }
+        })()
+    };
+
+    match result {
+        Ok((working_dir, message)) => {
+            let _ = client_event_tx.send(ServerEvent::SessionCwd {
+                id,
+                working_dir,
+                message,
+            });
+            let _ = client_event_tx.send(ServerEvent::Done { id });
+        }
+        Err(error) => {
+            let _ = client_event_tx.send(ServerEvent::Error {
+                id,
+                message: format!("Failed to switch cwd: {}", error),
+                retry_after_secs: None,
+            });
+        }
+    }
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "set feature mutates agent state, persistence, swarm/session metadata, and client notifications together"

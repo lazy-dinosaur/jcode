@@ -188,6 +188,49 @@ fn test_run_swarm_now_request_roundtrip() -> Result<()> {
 }
 
 #[test]
+fn test_set_cwd_request_roundtrip() -> Result<()> {
+    let req = Request::SetCwd {
+        id: 18,
+        path: Some("../other".to_string()),
+    };
+    let json = serde_json::to_string(&req)?;
+    assert!(json.contains("\"type\":\"set_cwd\""));
+    assert!(json.contains("../other"));
+
+    let decoded = parse_request_json(&json)?;
+    assert_eq!(decoded.id(), 18);
+    let Request::SetCwd { path, .. } = decoded else {
+        return Err(anyhow!("wrong request type"));
+    };
+    assert_eq!(path.as_deref(), Some("../other"));
+    Ok(())
+}
+
+#[test]
+fn test_session_cwd_event_roundtrip() -> Result<()> {
+    let event = ServerEvent::SessionCwd {
+        id: 19,
+        working_dir: Some("/tmp/example".to_string()),
+        message: "Session cwd: `/tmp/example`".to_string(),
+    };
+    let json = encode_event(&event);
+    assert!(json.contains("\"type\":\"session_cwd\""));
+    let decoded = parse_event_json(json.trim())?;
+    let ServerEvent::SessionCwd {
+        id,
+        working_dir,
+        message,
+    } = decoded
+    else {
+        return Err(anyhow!("wrong event type"));
+    };
+    assert_eq!(id, 19);
+    assert_eq!(working_dir.as_deref(), Some("/tmp/example"));
+    assert_eq!(message, "Session cwd: `/tmp/example`");
+    Ok(())
+}
+
+#[test]
 fn test_event_roundtrip() -> Result<()> {
     let event = ServerEvent::TextDelta {
         text: "hello".to_string(),

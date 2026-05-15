@@ -168,6 +168,14 @@ impl Agent {
         self.log_env_snapshot("working_dir");
     }
 
+    /// Set and persist the working directory for this session.
+    pub fn set_working_dir_and_save(&mut self, dir: &str) -> Result<()> {
+        self.set_working_dir(dir);
+        self.session.updated_at = chrono::Utc::now();
+        self.session.save()?;
+        Ok(())
+    }
+
     /// Get the working directory for this session
     pub fn working_dir(&self) -> Option<&str> {
         self.session.working_dir.as_deref()

@@ -1485,6 +1485,23 @@ async fn handle_remote_key_internal(
                     return Ok(());
                 }
 
+                if let Some(command) = crate::cwd::parse_cwd_command(trimmed) {
+                    match command {
+                        Err(error) => {
+                            app.push_display_message(DisplayMessage::error(error));
+                        }
+                        Ok(crate::cwd::CwdCommand::Show) => {
+                            remote.set_cwd(None).await?;
+                            app.set_status_notice("Session cwd");
+                        }
+                        Ok(crate::cwd::CwdCommand::Set { path }) => {
+                            remote.set_cwd(Some(path)).await?;
+                            app.set_status_notice("Switching cwd");
+                        }
+                    }
+                    return Ok(());
+                }
+
                 if trimmed == "/swarm" || trimmed == "/swarm status" {
                     let default_enabled = crate::config::config().features.swarm;
                     app.push_display_message(DisplayMessage::system(format!(

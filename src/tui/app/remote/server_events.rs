@@ -253,6 +253,18 @@ pub(in crate::tui::app) fn handle_server_event(
             app.set_status_notice(format!("Skill active: /{}", name));
             true
         }
+        ServerEvent::SessionCwd {
+            id: _,
+            working_dir,
+            message,
+        } => {
+            app.session.working_dir = working_dir;
+            app.session.refresh_initial_session_context_message();
+            crate::tui::session_picker::invalidate_session_list_cache();
+            app.push_display_message(DisplayMessage::system(message));
+            app.set_status_notice("Session cwd");
+            false
+        }
         ServerEvent::ConnectionPhase { phase } => {
             let cp = match phase.as_str() {
                 "authenticating" => crate::message::ConnectionPhase::Authenticating,
