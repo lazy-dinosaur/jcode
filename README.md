@@ -509,6 +509,8 @@ image of /Resume for codex sessions
 
 Skills are not all loaded on startup. The conversation is embedded as a semantic vector, and will automatically inject a skill if there is an embedding hit similar to memories. The agent has a skill tool for you to manually activate a skill at anytime. You may also activate via slash commands. 
 
+Session working directory slash commands are documented in [`docs/SESSION_CWD_COMMANDS.md`](docs/SESSION_CWD_COMMANDS.md): `/pwd` and `/cwd` show the session cwd, while `/cwd <path>` and `/cd <path>` change it.
+
 ---
 
 ## iOS Application / Native OpenClaw
