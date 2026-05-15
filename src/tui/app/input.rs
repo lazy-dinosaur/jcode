@@ -390,18 +390,19 @@ mod tests {
     }
 
     #[test]
-    fn shifted_printable_fallback_preserves_terminal_translated_symbols() {
-        assert_eq!(shifted_printable_fallback('/', KeyModifiers::SHIFT), '/');
+    fn shifted_printable_fallback_synthesizes_common_us_shifted_symbols() {
+        assert_eq!(shifted_printable_fallback('/', KeyModifiers::SHIFT), '?');
+        assert_eq!(shifted_printable_fallback('1', KeyModifiers::SHIFT), '!');
         assert_eq!(shifted_printable_fallback('?', KeyModifiers::SHIFT), '?');
         assert_eq!(shifted_printable_fallback('(', KeyModifiers::SHIFT), '(');
         assert_eq!(shifted_printable_fallback('&', KeyModifiers::SHIFT), '&');
     }
 
     #[test]
-    fn text_input_for_shifted_symbol_preserves_layout_translated_char() {
+    fn text_input_for_shifted_symbol_synthesizes_question_mark() {
         assert_eq!(
             text_input_for_key(KeyCode::Char('/'), KeyModifiers::SHIFT),
-            Some("/".to_string())
+            Some("?".to_string())
         );
     }
 }
@@ -605,8 +606,32 @@ pub(super) fn text_input_for_key(code: KeyCode, modifiers: KeyModifiers) -> Opti
 }
 
 fn shifted_printable_fallback(c: char, modifiers: KeyModifiers) -> char {
-    if modifiers.contains(KeyModifiers::SHIFT) && c.is_ascii_lowercase() {
-        return c.to_ascii_uppercase();
+    if modifiers.contains(KeyModifiers::SHIFT) {
+        return match c {
+            'a'..='z' => c.to_ascii_uppercase(),
+            '`' => '~',
+            '1' => '!',
+            '2' => '@',
+            '3' => '#',
+            '4' => '$',
+            '5' => '%',
+            '6' => '^',
+            '7' => '&',
+            '8' => '*',
+            '9' => '(',
+            '0' => ')',
+            '-' => '_',
+            '=' => '+',
+            '[' => '{',
+            ']' => '}',
+            '\\' => '|',
+            ';' => ':',
+            '\'' => '"',
+            ',' => '<',
+            '.' => '>',
+            '/' => '?',
+            _ => c,
+        };
     }
 
     c

@@ -4,6 +4,7 @@ use crate::server::{SwarmEvent, SwarmEventType, SwarmMember};
 use crate::tool::selfdev::ReloadContext;
 use jcode_agent_runtime::InterruptSignal;
 use std::collections::HashMap;
+#[cfg(not(test))]
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -108,6 +109,7 @@ pub(crate) async fn drain_and_flush_sessions(sessions: &SessionAgents, timeout: 
     drained
 }
 
+#[cfg(not(test))]
 fn prepare_server_exec(cmd: &mut std::process::Command, socket_path: &std::path::Path) {
     // The replacement daemon must own the published socket paths. Unlink them
     // before exec so we never inherit a stale on-disk endpoint through reload.
@@ -148,6 +150,7 @@ pub(super) async fn await_reload_signal(
     shutdown_signals: Arc<RwLock<HashMap<String, InterruptSignal>>>,
     swarm_event_tx: broadcast::Sender<SwarmEvent>,
 ) {
+    #[cfg(not(test))]
     use std::process::Command as ProcessCommand;
 
     let mut rx = super::reload_state::reload_signal().1.clone();
@@ -206,50 +209,67 @@ pub(super) async fn await_reload_signal(
             crate::server::reload_state_summary(std::time::Duration::from_secs(60))
         ));
 
-        let prefers_selfdev = signal.prefer_selfdev_binary;
+        #[cfg(test)]
+        {
+            crate::server::write_reload_state(
+                &signal.request_id,
+                &signal.hash,
+                crate::server::ReloadPhase::Failed,
+                Some("reload exec skipped in unit tests".to_string()),
+            );
+            crate::logging::info(&format!(
+                "Server: skipped reload exec in unit test request={} hash={}",
+                signal.request_id, signal.hash
+            ));
+        }
 
-        if let Some((binary, label)) = super::server_update_candidate(prefers_selfdev) {
-            if binary.exists() {
-                let socket = super::socket_path();
-                crate::logging::info(&format!(
-                    "Server: exec'ing into {} binary {:?} (socket: {:?}, prep={}ms, state={})",
-                    label,
-                    binary,
-                    socket,
-                    reload_started.elapsed().as_millis(),
-                    crate::server::reload_state_summary(std::time::Duration::from_secs(60))
-                ));
-                let mut cmd = ProcessCommand::new(&binary);
-                cmd.arg("serve").arg("--socket").arg(socket.as_os_str());
-                prepare_server_exec(&mut cmd, &socket);
-                let err = crate::platform::replace_process(&mut cmd);
-                crate::server::write_reload_state(
-                    &signal.request_id,
-                    &signal.hash,
-                    crate::server::ReloadPhase::Failed,
-                    Some(err.to_string()),
-                );
-                crate::logging::error(&format!(
-                    "Failed to exec into {} {:?}: {}",
-                    label, binary, err
-                ));
+        #[cfg(not(test))]
+        {
+            let prefers_selfdev = signal.prefer_selfdev_binary;
+
+            if let Some((binary, label)) = super::server_update_candidate(prefers_selfdev) {
+                if binary.exists() {
+                    let socket = super::socket_path();
+                    crate::logging::info(&format!(
+                        "Server: exec'ing into {} binary {:?} (socket: {:?}, prep={}ms, state={})",
+                        label,
+                        binary,
+                        socket,
+                        reload_started.elapsed().as_millis(),
+                        crate::server::reload_state_summary(std::time::Duration::from_secs(60))
+                    ));
+                    let mut cmd = ProcessCommand::new(&binary);
+                    cmd.arg("serve").arg("--socket").arg(socket.as_os_str());
+                    prepare_server_exec(&mut cmd, &socket);
+                    let err = crate::platform::replace_process(&mut cmd);
+                    crate::server::write_reload_state(
+                        &signal.request_id,
+                        &signal.hash,
+                        crate::server::ReloadPhase::Failed,
+                        Some(err.to_string()),
+                    );
+                    crate::logging::error(&format!(
+                        "Failed to exec into {} {:?}: {}",
+                        label, binary, err
+                    ));
+                } else {
+                    crate::server::write_reload_state(
+                        &signal.request_id,
+                        &signal.hash,
+                        crate::server::ReloadPhase::Failed,
+                        Some(format!("missing binary: {}", binary.display())),
+                    );
+                }
             } else {
                 crate::server::write_reload_state(
                     &signal.request_id,
                     &signal.hash,
                     crate::server::ReloadPhase::Failed,
-                    Some(format!("missing binary: {}", binary.display())),
+                    Some("no reloadable binary found".to_string()),
                 );
             }
-        } else {
-            crate::server::write_reload_state(
-                &signal.request_id,
-                &signal.hash,
-                crate::server::ReloadPhase::Failed,
-                Some("no reloadable binary found".to_string()),
-            );
+            std::process::exit(42);
         }
-        std::process::exit(42);
     }
 }
 

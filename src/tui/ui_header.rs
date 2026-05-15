@@ -811,7 +811,7 @@ mod tests {
     #[test]
     fn version_display_candidates_compact_for_narrow_width() {
         let rendered = choose_header_candidate(8, version_display_candidates());
-        assert_eq!(rendered, "v0.9");
+        assert_eq!(rendered, semver_minor());
     }
 
     #[test]

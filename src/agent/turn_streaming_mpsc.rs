@@ -837,9 +837,6 @@ impl Agent {
                         .await
                 });
 
-                // Reset background signal before waiting.
-                self.background_tool_signal.reset();
-
                 // Wait for tool completion OR background signal from user (Alt+B)
                 // OR graceful shutdown signal from server reload.
                 let bg_signal = self.background_tool_signal.clone();
@@ -988,10 +985,10 @@ impl Agent {
                         }],
                         Some(tool_elapsed.as_millis() as u64),
                     );
-                    tool_results_dirty = true;
                     self.session.save()?;
 
                     self.background_tool_signal.reset();
+                    return Ok(());
                 }
             } else if !to_execute.is_empty() {
                 let message_id = assistant_message_id
