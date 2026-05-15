@@ -32,6 +32,7 @@ struct SingleToolProvider {
 }
 
 struct DelayTestTool;
+struct SpawnTestTool;
 
 impl SequentialProvider {
     fn new(responses: Vec<Vec<StreamEvent>>) -> (Self, Arc<AtomicUsize>) {
@@ -323,6 +324,30 @@ impl Tool for DelayTestTool {
             .unwrap_or(50);
         tokio::time::sleep(Duration::from_millis(delay_ms)).await;
         Ok(ToolOutput::new("delay done"))
+    }
+}
+
+#[async_trait]
+impl Tool for SpawnTestTool {
+    fn name(&self) -> &str {
+        "swarm"
+    }
+
+    fn description(&self) -> &str {
+        "Test-only swarm spawn tool"
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {"action": {"type": "string"}}
+        })
+    }
+
+    async fn execute(&self, _input: serde_json::Value, _ctx: ToolContext) -> Result<ToolOutput> {
+        Ok(ToolOutput::new(
+            "Spawned agent session_test cwd=(inherit coordinator cwd)",
+        ))
     }
 }
 
@@ -935,6 +960,65 @@ async fn turn_streaming_mpsc_altb_ends_turn_immediately_after_detach() {
         saw_background_done,
         "expected a ToolDone with 'moved to background' marker"
     );
+}
+
+#[tokio::test]
+async fn turn_streaming_mpsc_swarm_spawn_ends_parent_turn_after_spawn_result() {
+    let _guard = crate::storage::lock_test_env();
+    let (provider, provider_calls) = SequentialProvider::new(vec![
+        vec![
+            StreamEvent::ToolUseStart {
+                id: "call_spawn".to_string(),
+                name: "swarm".to_string(),
+            },
+            StreamEvent::ToolInputDelta(
+                serde_json::json!({"action":"spawn_now", "prompt":"work in parallel"}).to_string(),
+            ),
+            StreamEvent::ToolUseEnd,
+            StreamEvent::MessageEnd {
+                stop_reason: Some("tool_use".to_string()),
+            },
+        ],
+        vec![
+            StreamEvent::TextDelta("parent should not continue after spawn".to_string()),
+            StreamEvent::MessageEnd {
+                stop_reason: Some("end_turn".to_string()),
+            },
+        ],
+    ]);
+    let provider: Arc<dyn Provider> = Arc::new(provider);
+    let registry = Registry::empty();
+    registry
+        .register("swarm".to_string(), Arc::new(SpawnTestTool))
+        .await;
+    let mut agent = Agent::new(provider, registry);
+    agent.add_message(
+        Role::User,
+        vec![ContentBlock::Text {
+            text: "spawn a worker".to_string(),
+            cache_control: None,
+        }],
+    );
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    agent
+        .run_turn_streaming_mpsc(tx)
+        .await
+        .expect("spawn turn should succeed");
+
+    assert_eq!(
+        provider_calls.load(Ordering::SeqCst),
+        1,
+        "swarm spawn must release the parent turn instead of starting a follow-up LLM call"
+    );
+
+    let mut saw_spawn_done = false;
+    while let Ok(event) = rx.try_recv() {
+        if matches!(event, ServerEvent::ToolDone { name, .. } if name == "swarm") {
+            saw_spawn_done = true;
+        }
+    }
+    assert!(saw_spawn_done, "spawn ToolDone should still be emitted");
 }
 
 #[tokio::test]

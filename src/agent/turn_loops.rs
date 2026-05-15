@@ -1114,6 +1114,7 @@ impl Agent {
                     .collect();
             }
 
+            let mut end_turn_after_tool_results = false;
             for (tool_index, tc) in tool_calls.iter().enumerate() {
                 let message_id = assistant_message_id
                     .clone()
@@ -1231,6 +1232,9 @@ impl Agent {
                             Some(result.elapsed.as_millis() as u64),
                         );
                         tool_results_dirty = true;
+                        if Self::tool_call_ends_turn_after_result(&result.tc) {
+                            end_turn_after_tool_results = true;
+                        }
                     }
                     Err(e) => {
                         crate::telemetry::record_tool_failure();
@@ -1279,6 +1283,10 @@ impl Agent {
                     self.add_message(Role::User, blocks);
                 }
                 self.session.save()?;
+            }
+
+            if end_turn_after_tool_results {
+                return Ok(final_text);
             }
 
             if print_output {

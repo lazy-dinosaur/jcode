@@ -128,6 +128,32 @@ async fn resolve_spawn_working_dir_falls_back_to_member_dir() {
     );
 }
 
+#[tokio::test]
+async fn resolve_spawn_working_dir_prefers_live_agent_cwd_over_member_dir() {
+    let sessions = Arc::new(RwLock::new(HashMap::new()));
+    let parent_dir = tempfile::TempDir::new().expect("parent dir");
+    let parent_dir_string = parent_dir.path().display().to_string();
+    sessions.write().await.insert(
+        "req".to_string(),
+        test_agent_with_working_dir("req", &parent_dir_string).await,
+    );
+
+    let swarm_members = Arc::new(RwLock::new(HashMap::new()));
+    let (mut req_member, _rx) = member("req", Some("swarm-1"), "coordinator");
+    req_member.working_dir = Some(std::path::PathBuf::from("/tmp/stale-member-dir"));
+    swarm_members
+        .write()
+        .await
+        .insert("req".to_string(), req_member);
+
+    assert_eq!(
+        resolve_spawn_working_dir(None, "req", &sessions, &swarm_members)
+            .await
+            .as_deref(),
+        Some(parent_dir_string.as_str())
+    );
+}
+
 #[test]
 fn stop_permission_defaults_to_sessions_spawned_by_requesting_coordinator() {
     let (mut owned, _owned_rx) = member("worker-owned", Some("swarm-1"), "agent");

@@ -65,6 +65,18 @@ pub(super) fn print_tool_summary(tool: &ToolCall) {
 }
 
 impl Agent {
+    pub(super) fn tool_call_ends_turn_after_result(tool: &ToolCall) -> bool {
+        let is_swarm_tool = matches!(tool.name.as_str(), "swarm" | "communicate" | "swarm_now");
+        if !is_swarm_tool {
+            return false;
+        }
+
+        tool.input
+            .get("action")
+            .and_then(|value| value.as_str())
+            .is_some_and(|action| matches!(action, "spawn" | "spawn_now" | "swarm_now"))
+    }
+
     pub(super) fn apply_tool_output_side_effects(
         &mut self,
         tool_name: &str,

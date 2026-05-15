@@ -764,6 +764,7 @@ impl Agent {
                     .collect();
             }
 
+            let mut end_turn_after_tool_results = false;
             for (tool_index, tc) in tool_calls.iter().enumerate() {
                 if let Some(preset) = preset_results.remove(&tool_index) {
                     match preset {
@@ -828,6 +829,9 @@ impl Agent {
                             Some(result.elapsed.as_millis() as u64),
                         );
                         tool_results_dirty = true;
+                        if Self::tool_call_ends_turn_after_result(&result.tc) {
+                            end_turn_after_tool_results = true;
+                        }
                     }
                     Err(e) => {
                         let error_msg = format!("Error: {}", e);
@@ -892,6 +896,10 @@ impl Agent {
                     self.add_message(Role::User, blocks);
                 }
                 self.session.save()?;
+            }
+
+            if end_turn_after_tool_results {
+                return Ok(());
             }
 
             // === INJECTION POINT D: All tools done, before next API call ===
