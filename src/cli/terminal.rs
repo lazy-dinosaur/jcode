@@ -23,6 +23,12 @@ pub fn install_panic_hook() {
     panic::set_hook(Box::new(move |info| {
         default_hook(info);
 
+        // Always capture panic + (when RUST_BACKTRACE is set) backtrace into
+        // ~/.jcode/logs/panics.log so subagent/bg-task panics — which tokio
+        // strips of their backtrace by the time they reach the JoinError
+        // catcher in background.rs — are still recoverable later.
+        let _ = append_panic_log_entry(info);
+
         if let Some(session_id) = get_current_session() {
             print_session_resume_hint(&session_id);
 
@@ -36,6 +42,37 @@ pub fn install_panic_hook() {
             }
         }
     }));
+}
+
+fn append_panic_log_entry(info: &panic::PanicHookInfo<'_>) -> std::io::Result<()> {
+    use std::io::Write;
+    let log_path = crate::storage::jcode_dir()
+        .map_err(|e| std::io::Error::other(e.to_string()))?
+        .join("logs")
+        .join("panics.log");
+    if let Some(parent) = log_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)?;
+
+    let timestamp = chrono::Utc::now().to_rfc3339();
+    let session = get_current_session().unwrap_or_else(|| "<none>".to_string());
+    let backtrace = std::backtrace::Backtrace::force_capture();
+
+    writeln!(
+        file,
+        "---\n[{ts}] session={session} pid={pid} tid={tid:?}\n{info}\n\nBacktrace:\n{bt}\n",
+        ts = timestamp,
+        session = session,
+        pid = std::process::id(),
+        tid = std::thread::current().id(),
+        info = info,
+        bt = backtrace,
+    )?;
+    Ok(())
 }
 
 pub fn mark_current_session_crashed(message: String) {
