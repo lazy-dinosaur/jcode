@@ -36,6 +36,23 @@ pub fn parse_agent_md_file(path: &Path) -> Result<(String, AgentRouteConfig)> {
         config.model = string_field(value, &["model"]);
         config.effort = string_field(value, &["effort", "reasoning-effort", "reasoning_effort"]);
         config.variant = string_field(value, &["variant"]);
+        // M47-C3: provider-specific dimensions for context window and extended
+        // thinking. Accepted YAML keys are kept aligned with oh-my-opencode and
+        // common ecosystem aliases so a single SSOT can target multiple tools.
+        config.context = string_field(
+            value,
+            &["context", "context-window", "context_window", "context-length"],
+        );
+        config.thinking = bool_field(
+            value,
+            &[
+                "thinking",
+                "extended-thinking",
+                "extended_thinking",
+                "thinking-budget",
+                "thinking_budget",
+            ],
+        );
         config.description = string_field(value, &["description", "desc"]);
         config.when = string_list_field(value, &["when", "when_to_use"]);
         config.prompt = string_field(value, &["system-prompt", "system_prompt"])
@@ -193,6 +210,31 @@ pub(crate) fn string_field(value: &Value, names: &[&str]) -> Option<String> {
         .find_map(|name| value.get(*name))
         .and_then(value_to_string)
         .and_then(non_empty_string)
+}
+
+/// M47-C3: read a YAML key as `Option<bool>`. Accepts real YAML booleans, the
+/// strings "true"/"false"/"yes"/"no"/"on"/"off"/"enabled"/"disabled" (case
+/// insensitive), and treats a positive integer or floating budget value as
+/// `Some(true)` so ecosystem profiles that ship `thinking-budget: 8192` style
+/// hints map cleanly to the on/off toggle. Numeric budgets are not preserved
+/// here — a future milestone may add a dedicated `thinking_budget` integer
+/// field for backends that consume one.
+pub(crate) fn bool_field(value: &Value, names: &[&str]) -> Option<bool> {
+    let value = names.iter().find_map(|name| value.get(*name))?;
+    match value {
+        Value::Bool(b) => Some(*b),
+        Value::String(s) => match s.trim().to_ascii_lowercase().as_str() {
+            "true" | "yes" | "on" | "enabled" => Some(true),
+            "false" | "no" | "off" | "disabled" => Some(false),
+            "" => None,
+            other => other.parse::<i64>().ok().map(|n| n > 0),
+        },
+        Value::Number(n) => n
+            .as_i64()
+            .map(|i| i > 0)
+            .or_else(|| n.as_f64().map(|f| f > 0.0)),
+        _ => None,
+    }
 }
 
 pub(crate) fn string_list_field(value: &Value, names: &[&str]) -> Vec<String> {
@@ -431,5 +473,118 @@ mod tests {
         let coder = &agents.profiles["coder"];
         assert_eq!(coder.model.as_deref(), Some("gpt-5.5"));
         assert_eq!(coder.when, vec!["host-only".to_string()]);
+    }
+
+    // ---- M47-C3: context / thinking frontmatter and deep-merge ----
+
+    #[test]
+    fn parse_agent_md_file_reads_context_and_thinking_fields() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let path = dir.path().join("claude-strategist.md");
+        std::fs::write(
+            &path,
+            "---\nname: strategist\nmodel: claude-opus-4-7\ncontext: 1m\nthinking: true\n---\nstrategist body",
+        )
+        .expect("write file");
+
+        let (name, cfg) = parse_agent_md_file(&path).expect("parse");
+        assert_eq!(name, "strategist");
+        assert_eq!(cfg.model.as_deref(), Some("claude-opus-4-7"));
+        assert_eq!(cfg.context.as_deref(), Some("1m"));
+        assert_eq!(cfg.thinking, Some(true));
+        assert_eq!(cfg.prompt.as_deref(), Some("strategist body"));
+    }
+
+    #[test]
+    fn parse_agent_md_file_accepts_context_window_and_extended_thinking_aliases() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let path = dir.path().join("aliased.md");
+        std::fs::write(
+            &path,
+            "---\nname: aliased\ncontext-window: 200k\nextended-thinking: yes\n---\n",
+        )
+        .expect("write file");
+
+        let (_, cfg) = parse_agent_md_file(&path).expect("parse");
+        assert_eq!(cfg.context.as_deref(), Some("200k"));
+        assert_eq!(cfg.thinking, Some(true));
+    }
+
+    #[test]
+    fn parse_agent_md_file_thinking_budget_integer_maps_to_true() {
+        // Some ecosystem profiles ship `thinking-budget: 8192` style hints.
+        // For M47-C3 we treat positive budgets as `Some(true)` on the bool
+        // toggle; a future milestone may add a dedicated numeric budget field.
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let path = dir.path().join("budgeted.md");
+        std::fs::write(
+            &path,
+            "---\nname: budgeted\nthinking-budget: 8192\n---\n",
+        )
+        .expect("write file");
+
+        let (_, cfg) = parse_agent_md_file(&path).expect("parse");
+        assert_eq!(cfg.thinking, Some(true));
+    }
+
+    #[test]
+    fn parse_agent_md_file_thinking_zero_maps_to_false() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let path = dir.path().join("zero.md");
+        std::fs::write(&path, "---\nname: zero\nthinking-budget: 0\n---\n").expect("write file");
+
+        let (_, cfg) = parse_agent_md_file(&path).expect("parse");
+        assert_eq!(cfg.thinking, Some(false));
+    }
+
+    /// Deep-merge: host config.toml supplies only `context`, the global md's
+    /// model/description/thinking/prompt must survive.
+    #[test]
+    fn agents_for_working_dir_deep_merge_inherits_thinking_when_context_only_in_host() {
+        let _lock = crate::storage::lock_test_env();
+        let home = tempfile::TempDir::new().expect("tempdir");
+        let _home = EnvVarGuard::set("JCODE_HOME", home.path());
+        let project = tempfile::TempDir::new().expect("project tempdir");
+        write(
+            &home.path().join("agents/claude-pro.md"),
+            "---\nmodel: claude-opus-4-7\ndescription: deep reasoning\nthinking: true\n---\nPro body.",
+        );
+        write(
+            &project.path().join(".jcode/config.toml"),
+            "[agents.profiles.claude-pro]\ncontext = \"1m\"\n",
+        );
+
+        let agents = Config::load().agents_for_working_dir(Some(project.path()));
+        let cp = &agents.profiles["claude-pro"];
+        // host wins on the field it touched
+        assert_eq!(cp.context.as_deref(), Some("1m"));
+        // ...all other dimensions inherit from the global md
+        assert_eq!(cp.model.as_deref(), Some("claude-opus-4-7"));
+        assert_eq!(cp.description.as_deref(), Some("deep reasoning"));
+        assert_eq!(cp.thinking, Some(true));
+        assert_eq!(cp.prompt.as_deref(), Some("Pro body."));
+    }
+
+    /// Deep-merge: host config.toml supplies `thinking = false` and must
+    /// override the global md's `thinking: true` (explicit-off semantics).
+    #[test]
+    fn agents_for_working_dir_deep_merge_explicit_thinking_false_overrides_global() {
+        let _lock = crate::storage::lock_test_env();
+        let home = tempfile::TempDir::new().expect("tempdir");
+        let _home = EnvVarGuard::set("JCODE_HOME", home.path());
+        let project = tempfile::TempDir::new().expect("project tempdir");
+        write(
+            &home.path().join("agents/gemini-fast.md"),
+            "---\nmodel: gemini-3.1-pro-preview\nthinking: true\n---\n",
+        );
+        write(
+            &project.path().join(".jcode/config.toml"),
+            "[agents.profiles.gemini-fast]\nthinking = false\n",
+        );
+
+        let agents = Config::load().agents_for_working_dir(Some(project.path()));
+        let gf = &agents.profiles["gemini-fast"];
+        assert_eq!(gf.thinking, Some(false));
+        assert_eq!(gf.model.as_deref(), Some("gemini-3.1-pro-preview"));
     }
 }

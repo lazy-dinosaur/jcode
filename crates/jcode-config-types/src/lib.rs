@@ -435,6 +435,24 @@ pub struct AgentRouteConfig {
     /// oh-my-opencode-compatible variant. For GPT/OpenAI this maps to reasoning effort; for
     /// supported Claude models, `max` selects the `[1m]` Claude Max / long-context route.
     pub variant: Option<String>,
+    /// M47-C3: Context window preference. Provider-aware:
+    /// - Claude (opus-4-6, opus-4-7, sonnet-4-6 ...): `"1m"` appends the `[1m]`
+    ///   suffix that selects the 1 M context route. `"200k"` is the natural
+    ///   default and is a no-op when set explicitly.
+    /// - OpenAI / Gemini / Bedrock / ...: ignored (model-side fixed). Setting
+    ///   the field is non-fatal so a single SSOT can list it for every persona.
+    /// Optional. Treated as None when empty.
+    pub context: Option<String>,
+    /// M47-C3: Extended-thinking / thinking-budget toggle. Provider-aware:
+    /// - Anthropic (Claude 4.7+): enables extended thinking when the backend
+    ///   supports it.
+    /// - Gemini: enables Gemini thinking_budget output.
+    /// - OpenRouter Kimi / GLM thinking models: forwards to the provider's
+    ///   `thinking` channel where supported.
+    /// - OpenAI direct: ignored (reasoning is configured via `effort`).
+    /// Stored as Option<bool> so a profile can be "explicit off" vs "unset".
+    /// A future milestone may extend to numeric budgets via a dedicated field.
+    pub thinking: Option<bool>,
     /// Human-readable role description for this callable agent profile.
     pub description: Option<String>,
     /// Guidance for when the coordinator should use this agent profile.
@@ -467,6 +485,15 @@ impl AgentRouteConfig {
         }
         if let Some(value) = other.variant.filter(|s| !s.trim().is_empty()) {
             self.variant = Some(value);
+        }
+        // M47-C3: `context` and `thinking` follow the same deep-merge rule as the
+        // other Option<...> dimensions so a host config can set just `model` (or
+        // just `context`) without wiping inherited values from a parent profile.
+        if let Some(value) = other.context.filter(|s| !s.trim().is_empty()) {
+            self.context = Some(value);
+        }
+        if let Some(value) = other.thinking {
+            self.thinking = Some(value);
         }
         if let Some(value) = other.description.filter(|s| !s.trim().is_empty()) {
             self.description = Some(value);
