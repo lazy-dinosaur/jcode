@@ -181,6 +181,16 @@ cross_provider_failover = "countdown"
 # (also false/no/off) restores the historical single-call behavior.
 openai_parallel_tool_calls = true
 
+# M47-C7: provider-agnostic default preferences. These act as the SSOT
+# fallback that lazy-harness style 4-provider personas (Claude/GPT/Gemini/GLM)
+# consult when an agent profile does not specify a value. Backends that do
+# not expose the matching surface (e.g. OpenAI direct ignores `default_context`,
+# Claude/Gemini ignore `default_reasoning_effort`) silently skip.
+#
+# default_reasoning_effort = "high"   # none|low|medium|high|xhigh  (Env: JCODE_DEFAULT_REASONING_EFFORT)
+# default_context          = "1m"     # 200k|1m on Anthropic; ignored elsewhere  (Env: JCODE_DEFAULT_CONTEXT)
+# default_thinking         = true     # Claude/Gemini/OpenRouter Kimi+GLM; OpenAI ignores  (Env: JCODE_DEFAULT_THINKING)
+
 [prompt]
 # Project prompt/instruction loading. Jcode reads AGENTS.md/agents.md before planning
 # and appends an explicit priority reminder into the system prompt so these files

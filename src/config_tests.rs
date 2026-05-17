@@ -55,6 +55,46 @@ fn test_openai_reasoning_effort_defaults_to_low() {
     );
 }
 
+// ---- M47-C7: provider-agnostic defaults default to None ----
+
+#[test]
+fn m47_c7_provider_agnostic_defaults_default_to_none() {
+    let cfg = ProviderConfig::default();
+    assert_eq!(cfg.default_reasoning_effort, None);
+    assert_eq!(cfg.default_context, None);
+    assert_eq!(cfg.default_thinking, None);
+}
+
+#[test]
+fn m47_c7_generated_default_config_documents_provider_agnostic_keys() {
+    let _guard = crate::storage::lock_test_env();
+    let prev_home = std::env::var_os("JCODE_HOME");
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    crate::env::set_var("JCODE_HOME", dir.path());
+
+    let path = Config::create_default_config_file().expect("create default config file");
+    let content = std::fs::read_to_string(path).expect("read default config file");
+
+    assert!(
+        content.contains("default_reasoning_effort"),
+        "generated default config should mention the M47-C7 default_reasoning_effort key as a comment"
+    );
+    assert!(
+        content.contains("default_context"),
+        "generated default config should mention the M47-C7 default_context key as a comment"
+    );
+    assert!(
+        content.contains("default_thinking"),
+        "generated default config should mention the M47-C7 default_thinking key as a comment"
+    );
+
+    if let Some(prev) = prev_home {
+        crate::env::set_var("JCODE_HOME", prev);
+    } else {
+        crate::env::remove_var("JCODE_HOME");
+    }
+}
+
 #[test]
 fn test_openai_fast_mode_defaults_to_off() {
     // lazydino fork (Round 24): default OFF to avoid accidental fast usage.
