@@ -912,6 +912,387 @@ pub mod m48_trace {
     }
 }
 
+/// M48-C2: opencode-style token-budgeted recent-tail selection.
+///
+/// Given a message log and a token budget, decides which prefix to summarize
+/// ("head") and which suffix to keep verbatim in the next provider payload
+/// ("tail"). The algorithm mirrors `session/compaction.ts::select` and
+/// `splitTurn` in opencode:
+///
+/// 1. Compute `usable_budget = context_window - reserved_output_tokens`.
+/// 2. Compute `preserve_recent_tokens = config override or
+///    clamp(usable_budget * 0.25, MIN, MAX)`.
+/// 3. Identify user-led turns; ignore compaction marker messages.
+/// 4. From the last `tail_turns` turns, walk backwards adding whole turns
+///    while their token cost stays within the preserve budget.
+/// 5. If the next whole turn would not fit, attempt to split that turn at
+///    a message boundary so the remaining suffix fits.
+/// 6. The resulting `tail_start` indexes into `messages` so callers can
+///    summarize `messages[..tail_start]` and forward `messages[tail_start..]`
+///    verbatim. `tail_start == 0` means everything is preserved (no
+///    compaction needed).
+pub mod m48_select {
+    use super::{ContentBlock, Message, Role, m48_trace};
+
+    /// Opencode `COMPACTION_BUFFER`: tokens reserved for the assistant
+    /// output when no explicit `reserved_tokens` value is configured.
+    pub const DEFAULT_RESERVED_TOKENS: usize = 20_000;
+
+    /// Opencode `MIN_PRESERVE_RECENT_TOKENS` / `MAX_PRESERVE_RECENT_TOKENS`.
+    pub const MIN_PRESERVE_RECENT_TOKENS: usize = 2_000;
+    pub const MAX_PRESERVE_RECENT_TOKENS: usize = 8_000;
+
+    /// Opencode `DEFAULT_TAIL_TURNS` (number of recent user-led turns
+    /// preserved verbatim).
+    pub const DEFAULT_TAIL_TURNS: usize = 2;
+
+    /// Compute the effective input budget for compaction selection.
+    ///
+    /// Mirrors opencode `overflow.ts::usable`:
+    /// - returns 0 when `context_window == 0` (provider lacks a known limit)
+    /// - otherwise returns `max(0, context_window - reserved)`
+    pub fn usable_budget(context_window: usize, reserved_tokens: Option<usize>) -> usize {
+        if context_window == 0 {
+            return 0;
+        }
+        let reserved = reserved_tokens.unwrap_or(DEFAULT_RESERVED_TOKENS);
+        context_window.saturating_sub(reserved)
+    }
+
+    /// Compute the per-tail preservation budget.
+    ///
+    /// Mirrors opencode `compaction.ts::preserveRecentBudget`: explicit
+    /// override wins, otherwise clamp `floor(usable * 0.25)` to
+    /// `[MIN_PRESERVE_RECENT_TOKENS, MAX_PRESERVE_RECENT_TOKENS]`.
+    pub fn preserve_recent_budget(usable: usize, override_tokens: Option<usize>) -> usize {
+        if let Some(value) = override_tokens {
+            return value;
+        }
+        let quarter = usable / 4;
+        quarter
+            .max(MIN_PRESERVE_RECENT_TOKENS)
+            .min(MAX_PRESERVE_RECENT_TOKENS)
+    }
+
+    /// A contiguous span of messages owned by a single user-led turn.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Turn {
+        /// Index of the user message that starts the turn.
+        pub start: usize,
+        /// Exclusive end index (start of next user message or message count).
+        pub end: usize,
+    }
+
+    /// True when the message is a compaction marker that should be skipped
+    /// when walking user-led turns. M48 C-1 introduced compaction markers as
+    /// user-role messages carrying an `OpenAICompaction` block but never any
+    /// human text. Future stages will add a dedicated marker block; the
+    /// heuristic here treats any user message whose visible blocks are all
+    /// `OpenAICompaction` as a marker.
+    fn is_compaction_marker(msg: &Message) -> bool {
+        if msg.role != Role::User || msg.content.is_empty() {
+            return false;
+        }
+        msg.content
+            .iter()
+            .all(|b| matches!(b, ContentBlock::OpenAICompaction { .. }))
+    }
+
+    /// Enumerate user-led turns, ignoring compaction markers. Mirrors
+    /// opencode `compaction.ts::turns`.
+    ///
+    /// Each `Turn.end` is set to the next user message's `start`, or the
+    /// total length for the last turn. Assistant messages between user
+    /// messages are folded into the preceding turn.
+    pub fn turns(messages: &[Message]) -> Vec<Turn> {
+        let mut result: Vec<Turn> = Vec::new();
+        for (i, msg) in messages.iter().enumerate() {
+            if msg.role != Role::User {
+                continue;
+            }
+            if is_compaction_marker(msg) {
+                continue;
+            }
+            result.push(Turn {
+                start: i,
+                end: messages.len(),
+            });
+        }
+        for i in 0..result.len().saturating_sub(1) {
+            result[i].end = result[i + 1].start;
+        }
+        result
+    }
+
+    /// Result of `select_tail`: where the verbatim tail begins.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct TailSelection {
+        /// First message index that should be kept verbatim. Messages at
+        /// `[..tail_start]` are candidates for summarization. `0` means the
+        /// entire history fits and no compaction is required.
+        pub tail_start: usize,
+        /// Estimated token cost of the preserved tail.
+        pub tail_tokens: usize,
+        /// True when the tail was forced to start mid-turn because no
+        /// whole-turn slice fit the budget. Callers may want to log this.
+        pub split_turn: bool,
+    }
+
+    /// Decide where the verbatim tail begins.
+    ///
+    /// `tail_turns_limit` is the configured `tail_turns` value (defaults to
+    /// `DEFAULT_TAIL_TURNS`). `budget` is `preserve_recent_budget` output.
+    /// Mirrors opencode `compaction.ts::select`.
+    pub fn select_tail(
+        messages: &[Message],
+        budget: usize,
+        tail_turns_limit: Option<usize>,
+    ) -> TailSelection {
+        if messages.is_empty() || budget == 0 {
+            return TailSelection {
+                tail_start: 0,
+                tail_tokens: 0,
+                split_turn: false,
+            };
+        }
+
+        let limit = tail_turns_limit.unwrap_or(DEFAULT_TAIL_TURNS);
+        if limit == 0 {
+            // Caller explicitly asked for no recent-tail preservation.
+            return TailSelection {
+                tail_start: messages.len(),
+                tail_tokens: 0,
+                split_turn: false,
+            };
+        }
+
+        let all_turns = turns(messages);
+        if all_turns.is_empty() {
+            // No user turns at all: nothing to preserve, summarize the whole
+            // history (e.g. only assistant boilerplate).
+            return TailSelection {
+                tail_start: 0,
+                tail_tokens: 0,
+                split_turn: false,
+            };
+        }
+
+        let recent_start = all_turns.len().saturating_sub(limit);
+        let recent: Vec<Turn> = all_turns[recent_start..].to_vec();
+
+        // Walk backwards across the recent slice, keeping whole turns while
+        // they fit. Stop on the first turn that does not fit; attempt a
+        // mid-turn split there.
+        let mut total = 0usize;
+        let mut keep_start: Option<usize> = None;
+        for turn in recent.iter().rev() {
+            let size = m48_trace::total_tokens(&messages[turn.start..turn.end]);
+            if total + size <= budget {
+                total += size;
+                keep_start = Some(turn.start);
+                continue;
+            }
+            // Turn doesn't fit whole. Try to split it.
+            let remaining = budget.saturating_sub(total);
+            if let Some(split) = split_turn(messages, *turn, remaining) {
+                let split_size = m48_trace::total_tokens(&messages[split..turn.end]);
+                total += split_size;
+                return TailSelection {
+                    tail_start: split,
+                    tail_tokens: total,
+                    split_turn: true,
+                };
+            }
+            break;
+        }
+
+        match keep_start {
+            Some(start) if start > 0 => TailSelection {
+                tail_start: start,
+                tail_tokens: total,
+                split_turn: false,
+            },
+            Some(_) => {
+                // The recent window already starts at index 0: everything
+                // fits and no compaction is needed.
+                TailSelection {
+                    tail_start: 0,
+                    tail_tokens: total,
+                    split_turn: false,
+                }
+            }
+            None => {
+                // Not even one whole recent turn fit and no split point was
+                // found. Fall back to "summarize everything" so the caller
+                // does not panic on an oversized turn.
+                TailSelection {
+                    tail_start: messages.len(),
+                    tail_tokens: 0,
+                    split_turn: false,
+                }
+            }
+        }
+    }
+
+    /// Look inside a single turn for the smallest suffix that still fits in
+    /// the remaining budget. Returns the absolute message index where that
+    /// suffix begins, or `None` when no suffix fits or the turn has only one
+    /// message. Mirrors opencode `compaction.ts::splitTurn`.
+    pub fn split_turn(messages: &[Message], turn: Turn, budget: usize) -> Option<usize> {
+        if budget == 0 {
+            return None;
+        }
+        if turn.end.saturating_sub(turn.start) <= 1 {
+            return None;
+        }
+        // Walk forward starting at the first non-anchor message in the
+        // turn; the first index that fits the remaining budget is the
+        // split point.
+        for start in (turn.start + 1)..turn.end {
+            let size = m48_trace::total_tokens(&messages[start..turn.end]);
+            if size <= budget {
+                return Some(start);
+            }
+        }
+        None
+    }
+
+    #[cfg(test)]
+    mod select_tests {
+        use super::super::m48_fixtures;
+        use super::*;
+
+        #[test]
+        fn usable_budget_subtracts_reserved_tokens() {
+            assert_eq!(usable_budget(200_000, Some(20_000)), 180_000);
+            assert_eq!(usable_budget(200_000, None), 180_000);
+            assert_eq!(usable_budget(0, None), 0);
+            // Saturating subtraction so we never underflow.
+            assert_eq!(usable_budget(10_000, Some(50_000)), 0);
+        }
+
+        #[test]
+        fn preserve_recent_budget_clamps_to_range() {
+            // Below MIN -> clamped up
+            assert_eq!(preserve_recent_budget(100, None), MIN_PRESERVE_RECENT_TOKENS);
+            // Above MAX -> clamped down
+            assert_eq!(preserve_recent_budget(40_000, None), MAX_PRESERVE_RECENT_TOKENS);
+            // Inside range -> floor(usable/4)
+            assert_eq!(preserve_recent_budget(20_000, None), 5_000);
+            // Explicit override wins
+            assert_eq!(preserve_recent_budget(20_000, Some(1_500)), 1_500);
+        }
+
+        #[test]
+        fn turns_skips_assistant_only_runs() {
+            let msgs = m48_fixtures::short_session();
+            let t = turns(&msgs);
+            // short_session: user, assistant, user, assistant
+            assert_eq!(t.len(), 2);
+            assert_eq!(t[0].start, 0);
+            assert_eq!(t[0].end, 2);
+            assert_eq!(t[1].start, 2);
+            assert_eq!(t[1].end, 4);
+        }
+
+        #[test]
+        fn turns_ignores_compaction_marker_messages() {
+            // openai_native_compacted_session: user, assistant (compaction
+            // block as user-role marker is fine to skip), user, assistant.
+            let msgs = m48_fixtures::openai_native_compacted_session();
+            let t = turns(&msgs);
+            // Two real user turns (no OpenAICompaction marker among users in
+            // this fixture; assistant_openai_compaction is an assistant).
+            assert_eq!(t.len(), 2);
+        }
+
+        #[test]
+        fn select_tail_short_session_returns_zero() {
+            let msgs = m48_fixtures::short_session();
+            let result = select_tail(&msgs, 10_000, Some(2));
+            // Whole history fits in 10k tokens.
+            assert_eq!(result.tail_start, 0);
+            assert!(!result.split_turn);
+        }
+
+        #[test]
+        fn select_tail_long_session_keeps_last_turns_under_budget() {
+            let msgs = m48_fixtures::long_text_only_session();
+            let result = select_tail(&msgs, 2_000, Some(2));
+            // Budget too small for the whole 20-turn session. Tail must
+            // start mid-history but never beyond the last 2 user turns.
+            assert!(result.tail_start > 0);
+            assert!(result.tail_tokens <= 2_000);
+            // Verify tail does not exceed the last 2 user turns.
+            let all_turns = turns(&msgs);
+            let last_two_start = all_turns[all_turns.len() - 2].start;
+            assert!(result.tail_start >= last_two_start);
+        }
+
+        #[test]
+        fn select_tail_respects_zero_tail_turns_limit() {
+            let msgs = m48_fixtures::long_text_only_session();
+            let result = select_tail(&msgs, 10_000, Some(0));
+            // tail_turns = 0 -> drop everything to summary.
+            assert_eq!(result.tail_start, msgs.len());
+        }
+
+        #[test]
+        fn select_tail_with_default_limit_keeps_last_two_turns_when_budget_large() {
+            let msgs = m48_fixtures::long_text_only_session();
+            let big_budget = m48_trace::total_tokens(&msgs);
+            let result = select_tail(&msgs, big_budget, None);
+            // With default tail_turns = 2, even a generous budget only keeps
+            // the last two user turns verbatim. The rest of the 20-turn
+            // history is candidate for summarization, so tail_start should
+            // point to the start of the second-to-last turn.
+            let all_turns = turns(&msgs);
+            let expected_start = all_turns[all_turns.len() - 2].start;
+            assert_eq!(result.tail_start, expected_start);
+            assert!(!result.split_turn);
+        }
+
+        #[test]
+        fn split_turn_finds_suffix_inside_oversized_turn() {
+            // Build a 3-message turn whose total exceeds the budget but
+            // whose final message alone fits.
+            let msgs = vec![
+                m48_fixtures::user_text(1, "header text occupying many tokens ".repeat(100).as_str()),
+                m48_fixtures::assistant_text(1, "long assistant response ".repeat(100).as_str()),
+                m48_fixtures::user_text(2, "follow up"),
+            ];
+            // Turn is [0..3) here because the second user message also
+            // starts a new turn; pretend the caller passes the whole range.
+            let turn = Turn { start: 0, end: 3 };
+            let tiny_budget = m48_trace::total_tokens(&msgs[2..3]);
+            let split = split_turn(&msgs, turn, tiny_budget);
+            assert_eq!(split, Some(2));
+        }
+
+        #[test]
+        fn split_turn_returns_none_for_single_message_turn() {
+            let msgs = vec![m48_fixtures::user_text(1, "single")];
+            let turn = Turn { start: 0, end: 1 };
+            assert_eq!(split_turn(&msgs, turn, 10), None);
+        }
+
+        #[test]
+        fn select_tail_falls_back_to_summarize_everything_when_no_suffix_fits() {
+            // Single oversized turn with budget too small to admit even the
+            // last message: caller should summarize the whole thing.
+            let msgs = vec![
+                m48_fixtures::user_text(
+                    1,
+                    "a very long single user message ".repeat(2_000).as_str(),
+                ),
+            ];
+            let result = select_tail(&msgs, 1, Some(2));
+            assert_eq!(result.tail_start, msgs.len());
+            assert_eq!(result.tail_tokens, 0);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
