@@ -1987,6 +1987,292 @@ Rules:
     }
 }
 
+/// M48-C5: overflow replay candidate selection + media-to-text fallback.
+///
+/// Mirrors the replay-prep portion of opencode `processCompaction`:
+///
+/// When a compaction event is triggered by a hard context-overflow error
+/// (not a routine ratio check), the message that *caused* the overflow is
+/// usually the most recent user prompt. Opencode captures that message
+/// for replay so the user does not lose their question, then strips media
+/// attachments down to text labels because oversized media is the most
+/// common overflow cause.
+///
+/// This stage adds pure helpers only:
+/// - `find_replay_candidate` returns the index + cloned content of the
+///   most recent **non-compaction-marker** user message strictly before
+///   the parent index. Returns `None` when no such message exists.
+/// - `prepare_replay_blocks` strips compaction markers and rewrites
+///   media blocks into `Text` placeholders so the replay payload no
+///   longer carries the original attachment bytes.
+/// - `is_replay_safe` checks the residual head (everything before the
+///   captured replay) for at least one usable user-led turn. Mirrors
+///   opencode's `hasContent` guard: when stripping out the replay would
+///   leave nothing summarizable, the replay is dropped and the auto-
+///   continue path is taken instead.
+///
+/// The actual session mutation (creating the synthetic replay user
+/// message, persisting overflow=true on `StoredCompactionTurn`, calling
+/// the compaction agent) is wired in C-4b/C-7. Keeping this layer pure
+/// lets us unit-test the precise rule that controls whether a replay
+/// happens at all.
+pub mod m48_overflow {
+    use super::{ContentBlock, Message, Role};
+
+    /// Text placeholder for stripped image attachments. Format mirrors
+    /// opencode `[Attached image/png: filename]` style so traces remain
+    /// recognizable across the two codebases.
+    pub fn media_text_label(media_type: &str) -> String {
+        format!("[Attached {media_type}: replaced during compaction]")
+    }
+
+    /// True when this user message is *only* a compaction marker (no real
+    /// human text). M48-C2 introduced the same heuristic via
+    /// `is_compaction_marker`; we duplicate it here so this module does
+    /// not need a back-reference into `m48_select`.
+    fn is_compaction_marker(msg: &Message) -> bool {
+        if msg.role != Role::User || msg.content.is_empty() {
+            return false;
+        }
+        msg.content
+            .iter()
+            .all(|b| matches!(b, ContentBlock::OpenAICompaction { .. }))
+    }
+
+    /// Captured replay payload: the index in the original message log
+    /// and a deep clone of the user message's content blocks so the
+    /// caller can re-emit it under a fresh message id without aliasing
+    /// the original.
+    #[derive(Debug, Clone)]
+    pub struct ReplayCandidate {
+        /// Index of the source message in the original log.
+        pub index: usize,
+        /// Cloned content blocks ready for replay. Compaction markers
+        /// are NOT yet stripped here so the caller can decide whether
+        /// to skip them. Use `prepare_replay_blocks` to get the
+        /// strip+rewrite output.
+        pub content: Vec<ContentBlock>,
+    }
+
+    /// Find the most recent user message strictly before `parent_index`
+    /// that is **not** a compaction marker. Walks backwards from
+    /// `parent_index - 1`. Returns `None` when the head has no such
+    /// message (first user prompt, or every prior user message is a
+    /// compaction marker).
+    pub fn find_replay_candidate(
+        messages: &[Message],
+        parent_index: usize,
+    ) -> Option<ReplayCandidate> {
+        if parent_index == 0 || parent_index > messages.len() {
+            return None;
+        }
+        for i in (0..parent_index).rev() {
+            let msg = &messages[i];
+            if msg.role != Role::User {
+                continue;
+            }
+            if is_compaction_marker(msg) {
+                continue;
+            }
+            return Some(ReplayCandidate {
+                index: i,
+                content: msg.content.clone(),
+            });
+        }
+        None
+    }
+
+    /// Rewrite content blocks for replay: drop compaction markers and
+    /// replace media attachments (Image blocks) with short text labels.
+    /// Pure function — does not consume the input. Mirrors opencode's
+    /// per-part replay loop where `compaction` parts are skipped and
+    /// `MessageV2.isMedia(part.mime)` parts become text labels.
+    pub fn prepare_replay_blocks(blocks: &[ContentBlock]) -> Vec<ContentBlock> {
+        let mut out: Vec<ContentBlock> = Vec::with_capacity(blocks.len());
+        for block in blocks {
+            match block {
+                ContentBlock::OpenAICompaction { .. } => continue,
+                ContentBlock::Image { media_type, .. } => {
+                    out.push(ContentBlock::Text {
+                        text: media_text_label(media_type),
+                        cache_control: None,
+                    });
+                }
+                other => out.push(other.clone()),
+            }
+        }
+        out
+    }
+
+    /// True when the head slice that remains after extracting a replay
+    /// candidate still contains at least one usable user-led turn that
+    /// can be summarized. Mirrors opencode's `hasContent` guard.
+    ///
+    /// `head` is `messages[..replay.index]` (the messages BEFORE the
+    /// replay candidate). When this returns false the caller should
+    /// drop the replay and fall through to the auto-continue path.
+    pub fn is_replay_safe(head: &[Message]) -> bool {
+        head.iter().any(|m| m.role == Role::User && !is_compaction_marker(m))
+    }
+
+    /// One-shot helper: given the full message log and the parent index
+    /// of the overflow-triggering user message, return the cloned blocks
+    /// ready to be re-emitted as a new replay user message, plus the
+    /// length of the residual head that should be fed to the compaction
+    /// agent. Returns `None` when no safe replay exists.
+    pub fn plan_overflow_replay(
+        messages: &[Message],
+        parent_index: usize,
+    ) -> Option<(Vec<ContentBlock>, usize)> {
+        let candidate = find_replay_candidate(messages, parent_index)?;
+        let head = &messages[..candidate.index];
+        if !is_replay_safe(head) {
+            return None;
+        }
+        let prepared = prepare_replay_blocks(&candidate.content);
+        Some((prepared, candidate.index))
+    }
+
+    #[cfg(test)]
+    mod overflow_tests {
+        use super::super::m48_fixtures;
+        use super::*;
+        use jcode_message_types::ContentBlock;
+
+        #[test]
+        fn media_text_label_is_human_readable() {
+            assert_eq!(
+                media_text_label("image/png"),
+                "[Attached image/png: replaced during compaction]"
+            );
+        }
+
+        #[test]
+        fn find_replay_candidate_returns_previous_user_message() {
+            // short_session: user, assistant, user, assistant
+            let msgs = m48_fixtures::short_session();
+            // parent_index = 2 (the second user message); replay should be
+            // index 0 (the first user message).
+            let cand = find_replay_candidate(&msgs, 2).unwrap();
+            assert_eq!(cand.index, 0);
+            assert!(matches!(cand.content[0], ContentBlock::Text { .. }));
+        }
+
+        #[test]
+        fn find_replay_candidate_skips_compaction_markers() {
+            let mut msgs = m48_fixtures::short_session();
+            // Replace the first user message with a compaction marker.
+            msgs[0] = Message {
+                role: Role::User,
+                content: vec![ContentBlock::OpenAICompaction {
+                    encrypted_content: "x".to_string(),
+                }],
+                timestamp: msgs[0].timestamp,
+                tool_duration_ms: None,
+            };
+            // No real prior user message exists -> None.
+            assert!(find_replay_candidate(&msgs, 2).is_none());
+        }
+
+        #[test]
+        fn find_replay_candidate_returns_none_at_index_zero() {
+            let msgs = m48_fixtures::short_session();
+            assert!(find_replay_candidate(&msgs, 0).is_none());
+        }
+
+        #[test]
+        fn find_replay_candidate_returns_none_past_end() {
+            let msgs = m48_fixtures::short_session();
+            assert!(find_replay_candidate(&msgs, msgs.len() + 5).is_none());
+        }
+
+        #[test]
+        fn prepare_replay_blocks_strips_compaction_markers() {
+            let blocks = vec![
+                ContentBlock::Text {
+                    text: "hello".to_string(),
+                    cache_control: None,
+                },
+                ContentBlock::OpenAICompaction {
+                    encrypted_content: "x".to_string(),
+                },
+            ];
+            let out = prepare_replay_blocks(&blocks);
+            assert_eq!(out.len(), 1);
+            assert!(matches!(out[0], ContentBlock::Text { .. }));
+        }
+
+        #[test]
+        fn prepare_replay_blocks_rewrites_images_to_text_labels() {
+            let blocks = vec![
+                ContentBlock::Text {
+                    text: "describe this".to_string(),
+                    cache_control: None,
+                },
+                ContentBlock::Image {
+                    media_type: "image/png".to_string(),
+                    data: "AAA".to_string(),
+                },
+            ];
+            let out = prepare_replay_blocks(&blocks);
+            assert_eq!(out.len(), 2);
+            // Second block should now be a text placeholder mentioning the
+            // media type but NOT the original payload.
+            match &out[1] {
+                ContentBlock::Text { text, .. } => {
+                    assert!(text.contains("image/png"));
+                    assert!(!text.contains("AAA"));
+                }
+                other => panic!("expected text, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn is_replay_safe_requires_real_user_turn_in_head() {
+            let msgs = m48_fixtures::short_session();
+            // Head before index 2 has a real user turn at index 0.
+            assert!(is_replay_safe(&msgs[..2]));
+            // Empty head is unsafe.
+            assert!(!is_replay_safe(&msgs[..0]));
+        }
+
+        #[test]
+        fn is_replay_safe_treats_compaction_only_head_as_unsafe() {
+            let head = vec![Message {
+                role: Role::User,
+                content: vec![ContentBlock::OpenAICompaction {
+                    encrypted_content: "x".to_string(),
+                }],
+                timestamp: Some(chrono::Utc::now()),
+                tool_duration_ms: None,
+            }];
+            assert!(!is_replay_safe(&head));
+        }
+
+        #[test]
+        fn plan_overflow_replay_returns_prepared_blocks_and_head_len() {
+            let msgs = m48_fixtures::short_session();
+            // parent index = 2; replay candidate is index 0.
+            // Head before index 0 is empty -> NOT safe; returns None.
+            assert!(plan_overflow_replay(&msgs, 2).is_none());
+        }
+
+        #[test]
+        fn plan_overflow_replay_succeeds_when_head_has_real_user_turn() {
+            // Build: user0, assistant0, user1, assistant1, user2 (the
+            // overflow-causing parent). Replay candidate = user1 (index 2),
+            // head before index 2 = [user0, assistant0] which is safe.
+            let mut msgs = m48_fixtures::short_session();
+            msgs.push(m48_fixtures::user_text(3, "newest overflow prompt"));
+            let parent_idx = msgs.len() - 1;
+            let (blocks, head_len) = plan_overflow_replay(&msgs, parent_idx).unwrap();
+            assert_eq!(head_len, 2);
+            assert!(!blocks.is_empty());
+            assert!(matches!(blocks[0], ContentBlock::Text { .. }));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
