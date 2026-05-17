@@ -1053,6 +1053,30 @@ The 10-stage M47 patch series (`patch/m47-c0-deep-merge-profiles` through `patch
    - Validation: 36 `jcode-compaction-core` lib tests pass (30 from prior M48 stages + 6 new). `cargo check -p jcode` clean. No runtime caller wired yet; M48-C4 will combine `select_tail` (C-2) + `prune` (C-3) into the actual compaction pipeline alongside the anchored summary template.
    - Binary reinstall required: no (test-only module; production binary unchanged).
 
+46. Anchored summary template + previousSummary chaining (M48-C4)
+   - Commit: `de8602ad` `[m48-c4] anchored summary template + previousSummary chaining (opencode parity)`.
+   - Patch branch: `patch/m48-c4-anchored-summary-template` (parent: `deploy/m9-m27-catchup`).
+   - Purpose: stand up the prompt + chain plumbing layer for durable compaction. Opencode's `SUMMARY_TEMPLATE` + `buildPrompt` + `previousSummary` lookup is the mechanism that lets long sessions cheaply refresh an anchored summary instead of summarizing from scratch every event. This stage adds all of that as pure helpers; the LLM call is wired in M48-C5/C-6.
+   - New module `jcode-compaction-core::m48_summary`:
+     - `SUMMARY_TEMPLATE: &'static str` — byte-for-byte parity with opencode's 8-section markdown skeleton (Goal / Constraints & Preferences / Progress {Done, In Progress, Blocked} / Key Decisions / Next Steps / Critical Context / Relevant Files) plus the closing "Rules:" block. Kept in source so prompt drift is auditable in git history.
+     - `CREATE_ANCHOR_PROLOGUE` + `UPDATE_ANCHOR_PROLOGUE` + `PREVIOUS_SUMMARY_OPEN_TAG` / `PREVIOUS_SUMMARY_CLOSE_TAG` mirroring opencode `buildPrompt` exactly.
+     - `pub fn build_prompt(previous_summary: Option<&str>, context: &[&str]) -> String` — joins `[anchor, SUMMARY_TEMPLATE, ...context]` with double-newlines.
+     - `pub trait CompactionTurnSlice { id, previous_summary_id, is_legacy_backfill, summary_message_id }` so the walker does not couple to `jcode-session-types`.
+     - `pub fn resolve_previous_summary_id<T: CompactionTurnSlice>(turns, current_id) -> Option<&str>` — walks the chain backwards, skips legacy-backfill entries, tolerates broken pointers and cycles via `MAX_CHAIN_DEPTH = 256`.
+   - Sidecar bridge:
+     - `impl jcode_compaction_core::m48_summary::CompactionTurnSlice for jcode_session_types::StoredCompactionTurn` so callers can plug `session.compaction_turns` directly into `resolve_previous_summary_id`.
+     - Adds `jcode-compaction-core = { path = "../jcode-compaction-core" }` to `jcode-session-types/Cargo.toml`.
+   - Tests (10 new in `m48_summary::summary_tests`):
+     - `create_prompt_has_no_anchor_block`, `update_prompt_wraps_previous_summary`, `build_prompt_appends_context_blocks_in_order` (prompt shape).
+     - `resolve_previous_summary_returns_none_on_empty_chain`, `resolve_previous_summary_returns_none_when_no_predecessor`, `resolve_previous_summary_returns_immediate_anchor`, `resolve_previous_summary_skips_legacy_backfill_entries`, `resolve_previous_summary_walks_past_multiple_legacy_entries`, `resolve_previous_summary_handles_broken_chain_pointer`, `resolve_previous_summary_bounds_chain_depth_against_cycles` (chain walker).
+   - Touched paths:
+     - `crates/jcode-compaction-core/src/lib.rs` (+299 lines: new `pub mod m48_summary` with template, prompt builder, trait, walker, and inline tests).
+     - `crates/jcode-session-types/src/lib.rs` (+18 lines: trait impl bridging the sidecar schema into the walker).
+     - `crates/jcode-session-types/Cargo.toml` (+1 line: `jcode-compaction-core` path dep).
+     - `Cargo.lock`.
+   - Validation: 46 `jcode-compaction-core` lib tests pass (36 prior + 10 new). 6 `jcode-session-types` tests still pass. `cargo check -p jcode` clean. No runtime caller wired yet; M48-C5 will combine `select_tail` (C-2) + `prune` (C-3) + `build_prompt` (C-4) into the replay-on-overflow path.
+   - Binary reinstall required: no (no runtime behavior change yet; selfdev build queued so the next stage starts fresh).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
