@@ -1023,6 +1023,36 @@ The 10-stage M47 patch series (`patch/m47-c0-deep-merge-profiles` through `patch
    - Validation: 30 `jcode-compaction-core` lib tests pass (19 from M48-C0 + 11 new). `cargo check -p jcode` clean. No production caller wired yet — M48-C3 will attach `select_tail` to the runtime prune path.
    - Binary reinstall required: no (no runtime caller change yet; selfdev build is queued for completeness so the next stage starts from a fresh binary).
 
+45. Pre-summary tool-output prune pass (M48-C3)
+   - Commit: `0cdffd3d` `[m48-c3] pre-summary tool-output prune pass (opencode parity)`.
+   - Patch branch: `patch/m48-c3-tool-output-prune` (parent: `deploy/m9-m27-catchup`).
+   - Purpose: port opencode `session/compaction.ts::prune` so M48-C4 (anchored summary) has the same pre-summary cleanup that opencode runs before token-budget selection. Without prune, jcode summarization wastes anchor tokens recapping stale tool outputs that are already irrelevant to the user's current question.
+   - Algorithm (`jcode-compaction-core::m48_prune`):
+     - Walk messages backwards. Skip tool-result-only user messages when counting turns (handles the jcode-specific multi-message-per-turn shape `user text + assistant tool_use + user tool_result`).
+     - `protect_recent_turns` (default 2) most recent turns are skipped entirely.
+     - For older turns, accumulate `ToolResult.content.len()` bytes. Once the rolling total exceeds `PRUNE_PROTECT` (40k bytes), every subsequent `ToolResult` is marked for prune.
+     - `protected_tools` (default `["skill"]`) never accumulate into the rolling budget and are never pruned (opencode parity for skill outputs).
+     - Existing placeholder content (`PRUNED_PLACEHOLDER = "[tool output removed by compaction]"`) is skipped → re-runs are idempotent.
+     - Commit phase only fires when `bytes_recovered > PRUNE_MINIMUM` (20k bytes); otherwise the input is returned unchanged.
+   - API:
+     - `pub fn prune(messages, protected_tools, protect_recent_turns, prune_protect_tokens, prune_minimum_tokens) -> (Vec<Message>, PruneReport)` — pure function, no in-place mutation; caller decides whether to persist.
+     - `pub fn prune_with_defaults(messages) -> (Vec<Message>, PruneReport)` — convenience wrapper using opencode defaults.
+     - `PruneReport { blocks_pruned, bytes_recovered, committed }` so call-site logging is precise.
+   - Differences from opencode (documented in module-level doc):
+     - Pure-functional (returns new Vec) instead of opencode's in-place mutation of `ToolPart.state.time.compacted`. M48-C4 will introduce the persistence wiring.
+     - `protected_tools` is a slice argument rather than a global const so tests can simulate skill-style protected tools without depending on the runtime tool registry.
+   - Tests (6 new in `m48_prune::prune_tests`):
+     - `small_session_does_not_meet_minimum_threshold` (no tool results → 0 recovered → not committed).
+     - `large_tool_outputs_get_pruned_outside_protected_window` (6 turns × ~42k bytes → prune older turns, keep last 2 intact).
+     - `protected_tool_names_are_never_pruned` (skill outputs survive even when they would dominate the budget).
+     - `prune_is_idempotent_on_already_pruned_content` (second pass recovers 0 new bytes).
+     - `protect_recent_turns_skips_last_n_turns` (2 turns of huge output → nothing qualifies because both are inside the protect window).
+     - `rolling_budget_keeps_first_recent_tail_intact` (5 turns of ~25k → last 2 turns always untouched).
+   - Touched paths:
+     - `crates/jcode-compaction-core/src/lib.rs` (+395 lines: new `pub mod m48_prune` with consts, `PruneReport`, `prune`, `prune_with_defaults`, and inline test module).
+   - Validation: 36 `jcode-compaction-core` lib tests pass (30 from prior M48 stages + 6 new). `cargo check -p jcode` clean. No runtime caller wired yet; M48-C4 will combine `select_tail` (C-2) + `prune` (C-3) into the actual compaction pipeline alongside the anchored summary template.
+   - Binary reinstall required: no (test-only module; production binary unchanged).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
