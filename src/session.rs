@@ -87,6 +87,18 @@ pub struct Session {
     /// Provider reasoning/thinking effort for this session (e.g., OpenAI low|medium|high|xhigh).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
+    /// M47-C6: Provider context-window preference for this session
+    /// (`"200k"` or `"1m"` on Anthropic; ignored elsewhere). Forwarded from
+    /// the M47-C5 variant resolver and restored on session load via
+    /// `Agent::restore_provider_preferences_from_session`, which calls the
+    /// M47-C4 `Provider::set_context_preference` surface.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_preference: Option<String>,
+    /// M47-C6: Provider extended-thinking toggle for this session
+    /// (Claude / Gemini / OpenRouter Kimi/GLM). Forwarded from the M47-C5
+    /// variant resolver and restored via `Provider::set_thinking`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_enabled: Option<bool>,
     /// Optional fixed model to use for subagents launched from this session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagent_model: Option<String>,
@@ -681,6 +693,8 @@ impl Session {
             provider_key: None,
             model: None,
             reasoning_effort: None,
+            context_preference: None,
+            thinking_enabled: None,
             subagent_model: None,
             improve_mode: None,
             autoreview_enabled: None,
@@ -727,6 +741,8 @@ impl Session {
             provider_key: None,
             model: None,
             reasoning_effort: None,
+            context_preference: None,
+            thinking_enabled: None,
             subagent_model: None,
             improve_mode: None,
             autoreview_enabled: None,

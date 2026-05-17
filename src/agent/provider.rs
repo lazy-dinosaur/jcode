@@ -88,7 +88,16 @@ impl Agent {
         self.provider_runtime_state.user_selected_after(generation)
     }
 
-    pub fn restore_reasoning_effort_from_session(&mut self) {
+    /// M47-C6: Restore all provider preferences persisted on the session
+    /// (effort / context_preference / thinking_enabled) onto the live provider
+    /// when the session is loaded or activated. Each dimension is independent:
+    /// the active provider may support some and silently skip the rest
+    /// (M47-C1/C-4 silent-skip semantics). When the session has no persisted
+    /// preference for a dimension, the current provider value is captured back
+    /// into the session so reconnects to a new account preserve the user's
+    /// intent.
+    pub fn restore_provider_preferences_from_session(&mut self) {
+        // ---- effort (M47-C1 silent skip semantics) ----
         if let Some(effort) = self.session.reasoning_effort.clone() {
             if let Err(e) = self.provider.set_reasoning_effort(&effort) {
                 // M47-C1: with silent-skip now in MultiProvider::set_reasoning_effort
@@ -105,6 +114,38 @@ impl Agent {
         } else {
             self.session.reasoning_effort = self.provider.reasoning_effort();
         }
+
+        // ---- context preference (M47-C4 Anthropic [1m] toggle) ----
+        if let Some(context) = self.session.context_preference.clone() {
+            if let Err(e) = self.provider.set_context_preference(&context) {
+                crate::logging::debug(&format!(
+                    "Skipped restoring context preference '{}': {}",
+                    context, e
+                ));
+            }
+        } else if !self.provider.available_contexts().is_empty() {
+            self.session.context_preference = self.provider.context_preference();
+        }
+
+        // ---- thinking toggle (M47-C4 Gemini / Anthropic / OpenRouter) ----
+        if let Some(thinking) = self.session.thinking_enabled {
+            if let Err(e) = self.provider.set_thinking(thinking) {
+                crate::logging::debug(&format!(
+                    "Skipped restoring thinking={}: {}",
+                    thinking, e
+                ));
+            }
+        } else if self.provider.supports_thinking() {
+            self.session.thinking_enabled = self.provider.thinking_enabled();
+        }
+    }
+
+    /// M47-C6 back-compat alias: the historical entry point used by
+    /// `Agent::new_with_session` and `Agent::restore_session`. Forwards to
+    /// the generalized restorer so all five session-level provider
+    /// preferences (effort / context / thinking) round-trip on session load.
+    pub fn restore_reasoning_effort_from_session(&mut self) {
+        self.restore_provider_preferences_from_session();
     }
 
     pub fn set_reasoning_effort(&mut self, effort: &str) -> Result<Option<String>> {

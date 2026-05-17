@@ -845,6 +845,100 @@ fn test_save_persists_reasoning_effort() -> Result<()> {
     Ok(())
 }
 
+// M47-C6: context_preference and thinking_enabled must round-trip through
+// session save/load just like reasoning_effort does. These three preferences
+// together form the persisted half of the M47 5-dimension agent profile
+// schema; restore_provider_preferences_from_session applies them all on
+// session activation via the M47-C4 Provider trait surface.
+
+#[test]
+fn test_save_persists_context_preference() -> Result<()> {
+    let _env_lock = lock_env();
+    let temp_home = tempfile::Builder::new()
+        .prefix("jcode-session-context-preference-save-test-")
+        .tempdir()
+        .map_err(|e| anyhow!(e))?;
+    let _home = EnvVarGuard::set("JCODE_HOME", temp_home.path().as_os_str());
+
+    let mut session = Session::create_with_id(
+        "session_context_preference_persist_test".to_string(),
+        None,
+        Some("context preference persistence test".to_string()),
+    );
+    session.model = Some("claude-opus-4-7[1m]".to_string());
+    session.context_preference = Some("1m".to_string());
+
+    session.save()?;
+
+    let loaded = Session::load("session_context_preference_persist_test")?;
+    assert_eq!(loaded.model.as_deref(), Some("claude-opus-4-7[1m]"));
+    assert_eq!(loaded.context_preference.as_deref(), Some("1m"));
+    assert_eq!(loaded.thinking_enabled, None);
+    Ok(())
+}
+
+#[test]
+fn test_save_persists_thinking_enabled_true_and_false() -> Result<()> {
+    let _env_lock = lock_env();
+    let temp_home = tempfile::Builder::new()
+        .prefix("jcode-session-thinking-save-test-")
+        .tempdir()
+        .map_err(|e| anyhow!(e))?;
+    let _home = EnvVarGuard::set("JCODE_HOME", temp_home.path().as_os_str());
+
+    // explicit-on
+    let mut on = Session::create_with_id(
+        "session_thinking_on_test".to_string(),
+        None,
+        Some("thinking on".to_string()),
+    );
+    on.model = Some("gemini-3.1-pro-preview".to_string());
+    on.thinking_enabled = Some(true);
+    on.save()?;
+
+    let loaded_on = Session::load("session_thinking_on_test")?;
+    assert_eq!(loaded_on.thinking_enabled, Some(true));
+
+    // explicit-off
+    let mut off = Session::create_with_id(
+        "session_thinking_off_test".to_string(),
+        None,
+        Some("thinking off".to_string()),
+    );
+    off.model = Some("gemini-3.1-pro-preview".to_string());
+    off.thinking_enabled = Some(false);
+    off.save()?;
+
+    let loaded_off = Session::load("session_thinking_off_test")?;
+    assert_eq!(loaded_off.thinking_enabled, Some(false));
+
+    Ok(())
+}
+
+#[test]
+fn test_save_omits_unset_context_and_thinking_dimensions() -> Result<()> {
+    let _env_lock = lock_env();
+    let temp_home = tempfile::Builder::new()
+        .prefix("jcode-session-unset-dims-save-test-")
+        .tempdir()
+        .map_err(|e| anyhow!(e))?;
+    let _home = EnvVarGuard::set("JCODE_HOME", temp_home.path().as_os_str());
+
+    let mut session = Session::create_with_id(
+        "session_unset_dims_test".to_string(),
+        None,
+        Some("unset dims".to_string()),
+    );
+    session.model = Some("gpt-5.5".to_string());
+    // context_preference, thinking_enabled intentionally left None.
+    session.save()?;
+
+    let loaded = Session::load("session_unset_dims_test")?;
+    assert_eq!(loaded.context_preference, None);
+    assert_eq!(loaded.thinking_enabled, None);
+    Ok(())
+}
+
 fn read_journal_entries(path: &std::path::Path) -> Result<Vec<serde_json::Value>> {
     if !path.exists() {
         return Ok(Vec::new());

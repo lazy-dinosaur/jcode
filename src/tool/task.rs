@@ -571,6 +571,26 @@ impl Tool for SubagentTool {
             session.reasoning_effort = Some(route_effort);
         }
 
+        // M47-C6: forward the context-window and thinking dimensions resolved
+        // by `route_for_subagent_type` (M47-C5) to the child session so
+        // `restore_provider_preferences_from_session` can apply them via the
+        // M47-C4 Provider trait surface. We only set when the dimension is
+        // currently unset on the session (so an existing session with a user
+        // override survives) and let the active provider silently skip
+        // unsupported dimensions (M47-C1/C-4 semantics) — the SSOT can carry
+        // all five dimensions even when the resolved model does not consume
+        // them all.
+        if session.context_preference.is_none()
+            && let Some(route_context) = route.context.clone()
+        {
+            session.context_preference = Some(route_context);
+        }
+        if session.thinking_enabled.is_none()
+            && let Some(route_thinking) = route.thinking
+        {
+            session.thinking_enabled = Some(route_thinking);
+        }
+
         if let Some(ref working_dir) = ctx.working_dir {
             session.working_dir = Some(working_dir.display().to_string());
         }
