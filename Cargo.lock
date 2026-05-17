@@ -3666,6 +3666,7 @@ name = "jcode-session-types"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "jcode-compaction-core",
  "jcode-message-types",
  "serde",
 ]
