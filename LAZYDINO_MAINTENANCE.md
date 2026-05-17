@@ -957,6 +957,21 @@ Track each custom patch as a small commit. Current known customizations:
 
 The 10-stage M47 patch series (`patch/m47-c0-deep-merge-profiles` through `patch/m47-c9-sample-agent-md`) is complete. The lazy-harness 4-provider SSOT goal is unblocked: a single `~/.jcode/agents/<persona>.md` profile can carry `model` + `variant` + optional `effort` / `context` / `thinking` and the spawn-path will route the right combination per backend (Claude → 1M context, OpenAI → reasoning effort, Gemini → thinking budget, OpenRouter → effort + thinking). See `docs/lazydino/milestones/M47.md` for the dependency graph, validation matrix, and behavior change notes per stage.
 
+42. Compaction baseline fixtures and per-message token trace (M48-C0)
+   - Commit: `6aaa589e` `compaction: baseline fixtures and per-message token trace (M48-C0)`.
+   - Patch branch: `patch/m48-c0-compaction-fixtures` (parent: `deploy/m9-m27-catchup`, kicks off M48).
+   - Purpose: every later M48 stage (select, prune, anchored summary, replay-on-overflow, OpenAI coexistence) needs a stable input surface to diff behavior against. M48-C0 adds 5 deterministic fixtures plus a per-message token trace so subsequent stages can land focused PRs without re-inventing the test scaffolding each time.
+   - Implementation:
+     - New `jcode-compaction-core::m48_fixtures` module: `short_session`, `long_text_only_session` (20 turns, > 5k tokens), `tool_heavy_session` (4_000 char tool_result per turn), `image_session`, `openai_native_compacted_session`. Each fixture uses a fixed-timestamp builder so JSON round-trip remains reproducible.
+     - New `jcode-compaction-core::m48_trace` module: `block_tokens`, `message_tokens`, `total_tokens`, and `trace_messages(...) -> Vec<MessageTrace>` carrying per-block `kind` + `tokens` for human-readable test failure output. Uses the existing `CHARS_PER_TOKEN` constant so numbers match the rest of the crate.
+     - Added `chrono = "0.4"` (default-features=false, `clock` feature only) to `jcode-compaction-core/Cargo.toml` for fixture timestamps.
+   - Touched paths:
+     - `crates/jcode-compaction-core/Cargo.toml`
+     - `crates/jcode-compaction-core/src/lib.rs` (+405 lines, two new `pub mod`s)
+     - `Cargo.lock`
+   - Validation: 19 `jcode-compaction-core` lib tests pass (9 pre-existing + 10 new self-tests). `cargo check -p jcode` clean.
+   - Binary reinstall required: no (test-only modules; production binary is unchanged).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
