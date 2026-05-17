@@ -758,6 +758,17 @@ impl Provider for OpenRouterProvider {
         }
     }
 
+    // M47-C4: OpenRouter routes a `thinking` channel for several model
+    // families (Kimi K2, GLM 4.6 thinking variants, etc.). The existing
+    // `OpenRouterProvider::thinking_override()` reads `JCODE_OPENROUTER_THINKING`
+    // to force-on/force-off per session. C-4 declares the capability so the
+    // M47-C5 variant resolver can mark `thinking: true` as intentional. The
+    // env override stays the authoritative request-time switch until a
+    // follow-up commit lifts it into a per-session preference field.
+    fn supports_thinking(&self) -> bool {
+        true
+    }
+
     fn available_models(&self) -> Vec<&'static str> {
         // OpenRouter models are fetched dynamically from the API.
         // Static list is empty; use available_models_display for cached list.
