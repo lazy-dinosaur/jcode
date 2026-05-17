@@ -180,6 +180,53 @@ pub trait Provider: Send + Sync {
         vec![]
     }
 
+    // ---- M47-C4: provider-aware context window and thinking dimensions ----
+    //
+    // These three pairs (efforts above, contexts here, thinking below) are the
+    // declarative surface a Provider exposes for the model/variant/effort/
+    // context/thinking 5-dimension agent profile schema (see M47 plan). The
+    // M47-C5 variant resolver consults these to pick the right channel per
+    // provider when `variant = "max"` is requested. Default impls are inert so
+    // backends that do not expose a given dimension stay compatible.
+
+    /// Get ordered list of context-window selections this provider exposes.
+    /// Empty when the provider does not expose a runtime context-window choice
+    /// (e.g. OpenAI / Gemini / Bedrock are fixed per model).
+    fn available_contexts(&self) -> Vec<&'static str> {
+        vec![]
+    }
+
+    /// Get the currently active context-window selection (if applicable).
+    /// `None` when unset or unsupported.
+    fn context_preference(&self) -> Option<String> {
+        None
+    }
+
+    /// Set the active context-window selection. Silent skip on backends that
+    /// do not expose this surface — caller is expected to read
+    /// `available_contexts()` first if it cares.
+    fn set_context_preference(&self, _context: &str) -> Result<()> {
+        Ok(())
+    }
+
+    /// Whether this provider exposes a thinking / extended-thinking surface.
+    /// `false` for OpenAI direct (reasoning is configured via `effort`) and
+    /// for providers that bake thinking into the model id.
+    fn supports_thinking(&self) -> bool {
+        false
+    }
+
+    /// Get the currently active thinking toggle (if applicable).
+    fn thinking_enabled(&self) -> Option<bool> {
+        None
+    }
+
+    /// Set the active thinking toggle. Silent skip on backends that do not
+    /// expose this surface.
+    fn set_thinking(&self, _enabled: bool) -> Result<()> {
+        Ok(())
+    }
+
     /// Get the active service tier override (if applicable).
     fn service_tier(&self) -> Option<String> {
         None

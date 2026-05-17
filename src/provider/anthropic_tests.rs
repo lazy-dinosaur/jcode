@@ -897,3 +897,72 @@ async fn test_sanitize_dangling_tool_ids_with_dots() {
         }
     }
 }
+
+// ---- M47-C4: Anthropic context_preference round-trip ----
+
+#[tokio::test]
+async fn set_context_preference_1m_appends_suffix_then_200k_strips_it() {
+    let provider = AnthropicProvider::new();
+    provider.set_model("claude-opus-4-7").expect("set base model");
+
+    // Initial state: 200k default
+    assert_eq!(provider.context_preference().as_deref(), Some("200k"));
+    assert_eq!(provider.model(), "claude-opus-4-7");
+
+    // Switch to 1M
+    provider
+        .set_context_preference("1m")
+        .expect("set 1m context");
+    assert_eq!(provider.model(), "claude-opus-4-7[1m]");
+    assert_eq!(provider.context_preference().as_deref(), Some("1m"));
+
+    // Idempotent: setting 1m again must not double-append
+    provider
+        .set_context_preference("1m")
+        .expect("set 1m again");
+    assert_eq!(provider.model(), "claude-opus-4-7[1m]");
+
+    // Back to 200k
+    provider
+        .set_context_preference("200k")
+        .expect("set 200k context");
+    assert_eq!(provider.model(), "claude-opus-4-7");
+    assert_eq!(provider.context_preference().as_deref(), Some("200k"));
+}
+
+#[tokio::test]
+async fn anthropic_available_contexts_lists_200k_and_1m() {
+    let provider = AnthropicProvider::new();
+    let contexts = provider.available_contexts();
+    assert_eq!(contexts, vec!["200k", "1m"]);
+}
+
+#[tokio::test]
+async fn anthropic_supports_thinking_is_true() {
+    let provider = AnthropicProvider::new();
+    assert!(provider.supports_thinking());
+}
+
+#[tokio::test]
+async fn anthropic_set_context_preference_accepts_aliases() {
+    let provider = AnthropicProvider::new();
+    provider.set_model("claude-sonnet-4-6").expect("set");
+    provider
+        .set_context_preference("long-context")
+        .expect("long-context alias");
+    assert_eq!(provider.model(), "claude-sonnet-4-6[1m]");
+    provider
+        .set_context_preference("default")
+        .expect("default alias");
+    assert_eq!(provider.model(), "claude-sonnet-4-6");
+}
+
+#[tokio::test]
+async fn anthropic_set_context_preference_unknown_value_is_noop() {
+    let provider = AnthropicProvider::new();
+    provider.set_model("claude-opus-4-7").expect("set");
+    provider
+        .set_context_preference("ultra")
+        .expect("unknown ignored");
+    assert_eq!(provider.model(), "claude-opus-4-7");
+}

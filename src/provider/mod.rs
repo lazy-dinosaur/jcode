@@ -1536,6 +1536,120 @@ impl Provider for MultiProvider {
         }
     }
 
+    // ---- M47-C4: provider-aware context / thinking dimensions ----
+    //
+    // MultiProvider dispatches each declarative dimension to the currently
+    // active backend. Default impls in the Provider trait keep this safe even
+    // before individual providers implement the surface — non-implementing
+    // providers return inert defaults (empty Vec / None / Ok(())).
+
+    fn available_contexts(&self) -> Vec<&'static str> {
+        match self.active_provider() {
+            ActiveProvider::Claude => self
+                .anthropic_provider()
+                .map(|a| a.available_contexts())
+                .or_else(|| self.claude_provider().map(|c| c.available_contexts()))
+                .unwrap_or_default(),
+            _ => vec![],
+        }
+    }
+
+    fn context_preference(&self) -> Option<String> {
+        match self.active_provider() {
+            ActiveProvider::Claude => self
+                .anthropic_provider()
+                .and_then(|a| a.context_preference())
+                .or_else(|| self.claude_provider().and_then(|c| c.context_preference())),
+            _ => None,
+        }
+    }
+
+    fn set_context_preference(&self, context: &str) -> Result<()> {
+        match self.active_provider() {
+            ActiveProvider::Claude => {
+                if let Some(anthropic) = self.anthropic_provider() {
+                    anthropic.set_context_preference(context)
+                } else if let Some(claude) = self.claude_provider() {
+                    claude.set_context_preference(context)
+                } else {
+                    Err(anyhow::anyhow!("Claude provider not available"))
+                }
+            }
+            // Other providers do not expose a runtime context-window choice.
+            // Treat as a non-fatal hint so a single SSOT can carry the field
+            // for every persona without raising on unrelated backends.
+            other => {
+                crate::logging::debug(&format!(
+                    "context_preference '{}' ignored: active provider {:?} does not expose a context-window choice",
+                    context, other
+                ));
+                Ok(())
+            }
+        }
+    }
+
+    fn supports_thinking(&self) -> bool {
+        match self.active_provider() {
+            ActiveProvider::Claude => {
+                self.anthropic_provider()
+                    .is_some_and(|a| a.supports_thinking())
+                    || self
+                        .claude_provider()
+                        .is_some_and(|c| c.supports_thinking())
+            }
+            ActiveProvider::Gemini => self
+                .gemini_provider()
+                .is_some_and(|g| g.supports_thinking()),
+            ActiveProvider::OpenRouter => self
+                .openrouter_provider()
+                .is_some_and(|o| o.supports_thinking()),
+            _ => false,
+        }
+    }
+
+    fn thinking_enabled(&self) -> Option<bool> {
+        match self.active_provider() {
+            ActiveProvider::Claude => self
+                .anthropic_provider()
+                .and_then(|a| a.thinking_enabled())
+                .or_else(|| self.claude_provider().and_then(|c| c.thinking_enabled())),
+            ActiveProvider::Gemini => self.gemini_provider().and_then(|g| g.thinking_enabled()),
+            ActiveProvider::OpenRouter => {
+                self.openrouter_provider().and_then(|o| o.thinking_enabled())
+            }
+            _ => None,
+        }
+    }
+
+    fn set_thinking(&self, enabled: bool) -> Result<()> {
+        match self.active_provider() {
+            ActiveProvider::Claude => {
+                if let Some(anthropic) = self.anthropic_provider() {
+                    anthropic.set_thinking(enabled)
+                } else if let Some(claude) = self.claude_provider() {
+                    claude.set_thinking(enabled)
+                } else {
+                    Err(anyhow::anyhow!("Claude provider not available"))
+                }
+            }
+            ActiveProvider::Gemini => self
+                .gemini_provider()
+                .ok_or_else(|| anyhow::anyhow!("Gemini provider not available"))?
+                .set_thinking(enabled),
+            ActiveProvider::OpenRouter => self
+                .openrouter_provider()
+                .ok_or_else(|| anyhow::anyhow!("OpenAI-compatible provider not available"))?
+                .set_thinking(enabled),
+            other => {
+                crate::logging::debug(&format!(
+                    "thinking={} ignored: active provider {:?} does not expose a thinking surface",
+                    enabled, other
+                ));
+                Ok(())
+            }
+        }
+    }
+
     fn service_tier(&self) -> Option<String> {
         match self.active_provider() {
             ActiveProvider::OpenAI => self.openai_provider().and_then(|o| o.service_tier()),

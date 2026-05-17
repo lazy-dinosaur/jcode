@@ -1159,6 +1159,85 @@ impl Provider for AnthropicProvider {
         Ok(())
     }
 
+    // ---- M47-C4: Anthropic provider-aware context / thinking ----
+    //
+    // Anthropic is the only built-in provider that exposes a runtime
+    // context-window choice. `"1m"` appends the `[1m]` suffix that the
+    // existing 1M-context routing (commit 3ad34ed2 and follow-ups) consumes
+    // both in the OAuth beta-header selection (`anthropic_oauth_beta_headers`)
+    // and in `context_limit_for_model`. `"200k"` strips the suffix back to the
+    // default 200K route. Any other value is a no-op debug log so a single
+    // SSOT can carry the field for every persona without raising on us.
+    //
+    // The matching model is not auto-listed in known_anthropic_model_ids when
+    // the `[1m]` suffix is appended at runtime; set_model bypasses the model
+    // catalog check that set_context_preference would otherwise fail on. We
+    // therefore write the model field directly instead of going through
+    // `set_model` so the runtime context preference can be applied even for
+    // catalogs that ship only the base model id.
+
+    fn available_contexts(&self) -> Vec<&'static str> {
+        vec!["200k", "1m"]
+    }
+
+    fn context_preference(&self) -> Option<String> {
+        let model = self
+            .model
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        if model.ends_with("[1m]") {
+            Some("1m".to_string())
+        } else {
+            Some("200k".to_string())
+        }
+    }
+
+    fn set_context_preference(&self, context: &str) -> Result<()> {
+        let normalized = context.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            "1m" | "1m-context" | "long" | "long-context" => {
+                let mut guard = self
+                    .model
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if !guard.ends_with("[1m]") {
+                    *guard = format!("{}[1m]", guard);
+                }
+                Ok(())
+            }
+            "200k" | "default" | "short" | "short-context" => {
+                let mut guard = self
+                    .model
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if let Some(stripped) = guard.strip_suffix("[1m]") {
+                    *guard = stripped.to_string();
+                }
+                Ok(())
+            }
+            "" => Ok(()),
+            other => {
+                crate::logging::debug(&format!(
+                    "Unrecognized Anthropic context preference '{}' ignored (available: 200k, 1m)",
+                    other
+                ));
+                Ok(())
+            }
+        }
+    }
+
+    // Anthropic models from 4.7 expose extended-thinking via the
+    // `interleaved-thinking-2025-05-14` beta (already shipped in OAUTH headers,
+    // see `ANTHROPIC_OAUTH_BETA_HEADERS`). The provider currently does not
+    // toggle the thinking surface at request time — we just declare the
+    // capability so M47-C5 variant resolution can mark `thinking: true` as
+    // intentional rather than silently dropped. A future milestone may wire
+    // `set_thinking` into request bodies for non-OAuth flows.
+    fn supports_thinking(&self) -> bool {
+        true
+    }
+
     fn available_models(&self) -> Vec<&'static str> {
         AVAILABLE_MODELS.to_vec()
     }

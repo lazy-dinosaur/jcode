@@ -159,6 +159,34 @@ impl Provider for JcodeProvider {
         self.inner.available_efforts()
     }
 
+    // M47-C4: forward provider-aware context / thinking dimensions to the
+    // wrapped MultiProvider so any caller holding a `JcodeProvider` (e.g.
+    // the desktop/UI layer that wraps the multi-provider for runtime profile
+    // application) keeps full surface parity.
+    fn available_contexts(&self) -> Vec<&'static str> {
+        self.inner.available_contexts()
+    }
+
+    fn context_preference(&self) -> Option<String> {
+        self.inner.context_preference()
+    }
+
+    fn set_context_preference(&self, context: &str) -> Result<()> {
+        self.inner.set_context_preference(context)
+    }
+
+    fn supports_thinking(&self) -> bool {
+        self.inner.supports_thinking()
+    }
+
+    fn thinking_enabled(&self) -> Option<bool> {
+        self.inner.thinking_enabled()
+    }
+
+    fn set_thinking(&self, enabled: bool) -> Result<()> {
+        self.inner.set_thinking(enabled)
+    }
+
     fn native_compaction_mode(&self) -> Option<String> {
         self.inner.native_compaction_mode()
     }

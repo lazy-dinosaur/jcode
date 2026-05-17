@@ -37,6 +37,12 @@ pub struct GeminiProvider {
     model: Arc<RwLock<String>>,
     state: Arc<Mutex<Option<GeminiRuntimeState>>>,
     fetched_models: Arc<RwLock<Vec<String>>>,
+    /// M47-C4: provider-aware thinking preference.
+    /// Stored as Option<bool> so callers can distinguish "user explicitly
+    /// turned thinking off" from "never set". The Gemini request builder may
+    /// consult this to populate `thinkingConfig.thinkingBudget` in a future
+    /// commit; M47-C4 only adds the declarative surface.
+    thinking_enabled: Arc<RwLock<Option<bool>>>,
 }
 
 impl GeminiProvider {
@@ -86,6 +92,7 @@ impl GeminiProvider {
             model: Arc::new(RwLock::new(model)),
             state: Arc::new(Mutex::new(None)),
             fetched_models: Arc::new(RwLock::new(Vec::new())),
+            thinking_enabled: Arc::new(RwLock::new(None)),
         };
         provider.seed_cached_catalog();
         provider
@@ -461,6 +468,7 @@ impl Provider for GeminiProvider {
                     model: provider.model.clone(),
                     state: state_cache.clone(),
                     fetched_models: provider.fetched_models.clone(),
+                    thinking_enabled: provider.thinking_enabled.clone(),
                 };
                 match provider.ensure_state().await {
                     Ok(state) => state,
@@ -695,6 +703,30 @@ impl Provider for GeminiProvider {
         Ok(())
     }
 
+    // M47-C4: Gemini exposes a thinking_budget API surface but does not expose
+    // a runtime context-window choice (model id picks the context). We declare
+    // supports_thinking() = true and persist the on/off preference. The actual
+    // request-body wiring (thinkingConfig.thinkingBudget) can land in a follow-
+    // up commit / milestone without changing the declarative surface here.
+    fn supports_thinking(&self) -> bool {
+        true
+    }
+
+    fn thinking_enabled(&self) -> Option<bool> {
+        *self
+            .thinking_enabled
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn set_thinking(&self, enabled: bool) -> Result<()> {
+        *self
+            .thinking_enabled
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(enabled);
+        Ok(())
+    }
+
     fn available_models(&self) -> Vec<&'static str> {
         AVAILABLE_MODELS.to_vec()
     }
@@ -750,6 +782,7 @@ impl Provider for GeminiProvider {
             model: Arc::new(RwLock::new(self.model())),
             state: self.state.clone(),
             fetched_models: self.fetched_models.clone(),
+            thinking_enabled: self.thinking_enabled.clone(),
         })
     }
 
@@ -766,6 +799,7 @@ impl Clone for GeminiProvider {
             model: self.model.clone(),
             state: self.state.clone(),
             fetched_models: self.fetched_models.clone(),
+            thinking_enabled: self.thinking_enabled.clone(),
         }
     }
 }
