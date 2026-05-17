@@ -51,6 +51,57 @@ fn sample_mermaid_page(content: impl Into<String>) -> crate::side_panel::SidePan
     }
 }
 
+fn clear_pinned_cache() {
+    let mut cache = pinned_cache().lock().expect("pinned cache lock");
+    *cache = PinnedCacheState::default();
+}
+
+#[test]
+fn pinned_content_cache_invalidates_when_images_change_without_message_version_bump() {
+    with_serialized_mermaid_state(|| {
+        clear_pinned_cache();
+        let messages: Vec<DisplayMessage> = Vec::new();
+
+        assert!(!collect_pinned_content_cached(
+            &messages,
+            &[],
+            false,
+            true,
+            7
+        ));
+
+        let mut png_bytes = Vec::new();
+        ::image::DynamicImage::ImageRgba8(::image::RgbaImage::from_pixel(
+            1,
+            1,
+            ::image::Rgba([0, 0, 0, 0]),
+        ))
+        .write_to(
+            &mut std::io::Cursor::new(&mut png_bytes),
+            ::image::ImageFormat::Png,
+        )
+        .expect("encode png fixture");
+        use base64::Engine as _;
+
+        let images = vec![crate::session::RenderedImage {
+            media_type: "image/png".to_string(),
+            data: base64::engine::general_purpose::STANDARD.encode(png_bytes),
+            label: Some("pasted image".to_string()),
+            source: crate::session::RenderedImageSource::UserInput,
+        }];
+
+        assert!(collect_pinned_content_cached(
+            &messages, &images, false, true, 7
+        ));
+
+        let cache = pinned_cache().lock().expect("pinned cache lock");
+        assert_eq!(cache.entries.len(), 1);
+        assert!(
+            matches!(cache.entries[0], PinnedContentEntry::Image { ref label, .. } if label == "pasted image")
+        );
+    });
+}
+
 #[test]
 fn clamp_side_panel_image_rows_leaves_room_for_following_content() {
     let rows = clamp_side_panel_image_rows(18, 16, 2, true);

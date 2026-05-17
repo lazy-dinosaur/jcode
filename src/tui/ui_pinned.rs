@@ -125,6 +125,7 @@ fn image_source_badge(source: &crate::session::RenderedImageSource) -> String {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct PinnedCacheKey {
     messages_version: u64,
+    images_signature: u64,
     collect_diffs: bool,
     collect_images: bool,
 }
@@ -655,6 +656,32 @@ pub(crate) fn prewarm_focused_side_panel(
     true
 }
 
+fn rendered_images_signature(images: &[crate::session::RenderedImage]) -> u64 {
+    use std::hash::{Hash as _, Hasher as _};
+
+    let mut hasher = std::hash::DefaultHasher::new();
+    images.len().hash(&mut hasher);
+    for image in images {
+        image.media_type.hash(&mut hasher);
+        image.data.hash(&mut hasher);
+        image.label.hash(&mut hasher);
+        match &image.source {
+            crate::session::RenderedImageSource::UserInput => {
+                0u8.hash(&mut hasher);
+            }
+            crate::session::RenderedImageSource::ToolResult { tool_name } => {
+                1u8.hash(&mut hasher);
+                tool_name.hash(&mut hasher);
+            }
+            crate::session::RenderedImageSource::Other { role } => {
+                2u8.hash(&mut hasher);
+                role.hash(&mut hasher);
+            }
+        }
+    }
+    hasher.finish()
+}
+
 pub(super) fn collect_pinned_content_cached(
     messages: &[DisplayMessage],
     images: &[crate::session::RenderedImage],
@@ -664,6 +691,7 @@ pub(super) fn collect_pinned_content_cached(
 ) -> bool {
     let key = PinnedCacheKey {
         messages_version,
+        images_signature: rendered_images_signature(images),
         collect_diffs,
         collect_images,
     };
