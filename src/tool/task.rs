@@ -146,7 +146,23 @@ impl SubagentTool {
     }
 
     fn should_apply_route_effort(model: &str) -> bool {
-        model.starts_with("gpt-") || model.starts_with("openai/")
+        // M47-C2: align with `provider/mod.rs::set_reasoning_effort` which
+        // accepts both OpenAI and OpenRouter (DeepSeek/GLM and similar
+        // OpenAI-compatible reasoning models). Previously this was a hard
+        // string prefix check (`gpt-`/`openai/`) that silently dropped route
+        // effort for OpenRouter reasoning models — even though the provider
+        // would have accepted the value. Using `provider_for_model` keeps the
+        // routing decision in one place and makes new reasoning-capable
+        // OpenRouter profiles work without touching task.rs.
+        //
+        // Non-OpenAI providers (Claude/Gemini/Bedrock/...) silently skip in
+        // MultiProvider::set_reasoning_effort (M47-C1), but skipping here too
+        // avoids needlessly populating `session.reasoning_effort` for a
+        // provider that will just ignore it.
+        match crate::provider::provider_for_model(model) {
+            Some("openai") | Some("openrouter") => true,
+            _ => false,
+        }
     }
 
     fn configured_subagent_types(working_dir: Option<&Path>) -> Vec<String> {
@@ -795,15 +811,56 @@ mod tests {
 
     #[test]
     fn route_effort_applies_only_to_openai_style_models() {
+        // M47-C2: route effort is applied whenever provider_for_model resolves
+        // to a backend that supports reasoning_effort (OpenAI direct or
+        // OpenRouter for DeepSeek/GLM and similar OpenAI-compatible profiles).
+        // Earlier behavior was a hard prefix check (`gpt-` / `openai/`) that
+        // dropped effort for OpenRouter reasoning models.
+
+        // OpenAI direct
         assert!(super::SubagentTool::should_apply_route_effort("gpt-5.5"));
+        assert!(super::SubagentTool::should_apply_route_effort("gpt-5.4-pro"));
+
+        // OpenAI through OpenRouter style prefix
         assert!(super::SubagentTool::should_apply_route_effort(
             "openai/gpt-5.5"
         ));
+
+        // OpenRouter reasoning models (DeepSeek / GLM / Kimi / etc).
+        // `provider_for_model` classifies any `<vendor>/<model>` token as
+        // openrouter, so DeepSeek-style direct profiles routed through the
+        // OpenAI-compatible backend get effort applied too.
+        assert!(super::SubagentTool::should_apply_route_effort(
+            "deepseek/deepseek-r1"
+        ));
+        assert!(super::SubagentTool::should_apply_route_effort(
+            "zhipu/glm-4-6"
+        ));
+        assert!(super::SubagentTool::should_apply_route_effort(
+            "moonshot/kimi-k2"
+        ));
+
+        // Backends without a reasoning_effort surface — never apply.
         assert!(!super::SubagentTool::should_apply_route_effort(
             "claude-opus-4-7"
         ));
         assert!(!super::SubagentTool::should_apply_route_effort(
+            "claude-opus-4-7[1m]"
+        ));
+        assert!(!super::SubagentTool::should_apply_route_effort(
+            "claude-sonnet-4-6"
+        ));
+        assert!(!super::SubagentTool::should_apply_route_effort(
             "gemini-3.1-pro-preview"
+        ));
+        assert!(!super::SubagentTool::should_apply_route_effort(
+            "gemini-2.5-flash"
+        ));
+
+        // Unknown / empty model: skip rather than guess.
+        assert!(!super::SubagentTool::should_apply_route_effort(""));
+        assert!(!super::SubagentTool::should_apply_route_effort(
+            "totally-unknown-model"
         ));
     }
 
