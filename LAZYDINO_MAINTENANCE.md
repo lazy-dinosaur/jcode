@@ -882,6 +882,24 @@ Track each custom patch as a small commit. Current known customizations:
    - Behavior change: the resolver is consumed inside `route_for_subagent_type` but the downstream `execute()` spawn path still only forwards `route.effort` to the child session. M47-C6 wires the new `context` and `thinking` dimensions into `Session` so `restore_provider_preferences_from_session` can apply them via the M47-C4 Provider trait surface. Until then the new fields are computed but unused at runtime — no observable behavior change for end users yet.
    - Binary reinstall required: yes (subagent spawn resolver change; downstream callers ready for next stage).
 
+38. Session persists context_preference and thinking_enabled, restores all dims on load (M47-C6)
+   - Commit: `533431e9` `session: persist context_preference and thinking, restore all dims on session load (M47-C6)`.
+   - Patch branch: `patch/m47-c6-session-preferences` (parent: `patch/m47-c5-variant-resolver`).
+   - Purpose: wires the M47 5-dimension agent profile schema through session persistence so subagent spawn → save → reload → restore round-trips all three provider preferences (effort / context / thinking) into the live provider via the M47-C4 Provider trait surface.
+   - Implementation:
+     - `src/session.rs::Session` adds `pub context_preference: Option<String>` and `pub thinking_enabled: Option<bool>`. Both use `serde(default, skip_serializing_if = "Option::is_none")` so on-disk session JSON stays backwards-compatible (pre-M47-C6 readers ignore the new keys, pre-M47-C6 sessions deserialize with `None` defaults). Both `create_with_id` and `create` constructors initialize them to `None`.
+     - `src/agent/provider.rs` adds `restore_provider_preferences_from_session` generalizing the historical `restore_reasoning_effort_from_session`. Each dimension restored independently: a session may carry `context=1m` on a Claude run and `thinking=true` on a Gemini run, the active provider applies the ones it supports while silently skipping the rest (M47-C1/C-4 semantics). When the session has no persisted preference for a dimension, the current provider value is captured back into the session so account/route switches do not lose user intent.
+     - `restore_reasoning_effort_from_session` is preserved as a back-compat alias forwarding to the generalized restorer, so existing call sites in `Agent::new_with_session` and `Agent::restore_session` pick up context+thinking restoration for free. Effort branch uses `debug` logging on a real provider reject (M47-C1 semantics).
+     - `src/tool/task.rs::execute` forwards `route.context` and `route.thinking` from the M47-C5 variant resolver to the freshly-created child session, mirroring the existing `route.effort` handling. Existing session overrides are preserved (only set when the child session has the dimension unset).
+   - Touched paths:
+     - `src/session.rs` (schema + constructors)
+     - `src/agent/provider.rs` (generalized restorer + back-compat alias)
+     - `src/tool/task.rs` (spawn path forwards context/thinking to child session)
+     - `src/session_tests/cases.rs` (3 new round-trip regression tests)
+   - Validation: 3 new tests pass — `test_save_persists_context_preference`, `test_save_persists_thinking_enabled_true_and_false`, `test_save_omits_unset_context_and_thinking_dimensions`. Existing `test_save_persists_reasoning_effort` still passes. 46 `agent::tests::*` and 97 `session::*` tests still pass. `cargo check -p jcode` clean post-merge into deploy (one trivial whitespace/comment merge conflict in `restore_provider_preferences_from_session` resolved by preserving the M47-C1 docstring).
+   - Behavior change: agent profiles with explicit `context:` / `thinking:` or `variant: max` on Claude/Gemini/OpenRouter now propagate through the subagent spawn → session restore cycle so the live provider applies them. End-to-end effect visible: a `~/.jcode/agents/prometheus.md` profile with `model: claude-opus-4-7` + `variant: max` now persists `context_preference = "1m"` on its child session, and `restore_provider_preferences_from_session` calls `AnthropicProvider::set_context_preference("1m")` on load. Backward-compatible: pre-existing sessions deserialize with `None` dimensions and never call the new setters.
+   - Binary reinstall required: yes (session schema + restorer behavior).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
