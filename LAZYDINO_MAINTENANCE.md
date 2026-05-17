@@ -993,6 +993,36 @@ The 10-stage M47 patch series (`patch/m47-c0-deep-merge-profiles` through `patch
    - Validation: 4 new tests pass (round-trip, backfill on legacy-shaped session, idempotence guard, empty-Vec skip_serializing_if). 101 `session::*` + 46 `agent::*` + 21 `tool::task::*` tests still pass. `cargo check -p jcode` clean.
    - Binary reinstall required: yes (session schema; new field is forward-compatible but the binary must know to read/write it).
 
+44. Token-budgeted recent-tail selection (M48-C2)
+   - Commit: `e927e619` `[m48-c2] token-budgeted recent-tail selection (opencode parity)`.
+   - Patch branch: `patch/m48-c2-token-tail-selection` (parent: `deploy/m9-m27-catchup`).
+   - Purpose: port the opencode `session/compaction.ts::select` + `splitTurn` algorithm into `jcode-compaction-core` so M48-C3 (prune) and later stages have the same "what gets kept verbatim vs summarized" boundary calculation as opencode. This is the algorithmic core that M48-C1's sidecar schema describes (`tail_start_id` is the message id at this boundary).
+   - Config additions (`jcode-config-types::CompactionConfig`, all `#[serde(default, skip_serializing_if=...)]` so older sessions/configs round-trip unchanged):
+     - `auto: bool` (default true) — whether to attempt compaction automatically on context overflow.
+     - `prune: bool` (default true) — whether to drop the pre-tail head from the payload after summarization.
+     - `tail_turns: Option<usize>` (default 2 via `DEFAULT_TAIL_TURNS`) — number of recent user-led turns preserved verbatim.
+     - `preserve_recent_tokens: Option<usize>` — explicit token override for `preserve_recent_budget`; when `None` we use opencode's clamp `floor(usable/4)` ∈ `[MIN_PRESERVE_RECENT_TOKENS=2_000, MAX_PRESERVE_RECENT_TOKENS=8_000]`.
+     - `reserved_tokens: Option<usize>` — output reservation; when `None` we use opencode's `COMPACTION_BUFFER = DEFAULT_RESERVED_TOKENS = 20_000`.
+   - Algorithm (`jcode-compaction-core::m48_select`):
+     - `usable_budget(ctx, reserved) = max(0, ctx - reserved)` with saturating subtraction; returns 0 when ctx is unknown.
+     - `preserve_recent_budget(usable, override)` — override wins, otherwise clamp to `[MIN, MAX]`.
+     - `turns(messages)` — walks user-role messages, skips compaction markers (heuristic: user messages whose visible blocks are all `OpenAICompaction`), folds following assistant messages into the same `Turn { start, end }`.
+     - `select_tail(messages, budget, tail_turns_limit)` — walks the last `tail_turns_limit` turns backward, keeping whole turns under budget; on the first turn that does not fit calls `split_turn` to find the smallest suffix that fits; falls back to "summarize everything" when nothing fits.
+     - `split_turn(messages, turn, budget)` — scans forward for the first message index whose `[i..end)` slice fits; returns `None` for single-message turns.
+     - All edge cases covered with safe fallbacks: empty messages → no compaction; zero budget → no compaction; `tail_turns_limit=0` → summarize everything; no user turns → no compaction; oversized single message → summarize everything.
+   - Tests (11 new in `m48_select::select_tests`):
+     - `usable_budget_subtracts_reserved_tokens` (including the saturating-underflow case).
+     - `preserve_recent_budget_clamps_to_range` (below MIN, above MAX, inside range, explicit override).
+     - `turns_skips_assistant_only_runs`, `turns_ignores_compaction_marker_messages`.
+     - `select_tail_short_session_returns_zero`, `select_tail_long_session_keeps_last_turns_under_budget`, `select_tail_respects_zero_tail_turns_limit`, `select_tail_with_default_limit_keeps_last_two_turns_when_budget_large`.
+     - `split_turn_finds_suffix_inside_oversized_turn`, `split_turn_returns_none_for_single_message_turn`.
+     - `select_tail_falls_back_to_summarize_everything_when_no_suffix_fits`.
+   - Touched paths:
+     - `crates/jcode-compaction-core/src/lib.rs` (+381 lines: new `pub mod m48_select` with consts, structs, free functions, and inline test module).
+     - `crates/jcode-config-types/src/lib.rs` (+47 lines: 5 new fields on `CompactionConfig`).
+   - Validation: 30 `jcode-compaction-core` lib tests pass (19 from M48-C0 + 11 new). `cargo check -p jcode` clean. No production caller wired yet — M48-C3 will attach `select_tail` to the runtime prune path.
+   - Binary reinstall required: no (no runtime caller change yet; selfdev build is queued for completeness so the next stage starts from a fresh binary).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
