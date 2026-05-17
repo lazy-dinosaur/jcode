@@ -795,6 +795,168 @@ fn test_save_persists_compaction_state() -> Result<()> {
     Ok(())
 }
 
+// M48-C1: durable compaction-turn schema persistence + backfill.
+
+#[test]
+fn test_save_persists_compaction_turns_round_trip() -> Result<()> {
+    let _env_lock = lock_env();
+    let temp_home = tempfile::Builder::new()
+        .prefix("jcode-session-compaction-turns-save-test-")
+        .tempdir()
+        .map_err(|e| anyhow!(e))?;
+    let _home = EnvVarGuard::set("JCODE_HOME", temp_home.path().as_os_str());
+
+    let mut session = Session::create_with_id(
+        "session_compaction_turns_persist_test".to_string(),
+        None,
+        Some("compaction turns persistence test".to_string()),
+    );
+    session.compaction_turns.push(crate::session::StoredCompactionTurn {
+        id: "turn-1".to_string(),
+        marker_message_id: "msg-marker-1".to_string(),
+        summary_message_id: "msg-summary-1".to_string(),
+        auto: true,
+        overflow: false,
+        tail_start_id: Some("msg-tail-7".to_string()),
+        previous_summary_id: None,
+        summary_of_message_ids: vec!["msg-1".to_string(), "msg-2".to_string()],
+        backfilled_from_legacy: false,
+        created_at: Some(chrono::Utc::now()),
+    });
+
+    session.save()?;
+
+    let loaded = Session::load("session_compaction_turns_persist_test")?;
+    assert_eq!(loaded.compaction_turns.len(), 1);
+    let loaded_turn = &loaded.compaction_turns[0];
+    assert_eq!(loaded_turn.id, "turn-1");
+    assert_eq!(loaded_turn.marker_message_id, "msg-marker-1");
+    assert_eq!(loaded_turn.summary_message_id, "msg-summary-1");
+    assert!(loaded_turn.auto);
+    assert!(!loaded_turn.overflow);
+    assert_eq!(loaded_turn.tail_start_id.as_deref(), Some("msg-tail-7"));
+    assert_eq!(
+        loaded_turn.summary_of_message_ids,
+        vec!["msg-1".to_string(), "msg-2".to_string()]
+    );
+    assert!(!loaded_turn.is_legacy_backfill());
+    assert!(loaded_turn.has_durable_messages());
+    Ok(())
+}
+
+#[test]
+fn test_load_backfills_compaction_turns_from_legacy_state() -> Result<()> {
+    let _env_lock = lock_env();
+    let temp_home = tempfile::Builder::new()
+        .prefix("jcode-session-compaction-backfill-test-")
+        .tempdir()
+        .map_err(|e| anyhow!(e))?;
+    let _home = EnvVarGuard::set("JCODE_HOME", temp_home.path().as_os_str());
+
+    let mut session = Session::create_with_id(
+        "session_legacy_compaction_backfill_test".to_string(),
+        None,
+        Some("legacy compaction backfill test".to_string()),
+    );
+    // Simulate a pre-M48-C1 session: legacy compaction state set, no durable
+    // compaction_turns persisted.
+    session.compaction = Some(StoredCompactionState {
+        summary_text: "legacy session summary".to_string(),
+        openai_encrypted_content: None,
+        covers_up_to_turn: 12,
+        original_turn_count: 12,
+        compacted_count: 4,
+    });
+    assert!(session.compaction_turns.is_empty());
+    session.save()?;
+
+    // Loading the session must synthesize exactly one backfill turn while
+    // leaving the legacy `compaction` field intact.
+    let loaded = Session::load("session_legacy_compaction_backfill_test")?;
+    assert_eq!(loaded.compaction_turns.len(), 1);
+    let turn = &loaded.compaction_turns[0];
+    assert!(turn.is_legacy_backfill());
+    assert!(!turn.has_durable_messages());
+    assert!(turn.marker_message_id.is_empty());
+    assert!(turn.summary_message_id.is_empty());
+    assert_eq!(turn.id, "legacy-session_legacy_compaction_backfill_test-4");
+    // The legacy field must survive untouched.
+    assert!(loaded.compaction.is_some());
+    assert_eq!(
+        loaded.compaction.as_ref().unwrap().summary_text,
+        "legacy session summary"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_load_does_not_backfill_when_compaction_turns_already_present() -> Result<()> {
+    let _env_lock = lock_env();
+    let temp_home = tempfile::Builder::new()
+        .prefix("jcode-session-compaction-no-backfill-test-")
+        .tempdir()
+        .map_err(|e| anyhow!(e))?;
+    let _home = EnvVarGuard::set("JCODE_HOME", temp_home.path().as_os_str());
+
+    let mut session = Session::create_with_id(
+        "session_no_backfill_test".to_string(),
+        None,
+        Some("no backfill needed".to_string()),
+    );
+    // Both legacy compaction and durable turn present.
+    session.compaction = Some(StoredCompactionState {
+        summary_text: "legacy".to_string(),
+        openai_encrypted_content: None,
+        covers_up_to_turn: 1,
+        original_turn_count: 1,
+        compacted_count: 1,
+    });
+    session.compaction_turns.push(crate::session::StoredCompactionTurn {
+        id: "turn-real".to_string(),
+        marker_message_id: "msg-a".to_string(),
+        summary_message_id: "msg-b".to_string(),
+        auto: false,
+        overflow: false,
+        tail_start_id: None,
+        previous_summary_id: None,
+        summary_of_message_ids: Vec::new(),
+        backfilled_from_legacy: false,
+        created_at: None,
+    });
+    session.save()?;
+
+    // Backfill must be idempotent: the existing turn stays, no synthetic
+    // legacy turn is appended.
+    let loaded = Session::load("session_no_backfill_test")?;
+    assert_eq!(loaded.compaction_turns.len(), 1);
+    assert_eq!(loaded.compaction_turns[0].id, "turn-real");
+    assert!(!loaded.compaction_turns[0].is_legacy_backfill());
+    Ok(())
+}
+
+#[test]
+fn test_save_omits_compaction_turns_when_empty() -> Result<()> {
+    let _env_lock = lock_env();
+    let temp_home = tempfile::Builder::new()
+        .prefix("jcode-session-compaction-empty-save-test-")
+        .tempdir()
+        .map_err(|e| anyhow!(e))?;
+    let _home = EnvVarGuard::set("JCODE_HOME", temp_home.path().as_os_str());
+
+    let mut session = Session::create_with_id(
+        "session_compaction_empty_test".to_string(),
+        None,
+        Some("empty compaction turns".to_string()),
+    );
+    session.save()?;
+
+    // No compaction, no turns: round-trips clean.
+    let loaded = Session::load("session_compaction_empty_test")?;
+    assert!(loaded.compaction.is_none());
+    assert!(loaded.compaction_turns.is_empty());
+    Ok(())
+}
+
 #[test]
 fn test_save_persists_provider_key() -> Result<()> {
     let _env_lock = lock_env();

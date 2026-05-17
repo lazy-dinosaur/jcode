@@ -144,6 +144,10 @@ impl Session {
         session.reset_persist_state(path.exists());
         session.reset_provider_messages_cache();
         session.mark_memory_profile_dirty();
+        // M48-C1: synthesize a `StoredCompactionTurn` for legacy sessions that
+        // only have the old `compaction` field, so downstream code can treat
+        // both schemas uniformly. The legacy field is preserved untouched.
+        session.backfill_compaction_turns_from_legacy();
         let finalize_ms = finalize_start.elapsed().as_millis();
         crate::logging::info(&format!(
             "[TIMING] session_load: session={}, snapshot={}ms, journal={}ms, finalize={}ms, snapshot_bytes={}, journal_bytes={}, journal_entries={}, messages={}, env_snapshots={}, replay_events={}, total={}ms",
