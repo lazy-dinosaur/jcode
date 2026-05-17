@@ -807,6 +807,18 @@ Track each custom patch as a small commit. Current known customizations:
    - Validation: 6 new tests pass — `set_reasoning_effort_silently_skips_on_{claude,gemini,bedrock,cursor,copilot,antigravity}`. Existing 320 `provider::*` tests still pass, including the OpenRouter DeepSeek reasoning_effort suite (`direct_deepseek_profile_exposes_max_reasoning_effort`, `direct_deepseek_chat_request_sends_reasoning_effort`, `non_deepseek_compatible_profile_does_not_expose_reasoning_effort`).
    - Binary reinstall required: yes (runtime log noise + future effort-setting paths).
 
+34. Apply route effort via provider classification, not raw `gpt-`/`openai/` prefix (M47-C2)
+   - Commit: TBD `task: apply route effort whenever provider supports reasoning_effort (M47-C2)`.
+   - Patch branch: `patch/m47-c2-effort-apply-via-provider` (parent: `patch/m47-c1-effort-silent-skip`).
+   - Purpose: align `SubagentTool::should_apply_route_effort` with the actual provider acceptance rule in `MultiProvider::set_reasoning_effort`. Previously the spawn path tested `model.starts_with("gpt-") || model.starts_with("openai/")`, which silently dropped route effort for OpenRouter reasoning models (DeepSeek direct profile, GLM, Kimi, etc.) — even though the provider would accept and use the value. After M47-C1 silent-skip, this internal mismatch became the only barrier between agent profile `effort:` keys and OpenRouter-served reasoning models.
+   - Implementation:
+     - `src/tool/task.rs::SubagentTool::should_apply_route_effort`: replace the string prefix check with `provider_for_model(model)` matching `Some("openai") | Some("openrouter")`. Non-OpenAI providers (Claude/Gemini/Bedrock/...) continue to skip in two places: here (so `session.reasoning_effort` is never populated with an ignored value) and in `MultiProvider::set_reasoning_effort` (silent skip from M47-C1). Unknown / empty models also skip.
+   - Touched paths:
+     - `src/tool/task.rs`
+   - Validation: 14 `tool::task::tests::*` pass; the broadened `route_effort_applies_only_to_openai_style_models` now also asserts effort applies to `deepseek/deepseek-r1`, `zhipu/glm-4-6`, `moonshot/kimi-k2` (DeepSeek/GLM/Kimi OpenRouter reasoning profiles) and skips for `claude-opus-4-7[1m]`, `gemini-2.5-flash`, unknown models, and the empty string.
+   - Behavior change: GLM/DeepSeek/Kimi agent profiles with `effort:` now route the value into `session.reasoning_effort`, which `MultiProvider::set_reasoning_effort` already accepts for OpenRouter. No change for OpenAI direct or for non-reasoning providers.
+   - Binary reinstall required: yes (subagent spawn path).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
