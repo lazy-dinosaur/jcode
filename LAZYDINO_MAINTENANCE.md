@@ -819,6 +819,22 @@ Track each custom patch as a small commit. Current known customizations:
    - Behavior change: GLM/DeepSeek/Kimi agent profiles with `effort:` now route the value into `session.reasoning_effort`, which `MultiProvider::set_reasoning_effort` already accepts for OpenRouter. No change for OpenAI direct or for non-reasoning providers.
    - Binary reinstall required: yes (subagent spawn path).
 
+35. Agent profile schema gains `context` and `thinking` dimensions (M47-C3)
+   - Commit: `0865781c` `agents: add context and thinking dimensions to AgentRouteConfig (M47-C3)`.
+   - Patch branch: `patch/m47-c3-route-config-context-thinking` (parent: `patch/m47-c0-deep-merge-profiles`, independent of C-1/C-2).
+   - Purpose: profile schema in 2026-05 carried only `model`, `effort`, and `variant`, which forced Claude long-context, Gemini thinking, and OpenRouter Kimi/GLM thinking to ride on `variant="max"`'s provider-aware fallback. M47-C3 introduces two first-class optional fields so a single SSOT can target every persona explicitly. The lazy-harness 4-provider goal (Claude/GPT/Gemini/GLM) is the immediate consumer.
+   - Implementation:
+     - `crates/jcode-config-types/src/lib.rs::AgentRouteConfig`: add `context: Option<String>` and `thinking: Option<bool>` with rustdoc covering provider-specific behavior (Claude `[1m]` mapping for `context = "1m"`, Anthropic/Gemini/OpenRouter thinking surfaces, OpenAI ignores).
+     - Same file `AgentRouteConfig::merge_from`: deep-merge the two new fields. `context` follows the existing `Option<String>` rule (overwrite only when `Some(non-empty)`); `thinking` overwrites whenever `other.thinking.is_some()` so `thinking = false` correctly turns off an inherited `thinking: true`.
+     - `src/agent_profiles_md.rs::parse_agent_md_file`: read `context` / `context-window` / `context_window` / `context-length` as the string field, and `thinking` / `extended-thinking` / `extended_thinking` / `thinking-budget` / `thinking_budget` as the bool field.
+     - New `bool_field` helper alongside `string_field`: accepts real YAML booleans, the strings `"true"/"false"/"yes"/"no"/"on"/"off"/"enabled"/"disabled"` (case insensitive), and treats positive integer budgets as `Some(true)` so ecosystem profiles shipping `thinking-budget: 8192` map cleanly. A future milestone may add a dedicated numeric budget field.
+   - Touched paths:
+     - `crates/jcode-config-types/src/lib.rs`
+     - `src/agent_profiles_md.rs` (helper + 6 new regression tests)
+   - Validation: 15 `agent_profiles_md::tests::*` pass, including 6 new ones: `parse_agent_md_file_reads_context_and_thinking_fields`, `parse_agent_md_file_accepts_context_window_and_extended_thinking_aliases`, `parse_agent_md_file_thinking_budget_integer_maps_to_true`, `parse_agent_md_file_thinking_zero_maps_to_false`, `agents_for_working_dir_deep_merge_inherits_thinking_when_context_only_in_host`, `agents_for_working_dir_deep_merge_explicit_thinking_false_overrides_global`. `config::tests::*` (54) and `tool::task::tests::*` (14) still pass.
+   - Behavior change: the new fields are optional, deserialize-default, and ignored by downstream code until later M47 stages (C-4/C-5) wire them into provider behavior. Existing TOML and markdown profiles parse unchanged.
+   - Binary reinstall required: yes (config schema change; rust types and frontmatter parsing must match the live binary).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
