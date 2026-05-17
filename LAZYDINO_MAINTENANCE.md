@@ -972,6 +972,27 @@ The 10-stage M47 patch series (`patch/m47-c0-deep-merge-profiles` through `patch
    - Validation: 19 `jcode-compaction-core` lib tests pass (9 pre-existing + 10 new self-tests). `cargo check -p jcode` clean.
    - Binary reinstall required: no (test-only modules; production binary is unchanged).
 
+43. Durable compaction-turn schema with legacy backfill (M48-C1)
+   - Commit: `da774d33` `session: durable compaction-turn schema with legacy backfill (M48-C1)`.
+   - Patch branch: `patch/m48-c1-durable-compaction-schema` (parent: `deploy/m9-m27-catchup`).
+   - Purpose: sidecar metadata layer for opencode-style durable compaction. Each compaction event will (in future stages) write a marker user message + summary assistant message; this stage adds the relationships that link them so exports, search, memory extraction, and replay-on-overflow can find the right pair without depending on the legacy `Session.compaction` provider-payload field.
+   - Schema additions (jcode-session-types):
+     - `StoredCompactionTurn` with `id` / `marker_message_id` / `summary_message_id` / `auto` / `overflow` / `tail_start_id` / `previous_summary_id` / `summary_of_message_ids` / `backfilled_from_legacy` / `created_at`. All fields use serde defaults + `skip_serializing_if` so pre-C-1 JSON deserializes unchanged.
+     - Helper methods `is_legacy_backfill()` and `has_durable_messages()` on the new struct.
+   - Session field:
+     - `Session.compaction_turns: Vec<StoredCompactionTurn>` (opt-in serialize, skip when empty). Both `create_with_id` and `create` initialize to `Vec::new()`. Legacy `Session.compaction` field stays untouched so provider payload conversion keeps working through C-1.
+   - Backfill on load (`Session::backfill_compaction_turns_from_legacy`):
+     - Triggered from `session/persistence.rs::load_from_path` after the existing reset/cache reset chain.
+     - Idempotent: synthesizes exactly one legacy-flagged turn only when `compaction_turns` is empty AND `compaction` is `Some`.
+     - Synthetic turn has empty `marker_message_id` / `summary_message_id`, `backfilled_from_legacy = true`, `auto = true`, and reuses the session `updated_at` as `created_at`.
+   - Touched paths:
+     - `crates/jcode-session-types/src/lib.rs` (+106 lines: new struct + helpers + `is_false` serde helper)
+     - `src/session.rs` (field + import + backfill method)
+     - `src/session/persistence.rs` (call backfill after cache reset)
+     - `src/session_tests/cases.rs` (4 new regression tests)
+   - Validation: 4 new tests pass (round-trip, backfill on legacy-shaped session, idempotence guard, empty-Vec skip_serializing_if). 101 `session::*` + 46 `agent::*` + 21 `tool::task::*` tests still pass. `cargo check -p jcode` clean.
+   - Binary reinstall required: yes (session schema; new field is forward-compatible but the binary must know to read/write it).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
