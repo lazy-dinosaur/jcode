@@ -835,6 +835,38 @@ Track each custom patch as a small commit. Current known customizations:
    - Behavior change: the new fields are optional, deserialize-default, and ignored by downstream code until later M47 stages (C-4/C-5) wire them into provider behavior. Existing TOML and markdown profiles parse unchanged.
    - Binary reinstall required: yes (config schema change; rust types and frontmatter parsing must match the live binary).
 
+36. Provider trait gains context-window and thinking dimensions (M47-C4)
+   - Commits:
+     - `2781d68a` `provider: add context and thinking dimensions to Provider trait (M47-C4 step 1)` (trait + MultiProvider/JcodeProvider dispatch)
+     - `c158bacb` `provider: anthropic implements context_preference and supports_thinking (M47-C4 step 2)` (Anthropic [1m] suffix wiring + tests)
+     - `d367dbdb` `provider: gemini and openrouter declare thinking surface (M47-C4 step 3)` (Gemini preference field + OpenRouter capability declaration)
+   - Patch branch: `patch/m47-c4-provider-trait-dimensions` (parent: `patch/m47-c3-route-config-context-thinking`).
+   - Purpose: expose declarative context-window and thinking dimensions on every provider so the M47-C5 variant resolver (and a future TUI picker, M48) can route `variant = "max"` and explicit `context:` / `thinking:` profile keys to the right channel per backend. Currently `variant="max"` only routes to Anthropic 1M (via `apply_route_variant_to_model`) and OpenAI reasoning_effort=xhigh (via `normalize_route_effort`); Gemini thinking and OpenRouter Kimi/GLM thinking have no first-class surface.
+   - Surface added on `Provider`:
+     - `available_contexts() -> Vec<&'static str>` (default empty = not exposed)
+     - `context_preference() -> Option<String>`
+     - `set_context_preference(&str) -> Result<()>` (default Ok = silent skip)
+     - `supports_thinking() -> bool` (default false)
+     - `thinking_enabled() -> Option<bool>`
+     - `set_thinking(bool) -> Result<()>` (default Ok = silent skip)
+   - Implementations:
+     - Anthropic: `available_contexts() = ["200k","1m"]`, `context_preference()` reads `model.ends_with("[1m]")`, `set_context_preference("1m" | "1m-context" | "long" | "long-context")` appends the `[1m]` suffix idempotently, `set_context_preference("200k" | "default" | "short" | "short-context")` strips it, unknown values are debug-logged no-ops. `supports_thinking() = true` (declarative; the interleaved-thinking-2025-05-14 beta is already in `ANTHROPIC_OAUTH_BETA_HEADERS`).
+     - Gemini: new `thinking_enabled: Arc<RwLock<Option<bool>>>` field threaded through `new()`/`fork()`/`Clone`/per-stream snapshot. `supports_thinking() = true`. `set_thinking(b)` stores `Some(b)`. The Gemini request builder may consume it via `thinkingConfig.thinkingBudget` in a follow-up commit; M47-C4 only adds the declarative surface.
+     - OpenRouter: `supports_thinking() = true`. The existing `JCODE_OPENROUTER_THINKING` env override (`OpenRouterProvider::thinking_override`) remains the authoritative request-time switch; M47-C4 leaves the env path intact and only declares the capability so the variant resolver recognizes thinking-on as intentional.
+     - OpenAI, Bedrock, Cursor, Copilot, Antigravity: keep default impls (no surface exposed).
+   - MultiProvider dispatch routes each dimension to the active backend. Claude prefers `anthropic_provider()` (HTTPS API with `[1m]` routing) and falls back to `claude_provider()` (CLI). Non-implementing branches silent-skip with a debug log, matching the M47-C1 semantic so a single SSOT can carry every field for every persona without raising on unrelated backends.
+   - JcodeProvider (desktop/UI wrapper) forwards all six methods to its inner `MultiProvider` so runtime profile application keeps full surface parity.
+   - Touched paths:
+     - `crates/jcode-provider-core/src/lib.rs` (trait surface)
+     - `src/provider/mod.rs` (MultiProvider dispatch)
+     - `src/provider/jcode.rs` (wrapper forwards)
+     - `src/provider/anthropic.rs` (context_preference + supports_thinking)
+     - `src/provider/anthropic_tests.rs` (5 new regression tests)
+     - `src/provider/gemini.rs` (thinking_enabled field + accessors)
+     - `src/provider/openrouter_provider_impl.rs` (supports_thinking declaration)
+   - Validation: `cargo check -p jcode` clean; 55 `provider::anthropic::tests::*` pass (including 5 new `set_context_preference_*` / `anthropic_available_contexts_*` / `anthropic_supports_thinking_*` cases); 470 of 471 `provider::*` tests pass — the single failure `provider_catalog::provider_catalog_tests::auth_profile_env_application_flushes_stale_openrouter_catalog_state` is a pre-existing flaky env-lock test that passes on solo invocation.
+   - Binary reinstall required: yes (provider trait surface change + Anthropic runtime context-preference behavior).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
