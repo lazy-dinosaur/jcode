@@ -111,6 +111,39 @@ pub fn init_project(options: ProjectInitOptions) -> Result<ProjectInitReport> {
         &mut actions,
     )?;
 
+    // M47-C9: ship 4 sample agent profiles so a freshly initialized project
+    // demonstrates the 5-dimension provider-aware schema. Each persona targets
+    // a different backend so users can read them as concrete documentation of
+    // how `model` / `variant` / `effort` / `context` / `thinking` interact.
+    write_generated_file(
+        &jcode_dir.join("agents/claude-strategist.md"),
+        SAMPLE_AGENT_CLAUDE_STRATEGIST_MD,
+        false,
+        options.force,
+        &mut actions,
+    )?;
+    write_generated_file(
+        &jcode_dir.join("agents/gpt-coder.md"),
+        SAMPLE_AGENT_GPT_CODER_MD,
+        false,
+        options.force,
+        &mut actions,
+    )?;
+    write_generated_file(
+        &jcode_dir.join("agents/gemini-visual.md"),
+        SAMPLE_AGENT_GEMINI_VISUAL_MD,
+        false,
+        options.force,
+        &mut actions,
+    )?;
+    write_generated_file(
+        &jcode_dir.join("agents/glm-worker.md"),
+        SAMPLE_AGENT_GLM_WORKER_MD,
+        false,
+        options.force,
+        &mut actions,
+    )?;
+
     update_ignore_files(&target_dir, options.gitignore, &mut actions)?;
 
     Ok(ProjectInitReport { jcode_dir, actions })
@@ -401,6 +434,103 @@ printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$payload" >> .jcode/hooks/too
 exit 0
 "#;
 
+// ---- M47-C9: sample agent profiles ----
+//
+// Each sample targets a different provider (Claude / OpenAI / Gemini /
+// OpenRouter-GLM) so users can see how the 5-dimension schema actually
+// maps to provider channels. The frontmatter keys mirror the M47-C3
+// schema and the M47-C5 variant resolver behavior:
+//
+//   model    -> the model id
+//   variant  -> provider-aware "max" alias (Claude=1m, GPT=xhigh effort,
+//               Gemini=thinking on, OpenRouter=effort+thinking)
+//   effort   -> explicit reasoning effort, applied where supported
+//   context  -> "200k"|"1m"; Anthropic uses [1m] suffix, others ignore
+//   thinking -> bool toggle; Anthropic/Gemini/OpenRouter consume
+//
+// All four files land in `.jcode/agents/*.md` so the `subagent` tool can
+// invoke them by name (e.g. `subagent_type="claude-strategist"`).
+
+const SAMPLE_AGENT_CLAUDE_STRATEGIST_MD: &str = r#"---
+name: claude-strategist
+model: claude-opus-4-7
+variant: max
+description: Strategy and architecture lead — multi-step planning, user-intent inference, large-context reasoning.
+when:
+  - the task is ambiguous or multi-step
+  - architecture or sequencing matters
+  - many user cases / edge cases need consideration
+---
+You are claude-strategist. Read the user's request carefully, infer the
+underlying intent, and produce a concise plan that prioritizes the
+fewest reversible steps needed to validate the right direction. Prefer
+research → small experiments → broad changes.
+
+When delegating, hand off concrete code edits to gpt-coder, mechanical
+work to executor-style agents, and visual inspection to gemini-visual.
+
+variant=max on Anthropic routes you through the [1m] long-context window
+so multi-file synthesis is safe.
+"#;
+
+const SAMPLE_AGENT_GPT_CODER_MD: &str = r#"---
+name: gpt-coder
+model: gpt-5.5
+effort: medium
+description: Implementation agent — concrete code changes, focused tests, validation loops.
+when:
+  - the plan is clear
+  - files need editing
+  - tests or focused validation should be run after changes
+---
+You are gpt-coder. Implement the change exactly as planned. Run focused
+validation (cargo check, targeted tests, or the project's quick smoke)
+after each meaningful edit. Report file diffs and validation results,
+not narrative explanations.
+
+effort=medium balances throughput against debugging quality. Bump to
+high only for code that is hard to validate purely by tests.
+"#;
+
+const SAMPLE_AGENT_GEMINI_VISUAL_MD: &str = r#"---
+name: gemini-visual
+model: gemini-3.1-pro-preview
+thinking: true
+description: Visual / UI / multimodal specialist — screenshots, layouts, diagrams, design critique.
+when:
+  - the work involves screenshots, UI, or visual quality
+  - frontend layout or design needs review
+  - a diagram or visual artifact is the deliverable
+---
+You are gemini-visual. Inspect visual artifacts carefully, describe what
+you see in a way the coordinator can act on, and recommend concrete
+visual changes (alignment, spacing, color, hierarchy). When generating
+content, prefer compact descriptions plus a single representative image
+over verbose prose.
+
+thinking=true enables Gemini thinking_budget so layout reasoning gets
+extra compute when needed.
+"#;
+
+const SAMPLE_AGENT_GLM_WORKER_MD: &str = r#"---
+name: glm-worker
+model: zhipu/glm-4-6
+variant: max
+description: Worker agent for OpenRouter-served reasoning models (GLM family).
+when:
+  - mechanical edits or repetitive work
+  - secondary opinion on backend correctness
+  - cost-sensitive long runs where a reasoning-capable smaller model is OK
+---
+You are glm-worker. Execute the requested change directly and report
+back. Treat ambiguity as a signal to ask one focused clarifying question
+rather than guess.
+
+variant=max on OpenRouter routes both reasoning_effort=xhigh and the
+thinking channel (where the model family supports it), so you can lean
+on the provider-side reasoning surface for harder cases.
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -424,10 +554,56 @@ mod tests {
         assert_eq!(report.jcode_dir, project.join(".jcode"));
         assert!(project.join(".jcode/config.toml").exists());
         assert!(project.join(".jcode/hooks/check-bash.sh").exists());
+        // M47-C9: 4 sample agent profiles land alongside the harness files.
+        assert!(project.join(".jcode/agents/claude-strategist.md").exists());
+        assert!(project.join(".jcode/agents/gpt-coder.md").exists());
+        assert!(project.join(".jcode/agents/gemini-visual.md").exists());
+        assert!(project.join(".jcode/agents/glm-worker.md").exists());
         let config = fs::read_to_string(project.join(".jcode/config.toml")).unwrap();
         assert!(config.contains("ignore_project_agents = false"));
         let exclude = fs::read_to_string(project.join(".git/info/exclude")).unwrap();
         assert!(exclude.contains(".jcode/"));
+    }
+
+    // M47-C9: sample agent profiles parse back into AgentRouteConfig with the
+    // dimensions advertised by the M47 plan (variant=max routes per provider,
+    // explicit effort, explicit thinking). This is the end-to-end sanity check
+    // that the shipped templates remain in sync with the parser.
+    #[test]
+    fn m47_c9_sample_agents_parse_with_expected_dimensions() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        fs::create_dir(&project).unwrap();
+        init_project(ProjectInitOptions {
+            target_dir: project.clone(),
+            force: false,
+            gitignore: false,
+            ignore_team_agents: false,
+        })
+        .unwrap();
+
+        let agents_dir = project.join(".jcode/agents");
+        let by_name = crate::agent_profiles_md::load_agents_from_dir(&agents_dir);
+
+        let strategist = by_name
+            .get("claude-strategist")
+            .expect("claude-strategist sample loaded");
+        assert_eq!(strategist.model.as_deref(), Some("claude-opus-4-7"));
+        assert_eq!(strategist.variant.as_deref(), Some("max"));
+
+        let coder = by_name.get("gpt-coder").expect("gpt-coder sample loaded");
+        assert_eq!(coder.model.as_deref(), Some("gpt-5.5"));
+        assert_eq!(coder.effort.as_deref(), Some("medium"));
+
+        let visual = by_name
+            .get("gemini-visual")
+            .expect("gemini-visual sample loaded");
+        assert_eq!(visual.model.as_deref(), Some("gemini-3.1-pro-preview"));
+        assert_eq!(visual.thinking, Some(true));
+
+        let glm = by_name.get("glm-worker").expect("glm-worker sample loaded");
+        assert_eq!(glm.model.as_deref(), Some("zhipu/glm-4-6"));
+        assert_eq!(glm.variant.as_deref(), Some("max"));
     }
 
     #[test]
