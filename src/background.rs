@@ -24,6 +24,50 @@ use tokio::time::{Duration, Instant as TokioInstant, MissedTickBehavior};
 
 mod model;
 
+/// Extract the most useful message we can from a `tokio::task::JoinError`.
+///
+/// `JoinError::to_string()` returns something like
+/// `task 189827 panicked with message "<panic msg>"` but drops the stack
+/// trace entirely. When `RUST_BACKTRACE` is set, `into_panic()` lets us pull
+/// the original panic payload (usually a `&str` or `String`) which still does
+/// not carry the backtrace itself, but we at least surface a stable panic
+/// message instead of an opaque task id. Future work can persist the panic
+/// hook's last captured backtrace if available.
+///
+/// Returns a tuple of `(short_error, full_text)` so callers can store the
+/// short form in their status `error` field and the full form in the output
+/// body — same pattern as the existing `format!("Task panicked: {}", e)`
+/// callsites just much more informative for the panicked branch.
+fn describe_join_error(e: tokio::task::JoinError) -> (String, String) {
+    if e.is_cancelled() {
+        let msg = "Task was cancelled".to_string();
+        return (msg.clone(), msg);
+    }
+    if !e.is_panic() {
+        let msg = e.to_string();
+        return (msg.clone(), msg);
+    }
+
+    // Tokio swallows the original panic backtrace, so we can only recover the
+    // panic payload. That payload is typically a `&'static str` or `String`
+    // for `panic!(...)` calls and for `String::truncate` / slice panics.
+    let panic_msg = match e.into_panic().downcast::<String>() {
+        Ok(boxed) => *boxed,
+        Err(any) => match any.downcast::<&'static str>() {
+            Ok(boxed) => (*boxed).to_string(),
+            Err(_) => "<non-string panic payload>".to_string(),
+        },
+    };
+    let short = format!("Task panicked: {}", panic_msg);
+    let full = format!(
+        "Task panicked: {}\n\n\
+        Note: tokio drops the original backtrace when a task panics; run with\n\
+        RUST_BACKTRACE=full to capture it via the global panic hook instead.",
+        panic_msg
+    );
+    (short, full)
+}
+
 pub use model::{
     BackgroundCleanupResult, BackgroundTaskEventKind, BackgroundTaskEventRecord,
     BackgroundTaskInfo, BackgroundTaskWaitReason, BackgroundTaskWaitResult,
@@ -600,12 +644,10 @@ impl BackgroundTaskManager {
                     Some(e.to_string()),
                     e.to_string(),
                 ),
-                Err(e) => (
-                    BackgroundTaskStatus::Failed,
-                    None,
-                    Some(e.to_string()),
-                    format!("Task panicked: {}", e),
-                ),
+                Err(e) => {
+                    let (short, full) = describe_join_error(e);
+                    (BackgroundTaskStatus::Failed, None, Some(short), full)
+                }
             };
 
             if let Ok(mut file) = File::create(&output_path_clone).await {
