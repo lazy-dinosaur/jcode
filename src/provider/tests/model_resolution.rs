@@ -958,3 +958,74 @@ fn test_context_limit_dynamic_cache() {
     );
     assert_eq!(context_limit_for_model("test-model-xyz"), Some(64_000));
 }
+
+// M47-C1: providers without a reasoning-effort surface must silently accept
+// set_reasoning_effort calls. Previously this returned an anyhow error which
+// produced a noisy `error!` log on every Claude/Gemini session that carried
+// an OpenAI-style effort key in config/session state.
+
+fn make_provider_with_active(active: ActiveProvider) -> MultiProvider {
+    MultiProvider {
+        claude: RwLock::new(None),
+        anthropic: RwLock::new(None),
+        openai: RwLock::new(None),
+        copilot_api: RwLock::new(None),
+        antigravity: RwLock::new(None),
+        gemini: RwLock::new(None),
+        cursor: RwLock::new(None),
+        bedrock: RwLock::new(None),
+        openrouter: RwLock::new(None),
+        active: RwLock::new(active),
+        use_claude_cli: false,
+        startup_notices: RwLock::new(Vec::new()),
+        forced_provider: None,
+    }
+}
+
+#[test]
+fn set_reasoning_effort_silently_skips_on_claude() {
+    let provider = make_provider_with_active(ActiveProvider::Claude);
+    provider
+        .set_reasoning_effort("xhigh")
+        .expect("Claude must silently accept effort set (M47-C1)");
+}
+
+#[test]
+fn set_reasoning_effort_silently_skips_on_gemini() {
+    let provider = make_provider_with_active(ActiveProvider::Gemini);
+    provider
+        .set_reasoning_effort("medium")
+        .expect("Gemini must silently accept effort set (M47-C1)");
+}
+
+#[test]
+fn set_reasoning_effort_silently_skips_on_bedrock() {
+    let provider = make_provider_with_active(ActiveProvider::Bedrock);
+    provider
+        .set_reasoning_effort("low")
+        .expect("Bedrock must silently accept effort set (M47-C1)");
+}
+
+#[test]
+fn set_reasoning_effort_silently_skips_on_cursor() {
+    let provider = make_provider_with_active(ActiveProvider::Cursor);
+    provider
+        .set_reasoning_effort("high")
+        .expect("Cursor must silently accept effort set (M47-C1)");
+}
+
+#[test]
+fn set_reasoning_effort_silently_skips_on_copilot() {
+    let provider = make_provider_with_active(ActiveProvider::Copilot);
+    provider
+        .set_reasoning_effort("xhigh")
+        .expect("Copilot must silently accept effort set (M47-C1)");
+}
+
+#[test]
+fn set_reasoning_effort_silently_skips_on_antigravity() {
+    let provider = make_provider_with_active(ActiveProvider::Antigravity);
+    provider
+        .set_reasoning_effort("medium")
+        .expect("Antigravity must silently accept effort set (M47-C1)");
+}

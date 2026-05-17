@@ -1499,9 +1499,22 @@ impl Provider for MultiProvider {
                 .openrouter_provider()
                 .ok_or_else(|| anyhow::anyhow!("OpenAI-compatible provider not available"))?
                 .set_reasoning_effort(effort),
-            _ => Err(anyhow::anyhow!(
-                "Reasoning effort is only supported for OpenAI models"
-            )),
+            // M47-C1: silently skip on providers that do not expose a reasoning
+            // effort surface (Anthropic, Gemini, Bedrock, Copilot, ...). The
+            // historical hard error here caused a noisy `error!` log every time
+            // a session was restored on a Claude/Gemini model while config or
+            // session state still carried an OpenAI `reasoning_effort` value.
+            // The effort dimension is provider-specific (M47) and missing on
+            // these backends is not a failure — it is "not applicable". Future
+            // stages (C-4..C-5) replace this with provider-aware dimensions
+            // (`set_thinking`, `set_context_preference`).
+            other => {
+                crate::logging::debug(&format!(
+                    "reasoning_effort '{}' ignored: active provider {:?} does not expose a reasoning effort surface",
+                    effort, other
+                ));
+                Ok(())
+            }
         }
     }
 

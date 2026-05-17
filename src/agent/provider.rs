@@ -91,8 +91,14 @@ impl Agent {
     pub fn restore_reasoning_effort_from_session(&mut self) {
         if let Some(effort) = self.session.reasoning_effort.clone() {
             if let Err(e) = self.provider.set_reasoning_effort(&effort) {
-                crate::logging::error(&format!(
-                    "Failed to restore session reasoning effort '{}': {}",
+                // M47-C1: with silent-skip now in MultiProvider::set_reasoning_effort
+                // a real error here means the active provider supports effort but
+                // rejected the value (e.g. malformed level). Demote to debug — the
+                // setting is non-critical, the session keeps running, and noisy
+                // user-visible warnings only confused Claude/Gemini sessions whose
+                // configs still carried an OpenAI effort key.
+                crate::logging::debug(&format!(
+                    "Skipped restoring reasoning effort '{}': {}",
                     effort, e
                 ));
             }

@@ -778,6 +778,35 @@ Track each custom patch as a small commit. Current known customizations:
    - Long-running `jcode serve` is unaffected: the flush still runs at shutdown but typically finds the slot empty (each `tokio::spawn` task has long since completed). Server graceful-shutdown semantics are unchanged.
    - Binary reinstall required: yes (hook spawn/flush plumbing on a hot path).
 
+32. Deep-merge agent profiles per key (M47-C0)
+   - Commit: `539c8f47` `agents: deep-merge profiles per key so host configs can override one field`.
+   - Patch branch: `patch/m47-c0-deep-merge-profiles`.
+   - Purpose: previously `[agents.profiles.<name>]` merges across layers (global TOML, global md, project md, project TOML) used `BTreeMap::extend`, which silently replaced the entire profile when a host file mentioned the same key. A host that adjusted only `model` would wipe inherited `description`/`when`/`prompt`/`effort`/`variant` from the global definition. Deep-merge keeps framework defaults intact while letting host configs adjust one field at a time.
+   - Implementation:
+     - New `AgentRouteConfig::merge_from(other)` in `crates/jcode-config-types/src/lib.rs`: per-field override, `Option<String>` fields only overwrite when `Some(non-empty)` in `other`; `when: Vec<String>` is replaced wholesale only when `other` supplies a non-empty list.
+     - `PartialAgentsConfig::apply_to` and the two md-layer loops in `Config::agents_for_working_dir` (`src/config/config_file.rs`) all switched from `.extend()` / `.insert()` to `entry(name).and_modify(|e| e.merge_from(p.clone())).or_insert(p)`.
+   - Host-wins ordering preserved (global TOML < global md < project md < project TOML); the change is that each layer overrides only the fields it sets instead of replacing the whole profile.
+   - Touched paths:
+     - `crates/jcode-config-types/src/lib.rs`
+     - `src/config/config_file.rs`
+     - `src/agent_profiles_md.rs` (2 new regression tests)
+   - Validation: 24 `agents_for_working_dir*` tests pass, including 2 new ones: `agents_for_working_dir_project_toml_deep_merges_into_global_md`, `agents_for_working_dir_deep_merge_replaces_when_list_when_set`. Existing `test_agents_for_working_dir_project_overrides_global_same_key` still passes (host-wins semantics maintained).
+   - Binary reinstall required: yes (runtime profile merge behavior).
+
+33. Silent-skip `set_reasoning_effort` on providers without an effort surface (M47-C1)
+   - Commit: TBD `provider: silently skip set_reasoning_effort on non-OpenAI providers (M47-C1)`.
+   - Patch branch: `patch/m47-c1-effort-silent-skip` (parent: `patch/m47-c0-deep-merge-profiles`).
+   - Purpose: stop noisy `error!` log on every Claude/Gemini/Bedrock/Copilot/Cursor/Antigravity session whose persisted state still carries an OpenAI-style `reasoning_effort` value. The historical hard error here surfaced as `"Failed to set effort: Reasoning effort is only supported for OpenAI models"` every time `restore_reasoning_effort_from_session` ran on a non-OpenAI provider. The effort dimension is provider-specific (M47 plan); missing on these backends is "not applicable", not a failure.
+   - Implementation:
+     - `src/provider/mod.rs::MultiProvider::set_reasoning_effort`: the catch-all `_ => Err(...)` arm becomes `other => { logging::debug(...); Ok(()) }`. OpenAI and OpenRouter arms unchanged so DeepSeek/GLM reasoning paths keep working.
+     - `src/agent/provider.rs::restore_reasoning_effort_from_session`: error branch downgraded from `logging::error` to `logging::debug` because a real error here now means the active provider supports effort but rejected the value (malformed level), which is non-critical.
+   - Touched paths:
+     - `src/provider/mod.rs`
+     - `src/agent/provider.rs`
+     - `src/provider/tests/model_resolution.rs` (6 new regression tests)
+   - Validation: 6 new tests pass — `set_reasoning_effort_silently_skips_on_{claude,gemini,bedrock,cursor,copilot,antigravity}`. Existing 320 `provider::*` tests still pass, including the OpenRouter DeepSeek reasoning_effort suite (`direct_deepseek_profile_exposes_max_reasoning_effort`, `direct_deepseek_chat_request_sends_reasoning_effort`, `non_deepseek_compatible_profile_does_not_expose_reasoning_effort`).
+   - Binary reinstall required: yes (runtime log noise + future effort-setting paths).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
