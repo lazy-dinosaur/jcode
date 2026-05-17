@@ -136,6 +136,43 @@ prompt = "profile x"
     assert!(agent_text.contains("Project .md (.jcode/agents)"));
 }
 
+// M47-C8: doctor renders the effective 5-dimension summary so a single line
+// shows which provider channels (model/variant/effort/context/thinking) each
+// profile actually targets.
+#[tokio::test]
+async fn test_doctor_renders_effective_profile_dimensions() {
+    let _guard = doctor_test_lock();
+    let tmp = tempfile::TempDir::new().unwrap();
+    write(
+        &tmp.path().join(".jcode/agents/prometheus.md"),
+        "---\nname: prometheus\nmodel: claude-opus-4-7\nvariant: max\ncontext: 1m\nthinking: true\n---\ncreative synthesis\n",
+    );
+    write(
+        &tmp.path().join(".jcode/agents/gpt-coder.md"),
+        "---\nname: gpt-coder\nmodel: gpt-5.5\neffort: medium\n---\nimplementation\n",
+    );
+
+    let report = report_for(tmp.path(), true, false).await;
+    let agent_text = section(&report, "Agent profiles")
+        .items
+        .iter()
+        .map(|item| format!("{} {}", item.label, item.detail.clone().unwrap_or_default()))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // prometheus 5-dim line
+    assert!(agent_text.contains("\"prometheus\" dimensions"));
+    assert!(agent_text.contains("model=claude-opus-4-7"));
+    assert!(agent_text.contains("variant=max"));
+    assert!(agent_text.contains("context=1m"));
+    assert!(agent_text.contains("thinking=on"));
+
+    // gpt-coder 5-dim line
+    assert!(agent_text.contains("\"gpt-coder\" dimensions"));
+    assert!(agent_text.contains("model=gpt-5.5"));
+    assert!(agent_text.contains("effort=medium"));
+}
+
 #[tokio::test]
 async fn test_doctor_detects_command_skill_collision() {
     let _guard = doctor_test_lock();

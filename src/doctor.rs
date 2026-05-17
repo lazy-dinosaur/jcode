@@ -381,6 +381,18 @@ fn section_agent_profiles(working_dir: &Path) -> Section {
                     "has neither model nor prompt",
                 ));
             }
+
+            // M47-C8: effective 5-dimension summary so users can see at a glance
+            // which provider channel each profile actually targets after merge
+            // + variant resolution. Each line is emitted as an info-level item
+            // so quiet mode hides it (debug helper, not a problem report).
+            let dims = effective_profile_dimensions(&winner.profile);
+            if !dims.is_empty() {
+                items.push(info(
+                    format!("  \"{name}\" dimensions"),
+                    dims.join(" · "),
+                ));
+            }
         }
     }
 
@@ -507,6 +519,35 @@ struct AgentSource {
 struct AgentDefinition {
     source: String,
     profile: AgentRouteConfig,
+}
+
+/// M47-C8: render the effective 5-dimension summary for a winning profile
+/// after merge resolution. Each part is rendered like `model=...`,
+/// `effort=high`, `context=1m`, `thinking=on` so a single doctor line shows
+/// exactly which provider channel a profile targets. Skipped silently when
+/// the profile has no useful fields beyond `model` (avoids noise for the
+/// "just a markdown prompt body" case).
+fn effective_profile_dimensions(profile: &AgentRouteConfig) -> Vec<String> {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(model) = profile.model.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        parts.push(format!("model={}", model));
+    }
+    if let Some(variant) = profile.variant.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        parts.push(format!("variant={}", variant));
+    }
+    if let Some(effort) = profile.effort.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        parts.push(format!("effort={}", effort));
+    }
+    if let Some(context) = profile.context.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        parts.push(format!("context={}", context));
+    }
+    if let Some(thinking) = profile.thinking {
+        parts.push(format!(
+            "thinking={}",
+            if thinking { "on" } else { "off" }
+        ));
+    }
+    parts
 }
 
 fn agent_profile_sources(working_dir: &Path) -> Vec<AgentSource> {
