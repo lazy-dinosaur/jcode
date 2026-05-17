@@ -242,6 +242,47 @@ pub struct CompactionConfig {
 
     /// [semantic] Number of recent turns to look at for building the "current goal" embedding
     pub goal_window_turns: usize,
+
+    /// M48-C2: opencode-style auto-compaction on/off switch.
+    ///
+    /// When `false`, the opencode-derived overflow trigger and durable
+    /// compaction pipeline never fire. The legacy `mode = reactive/proactive/
+    /// semantic` pipeline still runs (it has its own kill switches via
+    /// `min_turns_between_compactions` and `MAX_CONSECUTIVE_COMPACTION_FAILURES`).
+    /// Default `true` to match opencode's "always-on with thresholds" model.
+    /// Env override: `JCODE_COMPACTION_AUTO=false` disables.
+    pub auto: bool,
+
+    /// M48-C2: opencode-style tool-output prune pass on/off.
+    ///
+    /// When `true`, older completed tool outputs may be marked compacted to
+    /// reclaim context space before a full summary compaction is attempted.
+    /// Default `true`. Future stage (C-3) introduces the actual prune
+    /// implementation; setting this in C-2 is forward-compatible.
+    pub prune: bool,
+
+    /// M48-C2: number of recent user turns kept verbatim during durable
+    /// compaction. A "turn" begins at a user message and runs through the
+    /// next user message (exclusive). `tail_turns = 2` (opencode default)
+    /// means the two most recent user-led turns are protected from
+    /// summarization; the rest of the conversation feeds the summary.
+    /// Falls back to `MAX(2, RECENT_TURNS_TO_KEEP * 0.2)` when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tail_turns: Option<usize>,
+
+    /// M48-C2: token budget for the recent-tail preservation pass.
+    /// When unset, falls back to opencode's clamp formula:
+    /// `min(MAX_PRESERVE_RECENT_TOKENS, max(MIN_PRESERVE_RECENT_TOKENS, floor(usable_budget * 0.25)))`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preserve_recent_tokens: Option<usize>,
+
+    /// M48-C2: tokens to reserve for the assistant output / response on top
+    /// of the provider's context window. `usable_budget = context_window - reserved_tokens`.
+    /// Mirrors opencode's `compaction.reserved`. Unset values fall back to
+    /// `min(COMPACTION_BUFFER, max_output_tokens(model))` so the provider
+    /// always has room to reply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reserved_tokens: Option<usize>,
 }
 
 impl Default for CompactionConfig {
@@ -257,6 +298,12 @@ impl Default for CompactionConfig {
             topic_shift_threshold: 0.45,
             relevance_keep_threshold: 0.65,
             goal_window_turns: 5,
+            // M48-C2: opencode-aligned defaults.
+            auto: true,
+            prune: true,
+            tail_turns: None,
+            preserve_recent_tokens: None,
+            reserved_tokens: None,
         }
     }
 }
