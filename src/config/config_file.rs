@@ -50,7 +50,16 @@ impl PartialAgentsConfig {
         }
         agents.routing.extend(self.routing);
         agents.routes.extend(self.routes);
-        agents.profiles.extend(self.profiles);
+        // M-deepmerge: profiles use per-key deep-merge so a host config can override
+        // a single field (e.g. `model`) without wiping the rest of a global profile
+        // (description/when/prompt/effort/variant). See `AgentRouteConfig::merge_from`.
+        for (name, profile) in self.profiles {
+            agents
+                .profiles
+                .entry(name)
+                .and_modify(|existing| existing.merge_from(profile.clone()))
+                .or_insert(profile);
+        }
         if let Some(value) = self.memory_model {
             agents.memory_model = Some(value);
         }
@@ -242,12 +251,24 @@ impl Config {
     pub fn agents_for_working_dir(&self, working_dir: Option<&Path>) -> AgentsConfig {
         let mut agents = self.agents.clone();
 
+        // Each later layer deep-merges into the running set so a layer that only
+        // sets one field (e.g. `model`) does not wipe description/when/prompt
+        // from an earlier layer. The traditional "host wins" ordering is
+        // preserved: global TOML < global .md < project .md < project TOML.
         for (name, profile) in crate::agent_profiles_md::load_global_jcode_agent_md() {
-            agents.profiles.insert(name, profile);
+            agents
+                .profiles
+                .entry(name)
+                .and_modify(|existing| existing.merge_from(profile.clone()))
+                .or_insert(profile);
         }
 
         for (name, profile) in crate::agent_profiles_md::load_project_local_agent_md(working_dir) {
-            agents.profiles.insert(name, profile);
+            agents
+                .profiles
+                .entry(name)
+                .and_modify(|existing| existing.merge_from(profile.clone()))
+                .or_insert(profile);
         }
 
         if let Some(project_dir) = working_dir.and_then(Self::find_project_config_dir) {

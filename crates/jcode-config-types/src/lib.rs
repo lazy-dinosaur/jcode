@@ -443,6 +443,43 @@ pub struct AgentRouteConfig {
     pub prompt: Option<String>,
 }
 
+impl AgentRouteConfig {
+    /// Deep-merge `other` into `self`, with `other` winning per key.
+    ///
+    /// This is the host-overrides-global semantic for `[agents.profiles.<name>]`:
+    /// any field explicitly set in `other` overrides `self`, while unset fields
+    /// inherit from `self`. Keys that are `Option<String>` are overridden only
+    /// when `Some(non-empty)` in `other`. `when` is overridden only when `other`
+    /// supplies a non-empty list (lists are replaced wholesale, not concatenated,
+    /// to keep host overrides predictable).
+    ///
+    /// Pre-2026-05-17 jcode used `BTreeMap::extend`, which silently replaced the
+    /// entire profile when a host file mentioned the same key, dropping
+    /// description/when/prompt that came from a global profile. Deep-merge keeps
+    /// global "framework" defaults intact while letting host configs adjust one
+    /// field at a time.
+    pub fn merge_from(&mut self, other: AgentRouteConfig) {
+        if let Some(value) = other.model.filter(|s| !s.trim().is_empty()) {
+            self.model = Some(value);
+        }
+        if let Some(value) = other.effort.filter(|s| !s.trim().is_empty()) {
+            self.effort = Some(value);
+        }
+        if let Some(value) = other.variant.filter(|s| !s.trim().is_empty()) {
+            self.variant = Some(value);
+        }
+        if let Some(value) = other.description.filter(|s| !s.trim().is_empty()) {
+            self.description = Some(value);
+        }
+        if !other.when.is_empty() {
+            self.when = other.when;
+        }
+        if let Some(value) = other.prompt.filter(|s| !s.trim().is_empty()) {
+            self.prompt = Some(value);
+        }
+    }
+}
+
 /// Prompt and project instruction loading configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]

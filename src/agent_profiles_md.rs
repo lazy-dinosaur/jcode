@@ -380,4 +380,56 @@ mod tests {
 
         assert_eq!(agents.profiles["x"].model.as_deref(), Some("project-toml"));
     }
+
+    /// Deep-merge: host config.toml sets only `model`, but `description`/`prompt`
+    /// from the global .md profile must survive. Pre-2026-05-17 this assertion
+    /// failed because `BTreeMap::extend` replaced the entire profile.
+    #[test]
+    fn agents_for_working_dir_project_toml_deep_merges_into_global_md() {
+        let _lock = crate::storage::lock_test_env();
+        let home = tempfile::TempDir::new().expect("tempdir");
+        let _home = EnvVarGuard::set("JCODE_HOME", home.path());
+        let project = tempfile::TempDir::new().expect("project tempdir");
+        write(
+            &home.path().join("agents/metis.md"),
+            "---\nmodel: global-md\ndescription: strategist\nwhen:\n  - planning\n---\nGlobal metis prompt.",
+        );
+        write(
+            &project.path().join(".jcode/config.toml"),
+            "[agents.profiles.metis]\nmodel = \"project-toml\"\n",
+        );
+
+        let agents = Config::load().agents_for_working_dir(Some(project.path()));
+        let metis = &agents.profiles["metis"];
+
+        // host wins on the field it touched
+        assert_eq!(metis.model.as_deref(), Some("project-toml"));
+        // ...but unset fields inherit from the global definition
+        assert_eq!(metis.description.as_deref(), Some("strategist"));
+        assert_eq!(metis.when, vec!["planning".to_string()]);
+        assert_eq!(metis.prompt.as_deref(), Some("Global metis prompt."));
+    }
+
+    /// Deep-merge: host config.toml replaces `when` only when it supplies a
+    /// non-empty list, otherwise the global list is preserved.
+    #[test]
+    fn agents_for_working_dir_deep_merge_replaces_when_list_when_set() {
+        let _lock = crate::storage::lock_test_env();
+        let home = tempfile::TempDir::new().expect("tempdir");
+        let _home = EnvVarGuard::set("JCODE_HOME", home.path());
+        let project = tempfile::TempDir::new().expect("project tempdir");
+        write(
+            &home.path().join("agents/coder.md"),
+            "---\nmodel: gpt-5.5\nwhen:\n  - default\n---\n",
+        );
+        write(
+            &project.path().join(".jcode/config.toml"),
+            "[agents.profiles.coder]\nwhen = [\"host-only\"]\n",
+        );
+
+        let agents = Config::load().agents_for_working_dir(Some(project.path()));
+        let coder = &agents.profiles["coder"];
+        assert_eq!(coder.model.as_deref(), Some("gpt-5.5"));
+        assert_eq!(coder.when, vec!["host-only".to_string()]);
+    }
 }
