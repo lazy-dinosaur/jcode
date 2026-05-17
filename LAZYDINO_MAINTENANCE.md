@@ -938,6 +938,25 @@ Track each custom patch as a small commit. Current known customizations:
    - Validation: 11 `doctor_tests::*` pass including new `test_doctor_renders_effective_profile_dimensions` which checks a Claude prometheus profile (model + variant + context + thinking) and a GPT coder profile (model + effort).
    - Binary reinstall required: yes (doctor output change).
 
+41. project_init ships 4 sample agent profiles covering the 4 providers (M47-C9)
+   - Commit: `6784854a` `project_init: ship 4 sample agent profiles covering the 4 providers (M47-C9)`.
+   - Patch branch: `patch/m47-c9-sample-agent-md` (parent: `patch/m47-c8-doctor-effective-dimensions`).
+   - Purpose: after M47-C0..C-8 wired the 5-dimension agent profile schema end-to-end (deep merge, silent skip, provider trait surface, variant resolver, session round-trip, provider-agnostic defaults, doctor visibility), fresh `jcode init` projects had no concrete example in `.jcode/agents/`. M47-C9 ships 4 sample profiles — one per supported provider — so a newly initialized project demonstrates the schema in real frontmatter.
+   - Files added by `init_project`:
+     - `.jcode/agents/claude-strategist.md` — `model = claude-opus-4-7` + `variant = max` (Anthropic routes to `context = "1m"` via M47-C5 variant resolver).
+     - `.jcode/agents/gpt-coder.md` — `model = gpt-5.5` + `effort = medium` (OpenAI direct reasoning_effort).
+     - `.jcode/agents/gemini-visual.md` — `model = gemini-3.1-pro-preview` + `thinking = true` (Gemini thinking_budget surface).
+     - `.jcode/agents/glm-worker.md` — `model = zhipu/glm-4-6` + `variant = max` (OpenRouter routes to `effort = xhigh` + `thinking = true`).
+   - Each sample doubles as documentation: the markdown body explains when to use the persona, how delegation flows, and which provider channel the variant alias routes to.
+   - Touched paths:
+     - `src/project_init.rs` (4 const string templates + 4 `write_generated_file` calls + 1 new regression test)
+   - Validation: 4 `project_init::tests::*` pass including the new `m47_c9_sample_agents_parse_with_expected_dimensions` which parses each shipped sample back into `AgentRouteConfig` and asserts the dimensions match the M47 plan — catches drift between shipped templates and the parser/resolver.
+   - Binary reinstall required: yes (project init writes new files).
+
+## M47 milestone summary
+
+The 10-stage M47 patch series (`patch/m47-c0-deep-merge-profiles` through `patch/m47-c9-sample-agent-md`) is complete. The lazy-harness 4-provider SSOT goal is unblocked: a single `~/.jcode/agents/<persona>.md` profile can carry `model` + `variant` + optional `effort` / `context` / `thinking` and the spawn-path will route the right combination per backend (Claude → 1M context, OpenAI → reasoning effort, Gemini → thinking budget, OpenRouter → effort + thinking). See `docs/lazydino/milestones/M47.md` for the dependency graph, validation matrix, and behavior change notes per stage.
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
