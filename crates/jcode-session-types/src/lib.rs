@@ -292,6 +292,24 @@ impl StoredCompactionTurn {
     }
 }
 
+/// Bridge the C-1 sidecar schema into the C-4 prompt builder so callers can
+/// use `m48_summary::resolve_previous_summary_id(&session.compaction_turns,
+/// current_id)` directly without re-wrapping every entry.
+impl jcode_compaction_core::m48_summary::CompactionTurnSlice for StoredCompactionTurn {
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn previous_summary_id(&self) -> Option<&str> {
+        self.previous_summary_id.as_deref()
+    }
+    fn is_legacy_backfill(&self) -> bool {
+        self.backfilled_from_legacy
+    }
+    fn summary_message_id(&self) -> &str {
+        &self.summary_message_id
+    }
+}
+
 fn is_false(value: &bool) -> bool {
     !*value
 }

@@ -1688,6 +1688,305 @@ pub mod m48_prune {
     }
 }
 
+/// M48-C4: anchored summary template + previousSummary chaining.
+///
+/// Mirrors opencode `session/compaction.ts::SUMMARY_TEMPLATE` and
+/// `buildPrompt` so that subsequent compaction events update an
+/// already-existing anchored summary instead of summarizing from scratch
+/// every time. This is what gives long opencode sessions their cheap,
+/// stable "memory" instead of progressively eroding into noise.
+///
+/// This stage is prompt + chain plumbing only. The LLM call that actually
+/// produces the summary text is wired in M48-C5/C-6 alongside the
+/// replay-on-overflow path and the OpenAI native compaction coexistence
+/// logic. Keeping the template a `pub const &'static str` lets every
+/// future caller share the same shape and lets us diff prompt drift in
+/// reviews.
+pub mod m48_summary {
+    /// The shared 8-section markdown skeleton every anchored summary must
+    /// fill. Keeping this in source (not a config file) so we can review
+    /// drift in git history. Section order matches opencode 1:1.
+    pub const SUMMARY_TEMPLATE: &str = r#"Output exactly the Markdown structure shown inside <template> and keep the section order unchanged. Do not include the <template> tags in your response.
+<template>
+## Goal
+- [single-sentence task summary]
+
+## Constraints & Preferences
+- [user constraints, preferences, specs, or "(none)"]
+
+## Progress
+### Done
+- [completed work or "(none)"]
+
+### In Progress
+- [current work or "(none)"]
+
+### Blocked
+- [blockers or "(none)"]
+
+## Key Decisions
+- [decision and why, or "(none)"]
+
+## Next Steps
+- [ordered next actions or "(none)"]
+
+## Critical Context
+- [important technical facts, errors, open questions, or "(none)"]
+
+## Relevant Files
+- [file or directory path: why it matters, or "(none)"]
+</template>
+
+Rules:
+- Keep every section, even when empty.
+- Use terse bullets, not prose paragraphs.
+- Preserve exact file paths, commands, error strings, and identifiers when known.
+- Do not mention the summary process or that context was compacted."#;
+
+    /// Anchor prologue used when a `previous_summary` exists. We ask the
+    /// model to refresh that summary rather than recreate it from scratch.
+    /// Matches opencode `buildPrompt` exactly so prompt drift is easy to
+    /// audit between the two codebases.
+    pub const UPDATE_ANCHOR_PROLOGUE: &str = "Update the anchored summary below using the conversation history above.\nPreserve still-true details, remove stale details, and merge in the new facts.";
+
+    /// Anchor prologue used when there is no prior summary in the chain.
+    pub const CREATE_ANCHOR_PROLOGUE: &str =
+        "Create a new anchored summary from the conversation history above.";
+
+    /// XML-ish marker that wraps the previous summary inside the prompt so
+    /// the model can find the anchor verbatim. Opencode uses literal
+    /// `<previous-summary>` tags; we keep the exact bytes for parity.
+    pub const PREVIOUS_SUMMARY_OPEN_TAG: &str = "<previous-summary>";
+    pub const PREVIOUS_SUMMARY_CLOSE_TAG: &str = "</previous-summary>";
+
+    /// Build the anchored summary prompt.
+    ///
+    /// `previous_summary` should carry the verbatim markdown of the most
+    /// recent durable summary (or `None` on the first compaction event).
+    /// `context` is the opencode `context` field: extra free-form bullets
+    /// the caller wants to inject (system reminders, environment notes,
+    /// etc.). When empty, no extra block is appended.
+    ///
+    /// Mirrors opencode `buildPrompt`:
+    /// `[anchor, SUMMARY_TEMPLATE, ...context].join("\n\n")`.
+    pub fn build_prompt(previous_summary: Option<&str>, context: &[&str]) -> String {
+        let anchor = match previous_summary {
+            Some(prev) => format!(
+                "{}\n{}\n{}\n{}",
+                UPDATE_ANCHOR_PROLOGUE,
+                PREVIOUS_SUMMARY_OPEN_TAG,
+                prev,
+                PREVIOUS_SUMMARY_CLOSE_TAG,
+            ),
+            None => CREATE_ANCHOR_PROLOGUE.to_string(),
+        };
+
+        let mut parts: Vec<String> = vec![anchor, SUMMARY_TEMPLATE.to_string()];
+        for ctx in context {
+            parts.push((*ctx).to_string());
+        }
+        parts.join("\n\n")
+    }
+
+    /// Trait describing the minimal shape `resolve_previous_summary` needs.
+    /// We define it here so consumers do not have to depend on the full
+    /// `jcode-session-types` crate just to walk the chain. Concrete impl
+    /// lives behind the `previous_summary_id` field of `StoredCompactionTurn`.
+    pub trait CompactionTurnSlice {
+        /// Unique id for this turn.
+        fn id(&self) -> &str;
+        /// Optional previous summary id for chain walking.
+        fn previous_summary_id(&self) -> Option<&str>;
+        /// True when the entry is a synthetic legacy backfill (no real
+        /// marker/summary messages). These cannot serve as anchors.
+        fn is_legacy_backfill(&self) -> bool;
+        /// Message id of the assistant-role summary message that holds the
+        /// verbatim summary text. Empty for legacy backfill entries.
+        fn summary_message_id(&self) -> &str;
+    }
+
+    /// Walk the compaction-turn chain backwards from `current_id` to find
+    /// the most recent **usable** anchored summary (one that has a real
+    /// `summary_message_id` and is not a legacy backfill).
+    ///
+    /// Returns the `summary_message_id` of the resolved turn, or `None`
+    /// when the chain ends before finding one (e.g. only legacy-backfill
+    /// turns exist).
+    ///
+    /// The lookup is `O(chain length)` and tolerates cycles via a
+    /// bounded visit cap (`MAX_CHAIN_DEPTH`) to defend against malformed
+    /// sidecar data.
+    pub const MAX_CHAIN_DEPTH: usize = 256;
+
+    pub fn resolve_previous_summary_id<'a, T: CompactionTurnSlice>(
+        turns: &'a [T],
+        current_id: &str,
+    ) -> Option<&'a str> {
+        if turns.is_empty() {
+            return None;
+        }
+
+        // Build an id -> &T index once.
+        let by_id: std::collections::HashMap<&str, &T> =
+            turns.iter().map(|t| (t.id(), t)).collect();
+
+        let mut cursor: Option<&str> = by_id.get(current_id).and_then(|t| t.previous_summary_id());
+        let mut hops = 0usize;
+        while let Some(id) = cursor {
+            if hops >= MAX_CHAIN_DEPTH {
+                return None;
+            }
+            hops += 1;
+            let Some(t) = by_id.get(id) else { return None };
+            if !t.is_legacy_backfill() && !t.summary_message_id().is_empty() {
+                return Some(t.summary_message_id());
+            }
+            cursor = t.previous_summary_id();
+        }
+        None
+    }
+
+    #[cfg(test)]
+    mod summary_tests {
+        use super::*;
+
+        struct Fake {
+            id: String,
+            prev: Option<String>,
+            legacy: bool,
+            summary_msg_id: String,
+        }
+
+        impl CompactionTurnSlice for Fake {
+            fn id(&self) -> &str {
+                &self.id
+            }
+            fn previous_summary_id(&self) -> Option<&str> {
+                self.prev.as_deref()
+            }
+            fn is_legacy_backfill(&self) -> bool {
+                self.legacy
+            }
+            fn summary_message_id(&self) -> &str {
+                &self.summary_msg_id
+            }
+        }
+
+        fn turn(id: &str, prev: Option<&str>, legacy: bool, summary_msg: &str) -> Fake {
+            Fake {
+                id: id.to_string(),
+                prev: prev.map(str::to_string),
+                legacy,
+                summary_msg_id: summary_msg.to_string(),
+            }
+        }
+
+        #[test]
+        fn create_prompt_has_no_anchor_block() {
+            let prompt = build_prompt(None, &[]);
+            assert!(prompt.starts_with(CREATE_ANCHOR_PROLOGUE));
+            assert!(prompt.contains("## Goal"));
+            assert!(!prompt.contains(PREVIOUS_SUMMARY_OPEN_TAG));
+        }
+
+        #[test]
+        fn update_prompt_wraps_previous_summary() {
+            let prev = "## Goal\n- demo summary";
+            let prompt = build_prompt(Some(prev), &[]);
+            assert!(prompt.starts_with(UPDATE_ANCHOR_PROLOGUE));
+            assert!(prompt.contains(PREVIOUS_SUMMARY_OPEN_TAG));
+            assert!(prompt.contains(prev));
+            assert!(prompt.contains(PREVIOUS_SUMMARY_CLOSE_TAG));
+            // Template still present.
+            assert!(prompt.contains("## Critical Context"));
+        }
+
+        #[test]
+        fn build_prompt_appends_context_blocks_in_order() {
+            let prompt = build_prompt(None, &["env=dev", "tz=UTC"]);
+            let env_pos = prompt.find("env=dev").unwrap();
+            let tz_pos = prompt.find("tz=UTC").unwrap();
+            assert!(env_pos < tz_pos);
+            // Context must come AFTER the template.
+            let template_pos = prompt.find("</template>").unwrap();
+            assert!(template_pos < env_pos);
+        }
+
+        #[test]
+        fn resolve_previous_summary_returns_none_on_empty_chain() {
+            let turns: Vec<Fake> = vec![];
+            assert_eq!(resolve_previous_summary_id(&turns, "x"), None);
+        }
+
+        #[test]
+        fn resolve_previous_summary_returns_none_when_no_predecessor() {
+            let turns = vec![turn("t1", None, false, "msg-1")];
+            assert_eq!(resolve_previous_summary_id(&turns, "t1"), None);
+        }
+
+        #[test]
+        fn resolve_previous_summary_returns_immediate_anchor() {
+            let turns = vec![
+                turn("t1", None, false, "msg-1"),
+                turn("t2", Some("t1"), false, "msg-2"),
+            ];
+            assert_eq!(resolve_previous_summary_id(&turns, "t2"), Some("msg-1"));
+        }
+
+        #[test]
+        fn resolve_previous_summary_skips_legacy_backfill_entries() {
+            let turns = vec![
+                turn("legacy", None, true, ""),
+                turn("t1", Some("legacy"), false, "msg-1"),
+                turn("t2", Some("t1"), false, "msg-2"),
+            ];
+            // t2 -> t1 (real) -> stop
+            assert_eq!(resolve_previous_summary_id(&turns, "t2"), Some("msg-1"));
+            // t1 -> legacy (skipped) -> None
+            assert_eq!(resolve_previous_summary_id(&turns, "t1"), None);
+        }
+
+        #[test]
+        fn resolve_previous_summary_walks_past_multiple_legacy_entries() {
+            let turns = vec![
+                turn("legacy1", None, true, ""),
+                turn("legacy2", Some("legacy1"), true, ""),
+                turn("real", Some("legacy2"), false, "msg-real"),
+                turn("current", Some("real"), false, "msg-current"),
+            ];
+            assert_eq!(
+                resolve_previous_summary_id(&turns, "current"),
+                Some("msg-real")
+            );
+        }
+
+        #[test]
+        fn resolve_previous_summary_handles_broken_chain_pointer() {
+            // current points to a non-existent prev id.
+            let turns = vec![turn("current", Some("ghost"), false, "msg-current")];
+            assert_eq!(resolve_previous_summary_id(&turns, "current"), None);
+        }
+
+        #[test]
+        fn resolve_previous_summary_bounds_chain_depth_against_cycles() {
+            // Cycle: a -> b -> a -> ... ; should bail at MAX_CHAIN_DEPTH.
+            let turns = vec![
+                turn("a", Some("b"), false, "msg-a"),
+                turn("b", Some("a"), false, "msg-b"),
+            ];
+            // From "a" we walk: prev=b (real, summary "msg-b") -> return immediately.
+            assert_eq!(resolve_previous_summary_id(&turns, "a"), Some("msg-b"));
+            // If we artificially mark them legacy, the chain loops forever
+            // until the cap kicks in and returns None.
+            let turns_legacy = vec![
+                turn("a", Some("b"), true, ""),
+                turn("b", Some("a"), true, ""),
+            ];
+            assert_eq!(resolve_previous_summary_id(&turns_legacy, "a"), None);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
