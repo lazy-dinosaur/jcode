@@ -1293,6 +1293,401 @@ pub mod m48_select {
     }
 }
 
+/// M48-C3: pre-summary tool-output pruning pass.
+///
+/// Mirrors opencode `session/compaction.ts::prune`: walks the message log
+/// backwards, protects the last `protect_recent_turns` user-led turns, and
+/// then replaces older `ToolResult` payloads with a short placeholder once
+/// the rolling token budget exceeds `PRUNE_PROTECT`. Only fires when the
+/// total bytes recovered would exceed `PRUNE_MINIMUM`, otherwise the input
+/// is returned unchanged so we never burn IO for a trivial savings.
+///
+/// Differences from opencode:
+/// - opencode mutates persistent `ToolPart.state.time.compacted`; jcode
+///   `ContentBlock::ToolResult` has no such field yet, so this stage is
+///   purely functional: it returns a new `Vec<Message>` with placeholder
+///   `ToolResult { content }` payloads. Wiring this into session persistence
+///   is M48-C4's job (alongside the anchored summary template).
+/// - `protected_tools` is a slice argument rather than a global const so
+///   tests can simulate skill-style protected tools without depending on
+///   the runtime tool registry.
+pub mod m48_prune {
+    use super::{ContentBlock, Message, Role};
+
+    /// Opencode `PRUNE_PROTECT`: tail-side budget of tool-output tokens
+    /// that survive a prune pass even when they fall outside the protected
+    /// turn window.
+    pub const PRUNE_PROTECT: usize = 40_000;
+
+    /// Opencode `PRUNE_MINIMUM`: minimum amount of token-equivalent bytes a
+    /// prune pass must recover before it is allowed to mutate anything.
+    pub const PRUNE_MINIMUM: usize = 20_000;
+
+    /// Opencode `PRUNE_PROTECTED_TOOLS`: tool names whose outputs are never
+    /// pruned. Callers pass this through; the default `prune` invocation
+    /// uses the empty slice (no protected tools) so tests are deterministic
+    /// without depending on the runtime tool registry.
+    pub const DEFAULT_PROTECTED_TOOLS: &[&str] = &["skill"];
+
+    /// Opencode `prune`'s implicit `turns < 2` guard: the last N user-led
+    /// turns are skipped entirely so the most recent context is preserved
+    /// verbatim.
+    pub const DEFAULT_PROTECT_RECENT_TURNS: usize = 2;
+
+    /// Placeholder content written in place of pruned tool output. Length
+    /// is intentionally short so the prune savings are observable; the text
+    /// matches opencode's `<tool result removed by compaction>` convention.
+    pub const PRUNED_PLACEHOLDER: &str =
+        "[tool output removed by compaction]";
+
+    /// Summary of a prune pass.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    pub struct PruneReport {
+        /// Number of `ToolResult` blocks rewritten to the placeholder.
+        pub blocks_pruned: usize,
+        /// Sum of original `content.len()` bytes across pruned blocks.
+        pub bytes_recovered: usize,
+        /// Whether the pass actually committed mutations. False when the
+        /// would-be recovery was below `PRUNE_MINIMUM` (returned input
+        /// untouched) or when nothing qualified.
+        pub committed: bool,
+    }
+
+    /// Build a lookup from `tool_use_id` to tool name by scanning every
+    /// `ToolUse` block in the messages. Needed because protection happens
+    /// on the assistant-side `ToolUse.name`, not on the user-side
+    /// `ToolResult.tool_use_id`.
+    fn tool_use_id_to_name(messages: &[Message]) -> std::collections::HashMap<String, String> {
+        let mut map = std::collections::HashMap::new();
+        for msg in messages {
+            for block in &msg.content {
+                if let ContentBlock::ToolUse { id, name, .. } = block {
+                    map.insert(id.clone(), name.clone());
+                }
+            }
+        }
+        map
+    }
+
+    /// True when a `ToolResult` looks like our prune placeholder. Used so
+    /// re-prunes are idempotent (we never "recover" placeholder bytes).
+    fn is_pruned_placeholder(content: &str) -> bool {
+        content == PRUNED_PLACEHOLDER
+    }
+
+    /// True for "tool-result-only" user messages (e.g. provider-required
+    /// continuation messages that carry only `ToolResult` blocks). These
+    /// must NOT count as new conversational turns, otherwise the recent-
+    /// turn protection window collapses because a single user prompt that
+    /// triggered N tool calls would inflate the turn count by N+1.
+    fn is_tool_result_only_user_message(msg: &Message) -> bool {
+        if msg.role != Role::User || msg.content.is_empty() {
+            return false;
+        }
+        msg.content
+            .iter()
+            .all(|b| matches!(b, ContentBlock::ToolResult { .. }))
+    }
+
+    /// Plan + execute a prune pass.
+    ///
+    /// Returns `(new_messages, report)`. When `report.committed == false`
+    /// the returned `Vec<Message>` is a cheap clone of the input with no
+    /// content changes. Callers can compare report.bytes_recovered against
+    /// their threshold before persisting.
+    pub fn prune(
+        messages: &[Message],
+        protected_tools: &[&str],
+        protect_recent_turns: usize,
+        prune_protect_tokens: usize,
+        prune_minimum_tokens: usize,
+    ) -> (Vec<Message>, PruneReport) {
+        let name_map = tool_use_id_to_name(messages);
+        let recent_limit = protect_recent_turns;
+
+        // First pass: discover indices (msg_index, block_index, recovered_bytes)
+        // walking backwards, tracking turn count and a rolling tool-output
+        // budget. Mirrors the opencode `loop` block but skips tool-result-
+        // only user messages when counting turns so the multi-message-per-
+        // turn shape (user text + assistant tool_use + user tool_result)
+        // collapses to a single turn boundary.
+        let mut plan: Vec<(usize, usize, usize)> = Vec::new();
+        let mut turns_seen = 0usize;
+        let mut rolling = 0usize;
+        for (msg_i, msg) in messages.iter().enumerate().rev() {
+            if msg.role == Role::User && !is_tool_result_only_user_message(msg) {
+                turns_seen += 1;
+            }
+            if turns_seen < recent_limit {
+                continue;
+            }
+            for (block_i, block) in msg.content.iter().enumerate().rev() {
+                let ContentBlock::ToolResult { content, tool_use_id, .. } = block else {
+                    continue;
+                };
+                if is_pruned_placeholder(content) {
+                    continue;
+                }
+                // Look up tool name via paired ToolUse and skip protected ones.
+                if let Some(name) = name_map.get(tool_use_id) {
+                    if protected_tools.iter().any(|t| *t == name.as_str()) {
+                        continue;
+                    }
+                }
+                let size = content.len();
+                rolling += size;
+                if rolling <= prune_protect_tokens {
+                    continue;
+                }
+                plan.push((msg_i, block_i, size));
+            }
+        }
+
+        let bytes_recovered: usize = plan.iter().map(|(_, _, s)| *s).sum();
+        let mut report = PruneReport {
+            blocks_pruned: 0,
+            bytes_recovered,
+            committed: false,
+        };
+
+        if bytes_recovered <= prune_minimum_tokens {
+            // Threshold not reached -> bail without mutating.
+            return (messages.to_vec(), report);
+        }
+
+        // Commit phase: clone messages, then rewrite tool-result contents.
+        let mut new_messages = messages.to_vec();
+        for (msg_i, block_i, _) in &plan {
+            if let Some(block) = new_messages
+                .get_mut(*msg_i)
+                .and_then(|m| m.content.get_mut(*block_i))
+            {
+                if let ContentBlock::ToolResult { content, .. } = block {
+                    *content = PRUNED_PLACEHOLDER.to_string();
+                }
+            }
+        }
+        report.blocks_pruned = plan.len();
+        report.committed = true;
+        (new_messages, report)
+    }
+
+    /// Convenience wrapper using the opencode defaults: `["skill"]`
+    /// protected tools, last 2 turns protected, `PRUNE_PROTECT` rolling
+    /// budget, `PRUNE_MINIMUM` recovery threshold.
+    pub fn prune_with_defaults(messages: &[Message]) -> (Vec<Message>, PruneReport) {
+        prune(
+            messages,
+            DEFAULT_PROTECTED_TOOLS,
+            DEFAULT_PROTECT_RECENT_TURNS,
+            PRUNE_PROTECT,
+            PRUNE_MINIMUM,
+        )
+    }
+
+    #[cfg(test)]
+    mod prune_tests {
+        use super::super::m48_fixtures;
+        use super::*;
+        use jcode_message_types::{ContentBlock, Role};
+
+        fn count_tool_results(msgs: &[Message]) -> usize {
+            msgs.iter()
+                .flat_map(|m| m.content.iter())
+                .filter(|b| matches!(b, ContentBlock::ToolResult { .. }))
+                .count()
+        }
+
+        fn count_placeholders(msgs: &[Message]) -> usize {
+            msgs.iter()
+                .flat_map(|m| m.content.iter())
+                .filter(|b| {
+                    matches!(
+                        b,
+                        ContentBlock::ToolResult { content, .. } if is_pruned_placeholder(content)
+                    )
+                })
+                .count()
+        }
+
+        #[test]
+        fn small_session_does_not_meet_minimum_threshold() {
+            // short_session has no tool results; recovery is 0.
+            let msgs = m48_fixtures::short_session();
+            let (out, report) = prune_with_defaults(&msgs);
+            assert!(!report.committed);
+            assert_eq!(report.blocks_pruned, 0);
+            assert_eq!(report.bytes_recovered, 0);
+            assert_eq!(out.len(), msgs.len());
+        }
+
+        #[test]
+        fn large_tool_outputs_get_pruned_outside_protected_window() {
+            // Build a session with 6 user turns of large tool output so
+            // total bytes far exceed PRUNE_PROTECT + PRUNE_MINIMUM.
+            let mut msgs: Vec<Message> = Vec::new();
+            for turn in 1..=6 {
+                msgs.push(m48_fixtures::user_text(turn, "run tests please"));
+                let tool_id = format!("call-{turn}");
+                msgs.push(m48_fixtures::assistant_tool_use(
+                    turn,
+                    &tool_id,
+                    "bash",
+                    "cargo test --all",
+                ));
+                let payload = "test output line\n".repeat(2_500); // ~42k bytes each
+                msgs.push(m48_fixtures::user_tool_result(turn, &tool_id, &payload));
+            }
+            let (out, report) = prune_with_defaults(&msgs);
+            assert!(report.committed, "should prune: {:?}", report);
+            assert!(report.blocks_pruned > 0);
+            assert!(report.bytes_recovered > PRUNE_MINIMUM);
+            // The two most recent turns must keep their tool results intact.
+            let total_results = count_tool_results(&out);
+            let placeholders = count_placeholders(&out);
+            assert_eq!(total_results, 6); // count stays the same; only content changes
+            assert!(placeholders >= 1 && placeholders <= 4);
+            // Last turn's ToolResult must not be a placeholder.
+            let last_tool_result = out
+                .iter()
+                .rev()
+                .find_map(|m| {
+                    m.content.iter().rev().find_map(|b| match b {
+                        ContentBlock::ToolResult { content, .. } => Some(content.clone()),
+                        _ => None,
+                    })
+                })
+                .expect("a tool result");
+            assert!(!is_pruned_placeholder(&last_tool_result));
+        }
+
+        #[test]
+        fn protected_tool_names_are_never_pruned() {
+            // Same shape as the previous test but the tool name is "skill"
+            // (the opencode-style protected tool).
+            let mut msgs: Vec<Message> = Vec::new();
+            for turn in 1..=6 {
+                msgs.push(m48_fixtures::user_text(turn, "load skill"));
+                let tool_id = format!("call-{turn}");
+                msgs.push(m48_fixtures::assistant_tool_use(
+                    turn,
+                    &tool_id,
+                    "skill",
+                    "load-rules",
+                ));
+                let payload = "skill output line\n".repeat(2_500);
+                msgs.push(m48_fixtures::user_tool_result(turn, &tool_id, &payload));
+            }
+            let (out, report) = prune_with_defaults(&msgs);
+            // Skill outputs never accumulate into the rolling budget, so
+            // nothing should be pruned.
+            assert_eq!(report.blocks_pruned, 0);
+            assert!(!report.committed);
+            assert_eq!(count_placeholders(&out), 0);
+        }
+
+        #[test]
+        fn prune_is_idempotent_on_already_pruned_content() {
+            let mut msgs: Vec<Message> = Vec::new();
+            for turn in 1..=6 {
+                msgs.push(m48_fixtures::user_text(turn, "run"));
+                let tool_id = format!("call-{turn}");
+                msgs.push(m48_fixtures::assistant_tool_use(
+                    turn,
+                    &tool_id,
+                    "bash",
+                    "ls",
+                ));
+                let payload = "out\n".repeat(15_000);
+                msgs.push(m48_fixtures::user_tool_result(turn, &tool_id, &payload));
+            }
+            let (first, r1) = prune_with_defaults(&msgs);
+            assert!(r1.committed);
+            let (second, r2) = prune_with_defaults(&first);
+            // Second pass should find no new bytes to recover.
+            assert_eq!(r2.bytes_recovered, 0);
+            assert!(!r2.committed);
+            assert_eq!(count_placeholders(&first), count_placeholders(&second));
+        }
+
+        #[test]
+        fn protect_recent_turns_skips_last_n_turns() {
+            // Two big tool results in two turns; protect_recent=2 means
+            // neither is touched.
+            let mut msgs: Vec<Message> = Vec::new();
+            for turn in 1..=2 {
+                msgs.push(m48_fixtures::user_text(turn, "go"));
+                let tool_id = format!("c-{turn}");
+                msgs.push(m48_fixtures::assistant_tool_use(
+                    turn,
+                    &tool_id,
+                    "bash",
+                    "ls",
+                ));
+                msgs.push(m48_fixtures::user_tool_result(
+                    turn,
+                    &tool_id,
+                    &"x\n".repeat(30_000),
+                ));
+            }
+            let (_, report) = prune_with_defaults(&msgs);
+            // turns_seen < 2 -> nothing qualifies.
+            assert_eq!(report.blocks_pruned, 0);
+            assert!(!report.committed);
+        }
+
+        #[test]
+        fn rolling_budget_keeps_first_recent_tail_intact() {
+            // Construct: 5 turns where each tool_result is ~25k bytes
+            // (total > PROTECT). Last 2 turns are protected; from turn 3
+            // backwards the rolling sum will exceed PRUNE_PROTECT once we
+            // accumulate enough, so the older turns get pruned.
+            let mut msgs: Vec<Message> = Vec::new();
+            for turn in 1..=5 {
+                msgs.push(m48_fixtures::user_text(turn, "go"));
+                let tool_id = format!("c-{turn}");
+                msgs.push(m48_fixtures::assistant_tool_use(
+                    turn,
+                    &tool_id,
+                    "bash",
+                    "ls",
+                ));
+                msgs.push(m48_fixtures::user_tool_result(
+                    turn,
+                    &tool_id,
+                    &"y\n".repeat(15_000),
+                ));
+            }
+            let (out, report) = prune_with_defaults(&msgs);
+            assert!(report.committed);
+            // The two newest turns (turn 4, 5) must keep their tool results.
+            // Find the user-tool_result messages for turns 4 and 5 by their
+            // content's role and position.
+            let user_results: Vec<&Message> = out
+                .iter()
+                .filter(|m| {
+                    m.role == Role::User
+                        && m.content
+                            .iter()
+                            .any(|b| matches!(b, ContentBlock::ToolResult { .. }))
+                })
+                .collect();
+            assert_eq!(user_results.len(), 5);
+            // The last one (turn 5) is always protected.
+            let last = user_results.last().unwrap();
+            let last_content = last
+                .content
+                .iter()
+                .find_map(|b| match b {
+                    ContentBlock::ToolResult { content, .. } => Some(content.clone()),
+                    _ => None,
+                })
+                .unwrap();
+            assert!(!is_pruned_placeholder(&last_content));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
