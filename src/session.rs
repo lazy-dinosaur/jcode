@@ -21,7 +21,8 @@ pub use crash::{
 };
 pub use jcode_session_types::{
     EnvSnapshot, GitState, SessionImproveMode, SessionStatus, StoredCompactionState,
-    StoredDisplayRole, StoredMemoryInjection, StoredMessage, StoredTokenUsage,
+    StoredCompactionTurn, StoredDisplayRole, StoredMemoryInjection, StoredMessage,
+    StoredTokenUsage,
 };
 use journal::{PersistVectorMode, SessionJournalMeta, SessionPersistState};
 pub use memory_profile::SessionMemoryProfileSnapshot;
@@ -74,6 +75,19 @@ pub struct Session {
     /// active summary + recent tail instead of re-sending the full transcript.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compaction: Option<StoredCompactionState>,
+    /// M48-C1: durable compaction-turn metadata.
+    ///
+    /// Each compaction event the session has experienced is recorded here as
+    /// a `StoredCompactionTurn`. The list grows over the life of a session
+    /// and links marker/summary messages by `StoredMessage.id`. Empty for
+    /// fresh sessions and for legacy sessions before C-1; legacy sessions
+    /// get a single backfill entry generated from `Session.compaction` on
+    /// load (see `compaction_turns_backfilled_from_legacy`) so downstream
+    /// code can treat both worlds uniformly. The legacy `compaction` field
+    /// above is preserved untouched during this stage so provider conversion
+    /// keeps working unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub compaction_turns: Vec<StoredCompactionTurn>,
     /// Provider-specific session ID (e.g., Claude Code CLI session for resume)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_session_id: Option<String>,
@@ -533,6 +547,45 @@ impl Session {
         self.memory_profile_dirty = true;
     }
 
+    /// M48-C1: synthesize a single durable `StoredCompactionTurn` from the
+    /// legacy `Session.compaction` field when the session was loaded from a
+    /// pre-C-1 snapshot that has no `compaction_turns`.
+    ///
+    /// Idempotent: skips when `compaction_turns` is already populated or when
+    /// `compaction` is `None`. The synthesized turn is flagged with
+    /// `backfilled_from_legacy = true` and carries empty
+    /// `marker_message_id` / `summary_message_id` because pre-C-1 sessions
+    /// never persisted dedicated marker/summary messages -- the summary text
+    /// lives in `Session.compaction.summary_text`. Downstream code can use
+    /// `StoredCompactionTurn::is_legacy_backfill()` to detect that case and
+    /// fall back to the legacy field for rendering.
+    ///
+    /// The legacy `compaction` field is intentionally NOT cleared by this
+    /// migration so existing provider conversion paths (and the rest of the
+    /// crate) keep working unchanged. M48 stages C-4 and beyond will switch
+    /// callers to read the durable turn list and then deprecate the legacy
+    /// field.
+    pub fn backfill_compaction_turns_from_legacy(&mut self) {
+        if !self.compaction_turns.is_empty() {
+            return;
+        }
+        let Some(state) = self.compaction.as_ref() else {
+            return;
+        };
+        self.compaction_turns.push(StoredCompactionTurn {
+            id: format!("legacy-{}-{}", self.id, state.compacted_count),
+            marker_message_id: String::new(),
+            summary_message_id: String::new(),
+            auto: true,
+            overflow: false,
+            tail_start_id: None,
+            previous_summary_id: None,
+            summary_of_message_ids: Vec::new(),
+            backfilled_from_legacy: true,
+            created_at: Some(self.updated_at),
+        });
+    }
+
     fn rebuild_memory_profile_cache(&mut self) {
         let message_stats =
             summarize_message_content(self.messages.iter().map(|message| &message.content));
@@ -689,6 +742,7 @@ impl Session {
             updated_at: now,
             messages: Vec::new(),
             compaction: None,
+            compaction_turns: Vec::new(),
             provider_session_id: None,
             provider_key: None,
             model: None,
@@ -737,6 +791,7 @@ impl Session {
             updated_at: now,
             messages: Vec::new(),
             compaction: None,
+            compaction_turns: Vec::new(),
             provider_session_id: None,
             provider_key: None,
             model: None,
