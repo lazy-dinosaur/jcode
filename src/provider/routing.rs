@@ -32,11 +32,14 @@ pub(crate) fn is_transient_transport_error(error_str: &str) -> bool {
         || lower.contains("host is unreachable")
 }
 
+pub(crate) const ANTHROPIC_1M_EXTRA_USAGE_DETAIL: &str =
+    "usage API reports extra usage disabled; API will verify on request";
+
 pub(crate) fn anthropic_oauth_route_availability(model: &str) -> (bool, String) {
-    if model.ends_with("[1m]") && !crate::usage::has_extra_usage() {
-        (false, "requires extra usage".to_string())
-    } else if model.contains("opus") && !crate::auth::claude::is_max_subscription() {
+    if model.contains("opus") && !crate::auth::claude::is_max_subscription() {
         (false, "requires Max subscription".to_string())
+    } else if model.ends_with("[1m]") && !crate::usage::has_extra_usage() {
+        (true, ANTHROPIC_1M_EXTRA_USAGE_DETAIL.to_string())
     } else {
         (true, String::new())
     }
@@ -44,7 +47,7 @@ pub(crate) fn anthropic_oauth_route_availability(model: &str) -> (bool, String) 
 
 pub(crate) fn anthropic_api_key_route_availability(model: &str) -> (bool, String) {
     if model.ends_with("[1m]") && !crate::usage::has_extra_usage() {
-        (false, "requires extra usage".to_string())
+        (true, ANTHROPIC_1M_EXTRA_USAGE_DETAIL.to_string())
     } else {
         (true, String::new())
     }
@@ -55,15 +58,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn anthropic_1m_routes_are_advertisable_with_extra_usage_hint_when_unknown() {
+    fn anthropic_1m_routes_are_selectable_with_extra_usage_hint_when_unknown() {
         for model in ["claude-opus-4-7[1m]", "claude-sonnet-4-6[1m]"] {
             let (oauth_available, oauth_detail) = anthropic_oauth_route_availability(model);
             let (api_key_available, api_key_detail) = anthropic_api_key_route_availability(model);
 
-            assert!(!oauth_available, "{model} should be visible but disabled");
-            assert_eq!(oauth_detail, "requires extra usage");
-            assert!(!api_key_available, "{model} should be visible but disabled");
-            assert_eq!(api_key_detail, "requires extra usage");
+            assert!(
+                oauth_available,
+                "{model} should be selectable so the API can verify entitlement"
+            );
+            assert_eq!(oauth_detail, ANTHROPIC_1M_EXTRA_USAGE_DETAIL);
+            assert!(
+                api_key_available,
+                "{model} should be selectable so the API can verify entitlement"
+            );
+            assert_eq!(api_key_detail, ANTHROPIC_1M_EXTRA_USAGE_DETAIL);
         }
     }
 

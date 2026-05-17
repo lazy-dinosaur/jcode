@@ -259,8 +259,11 @@ fn test_anthropic_model_routes_keep_plain_4_6_available_without_extra_usage() {
                     && route.model == "claude-opus-4-6[1m]"
             })
             .expect("1m opus route");
-        assert!(!opus_1m.available);
-        assert_eq!(opus_1m.detail, "requires extra usage");
+        assert!(opus_1m.available);
+        assert_eq!(
+            opus_1m.detail,
+            crate::provider::routing::ANTHROPIC_1M_EXTRA_USAGE_DETAIL
+        );
     });
 }
 
