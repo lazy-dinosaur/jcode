@@ -924,6 +924,20 @@ Track each custom patch as a small commit. Current known customizations:
    - Validation: 2 new tests pass — `m47_c7_provider_agnostic_defaults_default_to_none`, `m47_c7_generated_default_config_documents_provider_agnostic_keys`. 54 `config::tests::*` (now 56 with the new ones) and 21 `tool::task::tests::*` still pass.
    - Binary reinstall required: yes (config schema + spawn-path fallback).
 
+40. Doctor renders effective 5-dimension summary per agent profile (M47-C8)
+   - Commit: `fa1acf52` `doctor: render effective 5-dimension summary per agent profile (M47-C8)`.
+   - Patch branch: `patch/m47-c8-doctor-effective-dimensions` (parent: `patch/m47-c7-provider-config-defaults`).
+   - Purpose: after M47-C3 added `context`/`thinking` to `AgentRouteConfig` and M47-C5 wired them through the variant resolver, agent profiles now carry up to five provider-aware dimensions. `jcode doctor` previously printed only origin and warned when both model and prompt were missing, which left users guessing about routing.
+   - Implementation:
+     - `src/doctor.rs::section_agent_profiles`: after the conflict/empty warnings, append an info-level line per profile of the form `"<name>" dimensions  model=… · variant=… · effort=… · context=… · thinking=on|off`. Quiet mode hides it.
+     - New helper `effective_profile_dimensions(profile)` renders each dimension the `AgentRouteConfig` actually carries. The rendering intentionally reports the file-level surface area (post-merge winning profile) rather than the M47-C5 variant-resolved end state — so users can read both alongside.
+     - Empty profiles still skip the line silently to avoid noise.
+   - Touched paths:
+     - `src/doctor.rs`
+     - `src/doctor_tests.rs` (1 new regression test)
+   - Validation: 11 `doctor_tests::*` pass including new `test_doctor_renders_effective_profile_dimensions` which checks a Claude prometheus profile (model + variant + context + thinking) and a GPT coder profile (model + effort).
+   - Binary reinstall required: yes (doctor output change).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
