@@ -867,6 +867,21 @@ Track each custom patch as a small commit. Current known customizations:
    - Validation: `cargo check -p jcode` clean; 55 `provider::anthropic::tests::*` pass (including 5 new `set_context_preference_*` / `anthropic_available_contexts_*` / `anthropic_supports_thinking_*` cases); 470 of 471 `provider::*` tests pass — the single failure `provider_catalog::provider_catalog_tests::auth_profile_env_application_flushes_stale_openrouter_catalog_state` is a pre-existing flaky env-lock test that passes on solo invocation.
    - Binary reinstall required: yes (provider trait surface change + Anthropic runtime context-preference behavior).
 
+37. Provider-aware variant resolver decomposes `variant=max` per 4-provider matrix (M47-C5)
+   - Commit: `18b73c8b` `task: provider-aware variant resolver decomposes variant into effort/context/thinking (M47-C5)`.
+   - Patch branch: `patch/m47-c5-variant-resolver` (parent: `patch/m47-c4-provider-trait-dimensions`).
+   - Purpose: the historical `variant = "max"` shortcut routed to two channels via overlapping helpers (`apply_route_variant_to_model` → Claude `[1m]` suffix, `normalize_route_effort("max")` → `xhigh` effort applied only on `gpt-*`/`openai/*`). That worked for Claude long-context and OpenAI reasoning, but Gemini thinking and OpenRouter Kimi/GLM thinking had no first-class mapping even after M47-C4 exposed the declarative `supports_thinking()` surface on those backends. M47-C5 introduces a provider-aware resolver so a single `variant = "max"` (or explicit `context: / thinking:` profile fields) routes to the right channel per backend.
+   - Implementation:
+     - `src/tool/task.rs::ResolvedSubagentRoute`: gain `context: Option<String>` and `thinking: Option<bool>` so the spawn path can forward all five dimensions to the child session in M47-C6.
+     - New `ResolvedVariantDimensions` struct (effort / context / thinking) and `SubagentTool::resolve_variant_dimensions_for_provider(model, variant)`. The resolver looks up `provider_for_model(model)` and maps `variant="max"` per the 4-provider matrix: Claude → `context = "1m"`; OpenAI → `effort = "xhigh"`; Gemini → `thinking = true`; OpenRouter → `effort = "xhigh"` + `thinking = true`; unknown → `effort = normalize_route_effort` fallback (back-compat). Other variants (`pro`/`fast`/unknown/empty) return `None`.
+     - `route_for_subagent_type` now consults the resolver and merges with explicit profile fields. Explicit `effort` / `context` / `thinking` win over variant fallback so a SSOT can target a backend without provider-aware mapping.
+     - New `apply_route_context_to_model` helper mirrors `set_context_preference`: an explicit `context = "1m"` on a Claude model normalizes the model id with `[1m]` so the child session sees a consistent `model + context` pair. Non-Claude models pass through unchanged.
+   - Touched paths:
+     - `src/tool/task.rs` (resolver + helper + 7 new regression tests)
+   - Validation: 21 `tool::task::tests::*` pass (14 existing + 7 new) including the 4-provider matrix (`variant_max_on_{claude,openai,gemini,openrouter,unknown}_resolves_to_*`), `variant_resolver_returns_none_for_empty_or_unknown_variant`, and `apply_route_context_appends_1m_on_claude_and_strips_on_200k`. 15 `agent_profiles_md::tests::*` and 54 `config::tests::*` still pass.
+   - Behavior change: the resolver is consumed inside `route_for_subagent_type` but the downstream `execute()` spawn path still only forwards `route.effort` to the child session. M47-C6 wires the new `context` and `thinking` dimensions into `Session` so `restore_provider_preferences_from_session` can apply them via the M47-C4 Provider trait surface. Until then the new fields are computed but unused at runtime — no observable behavior change for end users yet.
+   - Binary reinstall required: yes (subagent spawn resolver change; downstream callers ready for next stage).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
