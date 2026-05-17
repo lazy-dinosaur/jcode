@@ -1077,6 +1077,27 @@ The 10-stage M47 patch series (`patch/m47-c0-deep-merge-profiles` through `patch
    - Validation: 46 `jcode-compaction-core` lib tests pass (36 prior + 10 new). 6 `jcode-session-types` tests still pass. `cargo check -p jcode` clean. No runtime caller wired yet; M48-C5 will combine `select_tail` (C-2) + `prune` (C-3) + `build_prompt` (C-4) into the replay-on-overflow path.
    - Binary reinstall required: no (no runtime behavior change yet; selfdev build queued so the next stage starts fresh).
 
+47. Overflow replay candidate + media-to-text helpers (M48-C5a)
+   - Commit: `06c7dfdd` `[m48-c5] overflow replay candidate + media-to-text helpers (opencode parity)`.
+   - Patch branch: `patch/m48-c5-overflow-replay-helpers` (parent: `deploy/m9-m27-catchup`).
+   - Purpose: port the replay-prep portion of opencode `processCompaction` so the compaction agent loop (M48-C4b) has a deterministic, well-tested rule for "when context overflows, which user message do we re-emit and what gets stripped". The actual session mutation (creating the synthetic replay user message, persisting `overflow = true` on `StoredCompactionTurn`) is deferred to C-4b/C-7.
+   - New module `jcode-compaction-core::m48_overflow`:
+     - `find_replay_candidate(messages, parent_index) -> Option<ReplayCandidate>` — walks backwards from `parent_index - 1` for the most recent non-compaction-marker user message. Returns the index + cloned content blocks. Compaction marker heuristic matches `m48_select::is_compaction_marker` (user-role messages whose blocks are all `OpenAICompaction`).
+     - `prepare_replay_blocks(blocks) -> Vec<ContentBlock>` — strips `OpenAICompaction` markers and rewrites `Image` blocks into `Text` placeholders (`media_text_label(media_type) = "[Attached {media_type}: replaced during compaction]"`). The original `data` payload is intentionally dropped because oversized media is the most common overflow cause.
+     - `is_replay_safe(head) -> bool` — mirrors opencode `hasContent`: at least one non-marker user message must remain in the head slice or the replay is dropped.
+     - `plan_overflow_replay(messages, parent_index) -> Option<(Vec<ContentBlock>, usize)>` — one-shot wrapper combining candidate lookup + safety check + block prep. Returns the prepared blocks and the residual head length.
+     - `ReplayCandidate { index, content }` struct so callers can decide whether to use the raw or prepared blocks.
+   - Tests (11 new in `m48_overflow::overflow_tests`):
+     - `media_text_label_is_human_readable` (label format).
+     - `find_replay_candidate_returns_previous_user_message`, `find_replay_candidate_skips_compaction_markers`, `find_replay_candidate_returns_none_at_index_zero`, `find_replay_candidate_returns_none_past_end`.
+     - `prepare_replay_blocks_strips_compaction_markers`, `prepare_replay_blocks_rewrites_images_to_text_labels` (verifies original payload is not leaked).
+     - `is_replay_safe_requires_real_user_turn_in_head`, `is_replay_safe_treats_compaction_only_head_as_unsafe`.
+     - `plan_overflow_replay_returns_prepared_blocks_and_head_len` (unsafe head → None), `plan_overflow_replay_succeeds_when_head_has_real_user_turn`.
+   - Touched paths:
+     - `crates/jcode-compaction-core/src/lib.rs` (+286 lines: new `pub mod m48_overflow` with consts, `ReplayCandidate`, `find_replay_candidate`, `prepare_replay_blocks`, `is_replay_safe`, `plan_overflow_replay`, and inline tests).
+   - Validation: 57 `jcode-compaction-core` lib tests pass (46 prior + 11 new). `cargo check -p jcode` clean. No runtime caller wired yet; M48-C4b will combine `select_tail` (C-2) + `prune` (C-3) + `build_prompt` (C-4a) + `plan_overflow_replay` (C-5a) into the actual compaction agent execution path. M48 milestone tracker note: this stage is C-5a (helpers); the full C-5 scope (creating the synthetic replay message, auto-continue plugin trigger, persisting overflow state) is deferred to C-5b alongside the agent execution path.
+   - Binary reinstall required: no (test-only module; production binary unchanged).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
