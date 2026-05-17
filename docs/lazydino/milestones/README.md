@@ -20,11 +20,13 @@ self-contained handoff card. 다음 세션 시작 시 사용 패턴:
 | 7 | M43 | ✅ DONE 2026-05-13 (deploy `lazydino-07905799`) | OAuth path 에서 `tools` 기반 광고 회복, bg/swarm canary 실측 통과 | [M43.md](./M43.md) |
 | 8 | M44 | **High — NEXT** (MCP ecosystem/auth compatibility) | OAuth-required MCP for Figma/remote services: config foundation → authenticated HTTP/SSE/streamable transport → OAuth discovery/login | [M44.md](./M44.md) |
 | ✅ | M45 | — | DONE 2026-05-13: private `.jcode/` instruction stack 강화 completed: visibility, custom globs, nested private rules with turn dedup | [M45.md](./M45.md) |
-| 10 | M16 | Medium-High (구조 개선) | 4 sub-step | [M16.md](./M16.md) |
-| 11 | M2  | Medium-High | 재현부터 | [M2.md](./M2.md) |
-| 12 | M4  | Medium (BY-DESIGN) | UX caveat 정리 | [M4.md](./M4.md) |
-| 13 | M15 | Low-Medium (debug UX) | 작은 fix | [M15.md](./M15.md) |
-| 14 | M23 | Low (디스크 충분 동안) | tool 작성 | [M23.md](./M23.md) |
+| 10 | M48 | **High - Planned** (long-context reliability) | Opencode-style durable compaction marker, anchored summary, token tail, pruning, overflow replay | [M48.md](./M48.md) |
+| 11 | M49 | **High - Planned** (safe interrupt lifecycle) | Opencode-style cooperative cancel: typed turn stop reasons, provider/tool cancellation, interrupted transcript finalization | [M49.md](./M49.md) |
+| 12 | M16 | Medium-High (구조 개선) | 4 sub-step | [M16.md](./M16.md) |
+| 13 | M2  | Medium-High | 재현부터 | [M2.md](./M2.md) |
+| 14 | M4  | Medium (BY-DESIGN) | UX caveat 정리 | [M4.md](./M4.md) |
+| 15 | M15 | Low-Medium (debug UX) | 작은 fix | [M15.md](./M15.md) |
+| 16 | M23 | Low (디스크 충분 동안) | tool 작성 | [M23.md](./M23.md) |
 
 ## 공통 환경 (모든 카드에 적용)
 
