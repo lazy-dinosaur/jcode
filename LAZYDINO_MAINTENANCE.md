@@ -900,6 +900,30 @@ Track each custom patch as a small commit. Current known customizations:
    - Behavior change: agent profiles with explicit `context:` / `thinking:` or `variant: max` on Claude/Gemini/OpenRouter now propagate through the subagent spawn → session restore cycle so the live provider applies them. End-to-end effect visible: a `~/.jcode/agents/prometheus.md` profile with `model: claude-opus-4-7` + `variant: max` now persists `context_preference = "1m"` on its child session, and `restore_provider_preferences_from_session` calls `AnthropicProvider::set_context_preference("1m")` on load. Backward-compatible: pre-existing sessions deserialize with `None` dimensions and never call the new setters.
    - Binary reinstall required: yes (session schema + restorer behavior).
 
+39. ProviderConfig gains provider-agnostic default_reasoning_effort/context/thinking (M47-C7)
+   - Commit: `99ecbda7` `config: provider-agnostic default_reasoning_effort/context/thinking (M47-C7)`.
+   - Patch branch: `patch/m47-c7-provider-config-defaults` (parent: `patch/m47-c6-session-preferences`).
+   - Purpose: give a global SSOT fallback for the M47 5-dimension agent profile schema so a single shell session can drive Claude/GPT/Gemini/GLM personas from one config file without having to repeat the same `effort:` / `context:` / `thinking:` field on every profile. The OpenAI-only `openai_reasoning_effort` key remains the authoritative fallback for direct OpenAI sessions (back-compat); the new keys are the cross-provider SSOT fallback that also reaches OpenRouter DeepSeek/GLM/Kimi.
+   - Schema additions (jcode-config-types `ProviderConfig`):
+     - `default_reasoning_effort: Option<String>` — none/low/medium/high/xhigh.
+     - `default_context: Option<String>` — e.g. `"200k"` or `"1m"`. Currently only Anthropic consumes via `set_context_preference`; others silently skip.
+     - `default_thinking: Option<bool>` — Anthropic / Gemini / OpenRouter Kimi+GLM consume; OpenAI direct ignores.
+     - All default to `None` so existing installs stay unchanged.
+   - Env overrides (src/config/env_overrides.rs):
+     - `JCODE_DEFAULT_REASONING_EFFORT` → `default_reasoning_effort`
+     - `JCODE_DEFAULT_CONTEXT` → `default_context`
+     - `JCODE_DEFAULT_THINKING` → `default_thinking` (accepts 1/true/yes/on/enabled vs 0/false/no/off/disabled)
+   - Generated default config (src/config/default_file.rs) gets commented-out sample entries that document the keys + env overrides so `jcode init` produces a config file that explains the SSOT fallback feature for new users.
+   - Spawn path (src/tool/task.rs::execute): after consuming the M47-C5 variant resolver hints and the explicit agent profile fields, falls back to the new ProviderConfig defaults before creating the child session. Resolution order is `profile.explicit > variant resolver > ProviderConfig.default_*`. The effort fallback also runs through `should_apply_route_effort` (M47-C2) so it only persists on backends that consume effort.
+   - Touched paths:
+     - `crates/jcode-config-types/src/lib.rs`
+     - `src/config/default_file.rs`
+     - `src/config/env_overrides.rs`
+     - `src/config_tests.rs` (2 new regression tests)
+     - `src/tool/task.rs` (spawn path fallback chain)
+   - Validation: 2 new tests pass — `m47_c7_provider_agnostic_defaults_default_to_none`, `m47_c7_generated_default_config_documents_provider_agnostic_keys`. 54 `config::tests::*` (now 56 with the new ones) and 21 `tool::task::tests::*` still pass.
+   - Binary reinstall required: yes (config schema + spawn-path fallback).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
