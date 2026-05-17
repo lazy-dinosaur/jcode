@@ -564,15 +564,43 @@ impl Tool for SubagentTool {
         // unsupported dimensions (M47-C1/C-4 semantics) — the SSOT can carry
         // all five dimensions even when the resolved model does not consume
         // them all.
+        //
+        // M47-C7: when the agent profile / variant resolver does not supply
+        // a dimension, fall back to the provider-agnostic defaults from
+        // ProviderConfig (`default_reasoning_effort` / `default_context` /
+        // `default_thinking`). These are intentionally last in the chain so
+        // an explicit profile field always wins.
+        let provider_defaults = &crate::config::config().provider;
+        if session.reasoning_effort.is_none()
+            && Self::should_apply_route_effort(&resolved_model)
+            && let Some(default_effort) = provider_defaults.default_reasoning_effort.as_deref()
+            && let Some(normalized) = Self::normalize_route_effort(default_effort)
+        {
+            session.reasoning_effort = Some(normalized);
+        }
         if session.context_preference.is_none()
             && let Some(route_context) = route.context.clone()
         {
             session.context_preference = Some(route_context);
         }
+        if session.context_preference.is_none()
+            && let Some(default_context) = provider_defaults
+                .default_context
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        {
+            session.context_preference = Some(default_context.to_string());
+        }
         if session.thinking_enabled.is_none()
             && let Some(route_thinking) = route.thinking
         {
             session.thinking_enabled = Some(route_thinking);
+        }
+        if session.thinking_enabled.is_none()
+            && let Some(default_thinking) = provider_defaults.default_thinking
+        {
+            session.thinking_enabled = Some(default_thinking);
         }
 
         if let Some(ref working_dir) = ctx.working_dir {

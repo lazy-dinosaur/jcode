@@ -388,6 +388,26 @@ impl Config {
                 self.provider.openai_reasoning_effort = Some(trimmed);
             }
         }
+        // M47-C7: provider-agnostic default keys. Each is opt-in via env so a
+        // single shell session can drive Claude/GPT/Gemini/GLM sessions with
+        // the same SSOT fallback set.
+        if let Ok(v) = std::env::var("JCODE_DEFAULT_REASONING_EFFORT") {
+            let trimmed = v.trim().to_string();
+            if !trimmed.is_empty() {
+                self.provider.default_reasoning_effort = Some(trimmed);
+            }
+        }
+        if let Ok(v) = std::env::var("JCODE_DEFAULT_CONTEXT") {
+            let trimmed = v.trim().to_string();
+            if !trimmed.is_empty() {
+                self.provider.default_context = Some(trimmed);
+            }
+        }
+        if let Ok(v) = std::env::var("JCODE_DEFAULT_THINKING") {
+            if let Some(parsed) = parse_env_bool(&v) {
+                self.provider.default_thinking = Some(parsed);
+            }
+        }
         if let Ok(v) = std::env::var("JCODE_OPENAI_TRANSPORT") {
             let trimmed = v.trim().to_string();
             if !trimmed.is_empty() {

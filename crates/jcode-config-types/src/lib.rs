@@ -845,6 +845,26 @@ pub struct ProviderConfig {
     /// behavior if streaming-parser issues surface. Env override:
     /// `JCODE_OPENAI_PARALLEL_TOOL_CALLS=0` (also `false`/`no`/`off`).
     pub openai_parallel_tool_calls: bool,
+    /// M47-C7: provider-agnostic default reasoning effort, applied when an
+    /// agent profile (or session) does not specify one and the active provider
+    /// supports effort. Overrides nothing on backends without an effort
+    /// surface (Claude/Gemini/Bedrock/...): they silently skip via the
+    /// M47-C1 semantics in `MultiProvider::set_reasoning_effort`. The
+    /// OpenAI-only `openai_reasoning_effort` key remains the authoritative
+    /// fallback for direct OpenAI sessions (back-compat); this new key is
+    /// the SSOT fallback that also reaches OpenRouter DeepSeek/GLM/Kimi.
+    /// Env override: `JCODE_DEFAULT_REASONING_EFFORT`.
+    pub default_reasoning_effort: Option<String>,
+    /// M47-C7: provider-agnostic default context-window preference (e.g.
+    /// `"200k"` or `"1m"`). Currently only Anthropic consumes this via
+    /// `set_context_preference`; other providers silently skip. Env
+    /// override: `JCODE_DEFAULT_CONTEXT`.
+    pub default_context: Option<String>,
+    /// M47-C7: provider-agnostic default thinking toggle (`true`/`false`).
+    /// Anthropic / Gemini / OpenRouter Kimi+GLM consume this via
+    /// `set_thinking`; OpenAI direct ignores. Env override:
+    /// `JCODE_DEFAULT_THINKING` (accepts 1/true/yes/on/enabled/0/false/no/off/disabled).
+    pub default_thinking: Option<bool>,
 }
 
 impl Default for ProviderConfig {
@@ -861,6 +881,12 @@ impl Default for ProviderConfig {
             same_provider_account_failover: true,
             copilot_premium: None,
             openai_parallel_tool_calls: true,
+            // M47-C7: provider-agnostic preferences default to None so existing
+            // installs keep their current behavior. Set explicitly via config
+            // or env override to opt into cross-provider defaults.
+            default_reasoning_effort: None,
+            default_context: None,
+            default_thinking: None,
         }
     }
 }
