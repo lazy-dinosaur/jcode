@@ -23,9 +23,31 @@ pub struct SubagentTool {
 struct ResolvedSubagentRoute {
     model: Option<String>,
     effort: Option<String>,
+    /// M47-C5: explicit context-window preference resolved from the profile
+    /// (`context: "1m"` etc.) and/or from the provider-aware variant fallback
+    /// (Claude `variant: "max"` → `"1m"`). Forwarded to the child session so
+    /// the active provider can call `set_context_preference` on restore.
+    context: Option<String>,
+    /// M47-C5: explicit thinking toggle resolved from the profile
+    /// (`thinking: true` etc.) and/or from the provider-aware variant fallback
+    /// (Gemini / OpenRouter Kimi `variant: "max"` → `Some(true)`). Forwarded
+    /// to the child session.
+    thinking: Option<bool>,
     description: Option<String>,
     when: Vec<String>,
     prompt: Option<String>,
+}
+
+/// M47-C5: intermediate result of resolving a provider-aware variant alias.
+/// `route_for_subagent_type` consults this only when the profile does not
+/// already supply an explicit `effort` / `context` / `thinking`; explicit
+/// profile fields beat variant fallback so a SSOT can target a backend
+/// without provider-aware mapping.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ResolvedVariantDimensions {
+    effort: Option<String>,
+    context: Option<String>,
+    thinking: Option<bool>,
 }
 
 impl SubagentTool {
@@ -74,15 +96,49 @@ impl SubagentTool {
                 .map(str::trim)
                 .filter(|model| !model.is_empty());
             let raw_variant = route.variant.as_deref().map(str::trim);
-            let model =
-                raw_model.map(|model| Self::apply_route_variant_to_model(model, raw_variant));
+            let raw_context = route
+                .context
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            let model = raw_model.map(|model| {
+                // M47-C5: also append `[1m]` when an explicit `context = "1m"`
+                // is supplied on a Claude model, so the model id forwarded to
+                // the child session is consistent with the resolved context
+                // preference (downstream `set_context_preference` is a
+                // belt-and-braces for live provider switches).
+                let after_variant = Self::apply_route_variant_to_model(model, raw_variant);
+                Self::apply_route_context_to_model(&after_variant, raw_context)
+            });
+
+            // M47-C5: split a `variant = "max"` (or other provider-aware variant)
+            // into the 3 actual dimensions (effort / context / thinking) per the
+            // 4-provider matrix. The provider classifier looks at the resolved
+            // model (post-`[1m]`-suffix), so Claude routes still see themselves
+            // even when the suffix has been appended already.
+            let variant_dims = model.as_deref().and_then(|m| {
+                Self::resolve_variant_dimensions_for_provider(m, raw_variant)
+            });
+
+            // Explicit profile fields beat variant fallback. Empty trimmed values
+            // are treated as None so a SSOT can carry placeholder keys without
+            // overriding the variant resolver.
+            let explicit_effort = route
+                .effort
+                .as_deref()
+                .and_then(Self::normalize_route_effort);
+            let explicit_context =
+                raw_context.map(|s| s.to_ascii_lowercase());
+            let explicit_thinking = route.thinking;
+
             return ResolvedSubagentRoute {
                 model,
-                effort: route
-                    .effort
-                    .as_deref()
-                    .or(route.variant.as_deref())
-                    .and_then(Self::normalize_route_effort),
+                effort: explicit_effort
+                    .or_else(|| variant_dims.as_ref().and_then(|d| d.effort.clone())),
+                context: explicit_context
+                    .or_else(|| variant_dims.as_ref().and_then(|d| d.context.clone())),
+                thinking: explicit_thinking
+                    .or_else(|| variant_dims.as_ref().and_then(|d| d.thinking)),
                 description: route.description.clone(),
                 when: route.when.clone(),
                 prompt: route.prompt.clone(),
@@ -97,6 +153,8 @@ impl SubagentTool {
                 .cloned()
                 .filter(|model| !model.trim().is_empty()),
             effort: None,
+            context: None,
+            thinking: None,
             description: None,
             when: Vec::new(),
             prompt: None,
@@ -124,6 +182,97 @@ impl SubagentTool {
             format!("{model}[1m]")
         } else {
             model.to_string()
+        }
+    }
+
+    /// M47-C5: apply an explicit `context` profile field to a Claude-style
+    /// model id by mirroring `set_context_preference` (`"1m"` appends the
+    /// `[1m]` suffix; `"200k"`/`"default"`/empty/None strips it). Non-Claude
+    /// models pass through unchanged — their context window is fixed in the
+    /// model id and the downstream `set_context_preference` call is a no-op.
+    fn apply_route_context_to_model(model: &str, context: Option<&str>) -> String {
+        let Some(context) = context.map(|c| c.trim().to_ascii_lowercase()) else {
+            return model.to_string();
+        };
+        match context.as_str() {
+            "1m" | "1m-context" | "long" | "long-context" => {
+                if Self::supports_claude_max_variant(model) && !model.ends_with("[1m]") {
+                    format!("{model}[1m]")
+                } else {
+                    model.to_string()
+                }
+            }
+            "200k" | "default" | "short" | "short-context" => model
+                .strip_suffix("[1m]")
+                .map(|stripped| stripped.to_string())
+                .unwrap_or_else(|| model.to_string()),
+            _ => model.to_string(),
+        }
+    }
+
+    /// M47-C5: split a provider-aware variant alias (e.g. `"max"`) into the
+    /// three actual dimensions (`effort`, `context`, `thinking`) per the
+    /// 4-provider matrix documented in `docs/lazydino/milestones/M47.md`.
+    ///
+    /// | Provider   | variant="max" → dimensions                                        |
+    /// |------------|-------------------------------------------------------------------|
+    /// | Claude     | `context = "1m"`                                                  |
+    /// | OpenAI     | `effort = "xhigh"`                                                |
+    /// | Gemini     | `thinking = true`                                                 |
+    /// | OpenRouter | `effort = "xhigh"` + `thinking = true` (provider picks per model) |
+    ///
+    /// Returns `None` when the variant string is empty / unknown. Returning
+    /// `Some(ResolvedVariantDimensions::default())` would let `route_for_
+    /// subagent_type` skip the variant fallback unnecessarily.
+    fn resolve_variant_dimensions_for_provider(
+        model: &str,
+        variant: Option<&str>,
+    ) -> Option<ResolvedVariantDimensions> {
+        let variant_norm = variant?.trim().to_ascii_lowercase();
+        if variant_norm.is_empty() {
+            return None;
+        }
+
+        // Only "max" is provider-aware today. Future aliases ("pro", "fast")
+        // can extend this match without touching callers.
+        if variant_norm != "max" {
+            return None;
+        }
+
+        match crate::provider::provider_for_model(model) {
+            Some("claude") => Some(ResolvedVariantDimensions {
+                effort: None,
+                context: Some("1m".to_string()),
+                thinking: None,
+            }),
+            Some("openai") => Some(ResolvedVariantDimensions {
+                effort: Some("xhigh".to_string()),
+                context: None,
+                thinking: None,
+            }),
+            Some("gemini") => Some(ResolvedVariantDimensions {
+                effort: None,
+                context: None,
+                thinking: Some(true),
+            }),
+            Some("openrouter") => Some(ResolvedVariantDimensions {
+                // OpenRouter exposes both reasoning_effort (DeepSeek/GLM) and a
+                // `thinking` channel (Kimi/GLM thinking variants). Setting both
+                // is safe: the request builder only forwards what each model
+                // family actually consumes (M47-C4 declarative surface).
+                effort: Some("xhigh".to_string()),
+                context: None,
+                thinking: Some(true),
+            }),
+            // Unknown / Bedrock / Copilot / Cursor / Antigravity: no
+            // provider-aware mapping; treat as legacy effort fallback so the
+            // existing `variant -> effort` test cases (route_effort_normalizes
+            // _opencode_variants) keep passing.
+            _ => Some(ResolvedVariantDimensions {
+                effort: Self::normalize_route_effort(&variant_norm),
+                context: None,
+                thinking: None,
+            }),
         }
     }
 
@@ -942,6 +1091,8 @@ mod tests {
         let route = super::ResolvedSubagentRoute {
             model: Some("claude-opus-4-7[1m]".to_string()),
             effort: None,
+            context: Some("1m".to_string()),
+            thinking: None,
             description: Some("Plan ambiguous work".to_string()),
             when: vec!["the request needs decomposition".to_string()],
             prompt: Some("Return a concise execution plan.".to_string()),
@@ -1038,5 +1189,145 @@ mod tests {
     #[test]
     fn compact_history_formats_empty_transcript() {
         assert_eq!(format_compact_subagent_history(&[]), "(empty transcript)\n");
+    }
+
+    // ---- M47-C5: variant resolver 4-provider matrix ----
+
+    #[test]
+    fn variant_max_on_claude_resolves_to_context_1m() {
+        let dims = super::SubagentTool::resolve_variant_dimensions_for_provider(
+            "claude-opus-4-7[1m]",
+            Some("max"),
+        )
+        .expect("max on claude resolves");
+        assert_eq!(dims.context.as_deref(), Some("1m"));
+        assert_eq!(dims.effort, None);
+        assert_eq!(dims.thinking, None);
+    }
+
+    #[test]
+    fn variant_max_on_openai_resolves_to_effort_xhigh() {
+        let dims = super::SubagentTool::resolve_variant_dimensions_for_provider(
+            "gpt-5.5",
+            Some("max"),
+        )
+        .expect("max on openai resolves");
+        assert_eq!(dims.effort.as_deref(), Some("xhigh"));
+        assert_eq!(dims.context, None);
+        assert_eq!(dims.thinking, None);
+    }
+
+    #[test]
+    fn variant_max_on_gemini_resolves_to_thinking_true() {
+        let dims = super::SubagentTool::resolve_variant_dimensions_for_provider(
+            "gemini-3.1-pro-preview",
+            Some("max"),
+        )
+        .expect("max on gemini resolves");
+        assert_eq!(dims.thinking, Some(true));
+        assert_eq!(dims.effort, None);
+        assert_eq!(dims.context, None);
+    }
+
+    #[test]
+    fn variant_max_on_openrouter_resolves_to_effort_and_thinking() {
+        let dims = super::SubagentTool::resolve_variant_dimensions_for_provider(
+            "zhipu/glm-4-6",
+            Some("max"),
+        )
+        .expect("max on openrouter resolves");
+        assert_eq!(dims.effort.as_deref(), Some("xhigh"));
+        assert_eq!(dims.thinking, Some(true));
+        assert_eq!(dims.context, None);
+    }
+
+    #[test]
+    fn variant_max_on_unknown_provider_falls_back_to_effort_xhigh() {
+        let dims = super::SubagentTool::resolve_variant_dimensions_for_provider(
+            "totally-unknown-model",
+            Some("max"),
+        )
+        .expect("max on unknown falls back");
+        // Preserves the historical normalize_route_effort fallback so existing
+        // configs that relied on variant=max -> xhigh effort still work.
+        assert_eq!(dims.effort.as_deref(), Some("xhigh"));
+        assert_eq!(dims.context, None);
+        assert_eq!(dims.thinking, None);
+    }
+
+    #[test]
+    fn variant_resolver_returns_none_for_empty_or_unknown_variant() {
+        assert!(super::SubagentTool::resolve_variant_dimensions_for_provider(
+            "gpt-5.5",
+            None
+        )
+        .is_none());
+        assert!(super::SubagentTool::resolve_variant_dimensions_for_provider(
+            "gpt-5.5",
+            Some("")
+        )
+        .is_none());
+        assert!(super::SubagentTool::resolve_variant_dimensions_for_provider(
+            "gpt-5.5",
+            Some("pro")
+        )
+        .is_none());
+        assert!(super::SubagentTool::resolve_variant_dimensions_for_provider(
+            "gpt-5.5",
+            Some("fast")
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn apply_route_context_appends_1m_on_claude_and_strips_on_200k() {
+        assert_eq!(
+            super::SubagentTool::apply_route_context_to_model(
+                "claude-opus-4-7",
+                Some("1m"),
+            ),
+            "claude-opus-4-7[1m]"
+        );
+        // Idempotent
+        assert_eq!(
+            super::SubagentTool::apply_route_context_to_model(
+                "claude-opus-4-7[1m]",
+                Some("1m"),
+            ),
+            "claude-opus-4-7[1m]"
+        );
+        // Strip back
+        assert_eq!(
+            super::SubagentTool::apply_route_context_to_model(
+                "claude-opus-4-7[1m]",
+                Some("200k"),
+            ),
+            "claude-opus-4-7"
+        );
+        // Non-Claude pass-through
+        assert_eq!(
+            super::SubagentTool::apply_route_context_to_model("gpt-5.5", Some("1m")),
+            "gpt-5.5"
+        );
+        // None / empty: unchanged
+        assert_eq!(
+            super::SubagentTool::apply_route_context_to_model("claude-opus-4-7", None),
+            "claude-opus-4-7"
+        );
+        // Aliases
+        assert_eq!(
+            super::SubagentTool::apply_route_context_to_model(
+                "claude-sonnet-4-6",
+                Some("long-context"),
+            ),
+            "claude-sonnet-4-6[1m]"
+        );
+        assert_eq!(
+            super::SubagentTool::apply_route_context_to_model(
+                "claude-sonnet-4-6[1m]",
+                Some("default"),
+            ),
+            "claude-sonnet-4-6"
+        );
     }
 }
