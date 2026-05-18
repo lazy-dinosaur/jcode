@@ -76,8 +76,50 @@ impl Agent {
         self.session.model = Some(resolved_model.clone());
         let event = crate::provider::ProviderStateEvent::selected_model(source, resolved_model);
         self.provider_runtime_state.apply(event);
+        self.sanitize_native_compaction_for_current_provider();
         self.log_env_snapshot("set_model");
         Ok(())
+    }
+
+    fn sanitize_native_compaction_for_current_provider(&mut self) {
+        if self
+            .session
+            .compaction
+            .as_ref()
+            .and_then(|state| state.openai_encrypted_content.as_ref())
+            .is_none()
+        {
+            return;
+        }
+
+        let provider_name = self.provider.name().to_string();
+        let compaction = self.registry.compaction();
+        let sanitized_state = match compaction.try_write() {
+            Ok(mut manager) => {
+                manager.set_budget(self.provider.context_window());
+                if let Some(state) = self.session.compaction.as_ref() {
+                    manager.restore_persisted_stored_state_with(state, &self.session.messages);
+                }
+                if manager.discard_native_compaction_for_provider(&provider_name) {
+                    Some(manager.persisted_state())
+                } else {
+                    None
+                }
+            }
+            Err(_) => {
+                crate::logging::warn(
+                    "Provider switch native compaction sanitation skipped: compaction lock busy",
+                );
+                None
+            }
+        };
+
+        if let Some(state) = sanitized_state {
+            self.session.compaction = state;
+            self.provider_session_id = None;
+            self.session.provider_session_id = None;
+            self.persist_session_best_effort("provider switch native compaction sanitation");
+        }
     }
 
     pub(crate) fn provider_model_selection_generation(&self) -> u64 {
@@ -130,10 +172,7 @@ impl Agent {
         // ---- thinking toggle (M47-C4 Gemini / Anthropic / OpenRouter) ----
         if let Some(thinking) = self.session.thinking_enabled {
             if let Err(e) = self.provider.set_thinking(thinking) {
-                crate::logging::debug(&format!(
-                    "Skipped restoring thinking={}: {}",
-                    thinking, e
-                ));
+                crate::logging::debug(&format!("Skipped restoring thinking={}: {}", thinking, e));
             }
         } else if self.provider.supports_thinking() {
             self.session.thinking_enabled = self.provider.thinking_enabled();

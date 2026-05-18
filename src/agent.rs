@@ -375,11 +375,12 @@ impl Agent {
         } else {
             manager.seed_restored_stored_messages_with(&self.session.messages);
         }
-        let sanitized_state = if manager.discard_oversized_openai_native_compaction() {
-            Some(manager.persisted_state())
-        } else {
-            None
-        };
+        let sanitized_state =
+            if manager.discard_native_compaction_for_provider(self.provider.name()) {
+                Some(manager.persisted_state())
+            } else {
+                None
+            };
         logging::info(&format!(
             "seed_compaction_from_session: seeded compaction with {} messages",
             self.session.messages.len()
@@ -562,7 +563,7 @@ impl Agent {
             match compaction.try_write() {
                 Ok(mut manager) => {
                     let discarded_oversized_native =
-                        manager.discard_oversized_openai_native_compaction();
+                        manager.discard_native_compaction_for_provider(self.provider.name());
                     let messages = {
                         let all_messages = self.session.provider_messages();
                         if self.provider.uses_jcode_compaction() {

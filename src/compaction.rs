@@ -18,7 +18,8 @@
 use crate::message::{ContentBlock, Message, Role};
 use crate::provider::Provider;
 use crate::provider::openai_request::{
-    openai_encrypted_content_fallback_summary, openai_encrypted_content_is_sendable,
+    OPENAI_ENCRYPTED_CONTENT_SAFE_MAX_CHARS, openai_encrypted_content_fallback_summary,
+    openai_encrypted_content_is_sendable,
 };
 use anyhow::Result;
 use std::collections::{HashMap, VecDeque};
@@ -337,31 +338,26 @@ impl CompactionManager {
         let Some(summary) = self.active_summary.as_mut() else {
             return false;
         };
-        let Some(encrypted_content) = summary.openai_encrypted_content.as_ref() else {
+        let changed = sanitize_native_summary_for_provider(summary, "openai");
+        if changed {
+            self.observed_input_tokens = None;
+        }
+        changed
+    }
+
+    /// Drop provider-native OpenAI compaction state when the active provider is
+    /// not able to consume the opaque encrypted blob. This keeps the compacted
+    /// prefix usable after OpenAI -> Claude/Gemini/OpenRouter failover by
+    /// preserving or synthesizing a text summary fallback.
+    pub fn discard_native_compaction_for_provider(&mut self, provider_id: &str) -> bool {
+        let Some(summary) = self.active_summary.as_mut() else {
             return false;
         };
-        if openai_encrypted_content_is_sendable(encrypted_content) {
-            return false;
+        let changed = sanitize_native_summary_for_provider(summary, provider_id);
+        if changed {
+            self.observed_input_tokens = None;
         }
-
-        let encrypted_content_len = encrypted_content.len();
-        crate::logging::warn(&format!(
-            "[compaction] Discarding oversized OpenAI native compaction payload ({} chars)",
-            encrypted_content_len,
-        ));
-        summary.openai_encrypted_content = None;
-        let fallback = openai_encrypted_content_fallback_summary(encrypted_content_len);
-        if summary.text.trim().is_empty() {
-            summary.text = fallback;
-        } else if !summary
-            .text
-            .contains("OpenAI native compaction state was discarded")
-        {
-            summary.text.push_str("\n\n");
-            summary.text.push_str(&fallback);
-        }
-        self.observed_input_tokens = None;
-        true
+        changed
     }
 
     // ── Token snapshot (proactive mode) ────────────────────────────────────
@@ -1391,6 +1387,66 @@ impl Default for CompactionManager {
     }
 }
 
+fn append_native_fallback_if_needed(summary: &mut Summary, encrypted_content_len: usize) {
+    let fallback = openai_encrypted_content_fallback_summary(encrypted_content_len);
+    if summary.text.trim().is_empty() {
+        summary.text = fallback;
+    } else if !summary
+        .text
+        .contains("OpenAI native compaction state was discarded")
+    {
+        summary.text.push_str("\n\n");
+        summary.text.push_str(&fallback);
+    }
+}
+
+fn sanitize_native_summary_for_provider(summary: &mut Summary, provider_id: &str) -> bool {
+    use jcode_compaction_core::m48_native::{
+        SummaryRepresentation, classify_provider_id, decide_summary_representation,
+        provider_can_consume_blob,
+    };
+
+    let Some(encrypted_content) = summary.openai_encrypted_content.as_ref() else {
+        return false;
+    };
+    let encrypted_content_len = encrypted_content.len();
+    let provider = classify_provider_id(provider_id);
+
+    match decide_summary_representation(
+        provider,
+        Some(encrypted_content),
+        Some(summary.text.as_str()),
+        OPENAI_ENCRYPTED_CONTENT_SAFE_MAX_CHARS,
+    ) {
+        SummaryRepresentation::Native { .. } => false,
+        SummaryRepresentation::Text { dropped_native_len } => {
+            let reason = if provider_can_consume_blob(provider) {
+                "oversized"
+            } else {
+                "unsupported_provider"
+            };
+            crate::logging::warn(&format!(
+                "[compaction] Discarding {} OpenAI native compaction payload for provider '{}' ({} chars)",
+                reason,
+                provider_id,
+                dropped_native_len.unwrap_or(encrypted_content_len),
+            ));
+            summary.openai_encrypted_content = None;
+            append_native_fallback_if_needed(summary, encrypted_content_len);
+            true
+        }
+        SummaryRepresentation::None => {
+            crate::logging::warn(&format!(
+                "[compaction] Discarding OpenAI native compaction payload for provider '{}' and synthesizing text fallback ({} chars)",
+                provider_id, encrypted_content_len,
+            ));
+            summary.openai_encrypted_content = None;
+            append_native_fallback_if_needed(summary, encrypted_content_len);
+            true
+        }
+    }
+}
+
 /// Generate summary using the provider
 async fn generate_compaction_artifact(
     provider: Arc<dyn Provider>,
@@ -1398,26 +1454,8 @@ async fn generate_compaction_artifact(
     mut existing_summary: Option<Summary>,
 ) -> Result<CompactionResult> {
     let start = Instant::now();
-    if let Some(summary) = existing_summary.as_mut()
-        && let Some(encrypted_content) = summary.openai_encrypted_content.as_ref()
-        && !openai_encrypted_content_is_sendable(encrypted_content)
-    {
-        let encrypted_content_len = encrypted_content.len();
-        crate::logging::warn(&format!(
-            "[compaction] Existing OpenAI native compaction payload is oversized ({} chars); falling back to text summary",
-            encrypted_content_len,
-        ));
-        summary.openai_encrypted_content = None;
-        let fallback = openai_encrypted_content_fallback_summary(encrypted_content_len);
-        if summary.text.trim().is_empty() {
-            summary.text = fallback;
-        } else if !summary
-            .text
-            .contains("OpenAI native compaction state was discarded")
-        {
-            summary.text.push_str("\n\n");
-            summary.text.push_str(&fallback);
-        }
+    if let Some(summary) = existing_summary.as_mut() {
+        sanitize_native_summary_for_provider(summary, provider.name());
     }
 
     if let Ok(native) = provider
