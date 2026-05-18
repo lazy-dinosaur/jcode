@@ -1474,7 +1474,7 @@ pub(super) fn handle_info_command(app: &mut App, trimmed: &str) -> bool {
                 let diag = crate::compaction::build_compaction_diagnostics(
                     &stats,
                     &app.session.compaction_turns,
-                    None, // prune report is materialized once M48-C3 runtime wiring lands
+                    manager.last_prune_report(),
                     app.provider.name(),
                     app.session.compaction.as_ref(),
                     jcode_provider_openai::request::OPENAI_ENCRYPTED_CONTENT_SAFE_MAX_CHARS,

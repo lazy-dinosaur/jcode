@@ -612,11 +612,12 @@ impl App {
             };
             let provider_messages = self.materialized_provider_messages();
             let stats = manager_guard.stats_with(&provider_messages);
+            let last_prune = manager_guard.last_prune_report();
             drop(manager_guard);
             let diag = crate::compaction::build_compaction_diagnostics(
                 &stats,
                 &self.session.compaction_turns,
-                None,
+                last_prune,
                 self.provider.name(),
                 self.session.compaction.as_ref(),
                 jcode_provider_openai::request::OPENAI_ENCRYPTED_CONTENT_SAFE_MAX_CHARS,
@@ -644,9 +645,9 @@ impl App {
                 let native = diag.native_state.as_ref().map(|n| {
                     use jcode_compaction_core::m48_native::SummaryRepresentation;
                     let (kind, len, dropped) = match &n.representation {
-                        SummaryRepresentation::Native { encrypted_content_len } => {
-                            ("native", Some(*encrypted_content_len), None)
-                        }
+                        SummaryRepresentation::Native {
+                            encrypted_content_len,
+                        } => ("native", Some(*encrypted_content_len), None),
                         SummaryRepresentation::Text { dropped_native_len } => {
                             ("text", None, *dropped_native_len)
                         }

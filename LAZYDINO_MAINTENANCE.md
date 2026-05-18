@@ -1268,6 +1268,23 @@ The 10-stage M47 patch series (`patch/m47-c0-deep-merge-profiles` through `patch
      - `cargo check -p jcode`.
    - Binary reinstall required: yes (runtime provider-switch/native compaction behavior changed).
 
+55. Runtime provider-payload tool-output prune wiring (M48-C3b)
+   - Commit: `efc07a75` `[m48-c3b] wire runtime tool-output prune`.
+   - Patch branch: `patch/m48-c3b-runtime-prune`.
+   - Purpose: connect the pure C-3 prune pass to real provider payload construction and diagnostics, while preserving the persisted transcript unchanged.
+   - Runtime changes:
+     - `CompactionManager::messages_for_api_with` applies `m48_prune::prune_with_defaults` to active provider payloads when `compaction.prune = true`.
+     - Original `Session.messages` stay lossless; only the cloned provider payload receives `[tool output removed by compaction]` placeholders.
+     - `CompactionManager::last_prune_report()` stores the latest `PruneReport`.
+     - `/info` and `compaction-diag` / `compaction-diag:json` now surface the actual last prune report instead of a placeholder `None`.
+   - Tests:
+     - `compaction::tests::runtime_prune_applies_to_provider_payload_and_records_report` verifies placeholder replacement, report capture, and original transcript preservation.
+   - Validation:
+     - `rustfmt --edition 2024 --check src/compaction.rs src/compaction_tests.rs src/tui/app/state_ui.rs src/tui/app/debug_cmds.rs`.
+     - `cargo test -p jcode --lib compaction::tests` → 40 pass.
+     - `cargo check -p jcode`.
+   - Binary reinstall required: yes (provider payload construction changed).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
