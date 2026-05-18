@@ -1414,6 +1414,28 @@ The 10-stage M47 patch series (`patch/m47-c0-deep-merge-profiles` through `patch
      - `cargo check -p jcode`.
    - Binary reinstall required: yes (debug socket interrupt diagnostics changed).
 
+64. Separate user cancel from graceful reload shutdown (M49-C1)
+   - Commit: `7ac30038` `[m49-c1] separate user cancel from reload signal`.
+   - Patch branch: `patch/m49-c1-turn-control-signals`.
+   - Purpose: fix the first M49 gap where user cancel and selfdev/server reload shared `Agent::graceful_shutdown_signal()`. A user interrupt can now be diagnosed and propagated independently without looking like a reload handoff.
+   - Runtime changes:
+     - Added `TurnStopReason` (`user_interrupt`, `client_disconnect`, `server_reload`, `background_current_tool`, `superseded`) and `TurnControl` in `jcode-agent-runtime`.
+     - Added `Agent::turn_control()`, `Agent::turn_stop_signal()`, and `Agent::request_turn_stop(...)`; `Agent::reset_for_new_session()` resets turn control independently from reload shutdown.
+     - Rewired `SessionControlHandle` to store `TurnControl` instead of a raw `InterruptSignal`; `request_cancel()` now records `UserInterrupt` and no longer fires the reload shutdown signal.
+     - Added server-level `SessionTurnControls` registry so debug/cancel paths can operate lock-free while an agent is busy, parallel to `SessionInterruptQueues`.
+     - Kept `shutdown_signals` mapped to `Agent::graceful_shutdown_signal()` so selfdev reload and long-tool handoff semantics stay on the old reload path.
+     - Extended `SessionControlDiagnostics` and `interrupt:info` output with `stop_reason`.
+   - Tests:
+     - Updated C-0 diagnostics fixtures to use `TurnControl` and assert reset clears typed reason.
+     - `debug_cancel_does_not_wait_for_busy_agent_lock` now proves debug cancel sets `user_interrupt` without setting the reload signal.
+     - New `user_cancel_turn_control_does_not_set_graceful_reload_signal` verifies user cancel and reload shutdown are independent on a real `Agent`.
+   - Validation:
+     - `cargo test -p jcode --lib server::debug_command_exec::tests::debug_cancel_does_not_wait_for_busy_agent_lock`.
+     - `cargo test -p jcode --lib server::client_lifecycle::tests::user_cancel_turn_control_does_not_set_graceful_reload_signal`.
+     - `cargo test -p jcode --lib server::client_lifecycle::tests::lightweight_comm_request_skips_full_session_initialization`.
+     - `cargo check -p jcode`.
+   - Binary reinstall required: yes (server interrupt control-plane behavior and debug diagnostics changed).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
