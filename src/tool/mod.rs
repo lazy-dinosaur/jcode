@@ -59,6 +59,14 @@ pub struct Registry {
     compaction: Arc<RwLock<CompactionManager>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpRegistryDiagnostics {
+    pub total_tool_count: usize,
+    pub mcp_management_registered: bool,
+    pub mcp_server_tool_count: usize,
+    pub mcp_server_tool_names: Vec<String>,
+}
+
 impl Clone for Registry {
     fn clone(&self) -> Self {
         Self {
@@ -298,6 +306,22 @@ impl Registry {
         tools.keys().cloned().collect()
     }
 
+    pub async fn mcp_registry_diagnostics(&self) -> McpRegistryDiagnostics {
+        let tools = self.tools.read().await;
+        let mut mcp_server_tool_names: Vec<String> = tools
+            .keys()
+            .filter(|name| name.starts_with("mcp__"))
+            .cloned()
+            .collect();
+        mcp_server_tool_names.sort();
+        McpRegistryDiagnostics {
+            total_tool_count: tools.len(),
+            mcp_management_registered: tools.contains_key("mcp"),
+            mcp_server_tool_count: mcp_server_tool_names.len(),
+            mcp_server_tool_names,
+        }
+    }
+
     /// Enable test mode for memory tools (isolated storage)
     /// Called when session is marked as debug
     pub async fn enable_memory_test_mode(&self) {
@@ -494,6 +518,15 @@ impl Registry {
             Arc::new(RwLock::new(McpManager::new()))
         };
 
+        self.register_mcp_tools_from_manager(event_tx, mcp_manager)
+            .await;
+    }
+
+    pub(crate) async fn register_mcp_tools_from_manager(
+        &self,
+        event_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::protocol::ServerEvent>>,
+        mcp_manager: Arc<RwLock<crate::mcp::McpManager>>,
+    ) {
         // Register MCP management tool immediately (with registry for dynamic tool registration)
         let mcp_tool =
             mcp::McpManagementTool::new(Arc::clone(&mcp_manager)).with_registry(self.clone());
