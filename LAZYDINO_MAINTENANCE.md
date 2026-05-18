@@ -1362,6 +1362,23 @@ The 10-stage M47 patch series (`patch/m47-c0-deep-merge-profiles` through `patch
      - `cargo check -p jcode`.
    - Binary reinstall required: yes (MCP management and registry recovery behavior changed).
 
+61. Atomic owned-mode MCP reload preservation (M50-C3)
+   - Commit: `e75699ac` `[m50-c3] preserve mcp tools on failed reload`.
+   - Patch branch: `patch/m50-c3-atomic-mcp-reload`.
+   - Purpose: stop explicit `mcp reload` from making a previously usable registry worse when the candidate reload cannot connect any replacement servers.
+   - Runtime changes:
+     - Added `McpManager::reload_atomic_preserving_existing` for owned-mode managers: connect a candidate manager first, then swap only after success or intentional empty-config reload.
+     - `mcp reload` no longer unregisters existing `mcp__*` tools before candidate reload success.
+     - If an owned-mode reload connects zero new servers and reports failures, existing manager state and registered tools are preserved and output explains that the previous registry was kept.
+     - Accepted reloads still replace registry entries after the new manager state is ready.
+     - Shared-pool managers keep the legacy pool reload path because handles are session-keyed; C2 reconciliation protects registry drift after reconnect.
+   - Validation:
+     - `cargo test -p jcode --lib tool::mcp::tests::test_reload_preserves_existing_registry_tools_when_candidate_fails`.
+     - `cargo test -p jcode --lib tool::mcp::tests` → 11 pass.
+     - `cargo test -p jcode --lib tool::tests::reconcile_mcp_tools_restores_missing_registry_entries`.
+     - `cargo check -p jcode`.
+   - Binary reinstall required: yes (explicit MCP reload semantics changed).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
