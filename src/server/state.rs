@@ -468,6 +468,16 @@ pub struct SessionControlHandle {
     stop_current_turn_signal: InterruptSignal,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionControlDiagnostics {
+    pub session_id: String,
+    pub soft_interrupt_count: usize,
+    pub urgent_soft_interrupt_count: usize,
+    pub background_tool_signal_registered: bool,
+    pub background_tool_signal_set: bool,
+    pub stop_current_turn_signal_set: bool,
+}
+
 impl SessionControlHandle {
     pub fn new(
         session_id: impl Into<String>,
@@ -530,6 +540,29 @@ impl SessionControlHandle {
 
     pub fn stop_current_turn_signal(&self) -> InterruptSignal {
         self.stop_current_turn_signal.clone()
+    }
+
+    pub fn interrupt_diagnostics(&self) -> SessionControlDiagnostics {
+        let (soft_interrupt_count, urgent_soft_interrupt_count) = self
+            .soft_interrupt_queue
+            .lock()
+            .map(|queue| {
+                let urgent = queue.iter().filter(|message| message.urgent).count();
+                (queue.len(), urgent)
+            })
+            .unwrap_or((0, 0));
+        SessionControlDiagnostics {
+            session_id: self.session_id.clone(),
+            soft_interrupt_count,
+            urgent_soft_interrupt_count,
+            background_tool_signal_registered: self.background_tool_signal.is_some(),
+            background_tool_signal_set: self
+                .background_tool_signal
+                .as_ref()
+                .map(|signal| signal.is_set())
+                .unwrap_or(false),
+            stop_current_turn_signal_set: self.stop_current_turn_signal.is_set(),
+        }
     }
 }
 

@@ -453,6 +453,24 @@ pub(super) async fn execute_debug_command(
         .to_string());
     }
 
+    if trimmed == "interrupt:info" || trimmed == "interrupts:info" {
+        let control = match &interrupt_context {
+            Some(ctx) => ctx.control_handle().await,
+            None => None,
+        };
+        let payload = match control {
+            Some(control) => serde_json::json!({
+                "status": "ok",
+                "control": control.interrupt_diagnostics(),
+            }),
+            None => serde_json::json!({
+                "status": "unavailable",
+                "message": "No session interrupt control handle is available",
+            }),
+        };
+        return Ok(serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string()));
+    }
+
     if trimmed == "clear" || trimmed == "clear_history" {
         let mut agent = agent.lock().await;
         agent.clear();
