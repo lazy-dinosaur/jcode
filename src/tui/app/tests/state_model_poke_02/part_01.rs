@@ -91,6 +91,38 @@ fn test_tool_side_panel_focus_supports_image_zoom_keys() {
 }
 
 #[test]
+fn test_pinned_image_side_pane_focus_supports_pan_and_zoom_keys() {
+    let mut app = create_test_app();
+    app.diff_mode = crate::config::DiffDisplayMode::Inline;
+    app.is_remote = true;
+    app.side_panel = crate::side_panel::SidePanelSnapshot::default();
+    app.remote_side_pane_images
+        .push(crate::session::RenderedImage {
+            media_type: "image/png".to_string(),
+            data: "image-data".to_string(),
+            label: Some("preview.png".to_string()),
+            source: crate::session::RenderedImageSource::ToolResult {
+                tool_name: "read".to_string(),
+            },
+        });
+
+    assert!(app.handle_diagram_ctrl_key(KeyCode::Char('l'), false));
+    assert!(app.diff_pane_focus);
+
+    app.handle_key(KeyCode::Right, KeyModifiers::empty())
+        .unwrap();
+    assert_eq!(app.diff_pane_scroll_x, 4);
+
+    app.handle_key(KeyCode::Char('+'), KeyModifiers::empty())
+        .unwrap();
+    assert_eq!(app.side_panel_image_zoom_percent, 110);
+
+    app.handle_key(KeyCode::Char('-'), KeyModifiers::empty())
+        .unwrap();
+    assert_eq!(app.side_panel_image_zoom_percent, 100);
+}
+
+#[test]
 fn test_mouse_horizontal_scroll_over_tool_side_panel_pans_without_focus_change() {
     let mut app = create_test_app();
     app.diff_mode = crate::config::DiffDisplayMode::Inline;

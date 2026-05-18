@@ -198,6 +198,7 @@ struct RenderedSidePanelMarkdown {
 struct PinnedRenderedCache {
     inner_width: u16,
     line_wrap: bool,
+    image_zoom_percent: u8,
     lines: Vec<Line<'static>>,
     wrapped_plain_lines: std::sync::Arc<Vec<String>>,
     wrapped_copy_offsets: std::sync::Arc<Vec<usize>>,
@@ -631,6 +632,13 @@ pub(crate) fn clear_side_panel_render_caches() {
     });
 }
 
+pub(crate) fn clear_pinned_render_cache() {
+    let mut cache = pinned_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    cache.rendered_lines = None;
+}
+
 pub(crate) fn prewarm_focused_side_panel(
     snapshot: &crate::side_panel::SidePanelSnapshot,
     terminal_width: u16,
@@ -910,8 +918,13 @@ pub(super) fn draw_pinned_content_cached(
         return;
     }
 
+    let image_zoom_percent = app.side_panel_image_zoom_percent();
     let needs_rebuild = match &cache.rendered_lines {
-        Some(rendered) => rendered.inner_width != inner.width || rendered.line_wrap != line_wrap,
+        Some(rendered) => {
+            rendered.inner_width != inner.width
+                || rendered.line_wrap != line_wrap
+                || rendered.image_zoom_percent != image_zoom_percent
+        }
         None => true,
     };
 
@@ -1045,7 +1058,7 @@ pub(super) fn draw_pinned_content_cached(
                     ]));
 
                     if has_protocol {
-                        let image_layout = pinned_content_image_layout_with_font(
+                        let mut image_layout = pinned_content_image_layout_with_font(
                             *img_w,
                             *img_h,
                             inner,
@@ -1053,6 +1066,22 @@ pub(super) fn draw_pinned_content_cached(
                             i + 1 < entries.len(),
                             mermaid::get_font_size(),
                         );
+                        if image_zoom_percent != 100 {
+                            let (_, cell_h) = mermaid::get_font_size().unwrap_or((8, 16));
+                            let image_h_cells = super::diagram_pane::div_ceil_u32(
+                                (*img_h).max(1),
+                                cell_h.max(1) as u32,
+                            )
+                            .max(1);
+                            let rows = scaled_image_rows(image_h_cells, image_zoom_percent as u16)
+                                .max(SIDE_PANEL_INLINE_IMAGE_MIN_ROWS);
+                            image_layout = SidePanelImageLayout {
+                                rows,
+                                render_mode: SidePanelImageRenderMode::ScrollableViewport {
+                                    zoom_percent: image_zoom_percent as u16,
+                                },
+                            };
+                        }
                         image_placements.push(PinnedImagePlacement {
                             after_text_line: text_lines.len(),
                             hash: *hash,
@@ -1089,6 +1118,7 @@ pub(super) fn draw_pinned_content_cached(
         cache.rendered_lines = Some(PinnedRenderedCache {
             inner_width: inner.width,
             line_wrap,
+            image_zoom_percent,
             lines: text_lines,
             wrapped_plain_lines,
             wrapped_copy_offsets,
@@ -1729,6 +1759,7 @@ fn render_side_panel_markdown_cached_with_zoom(
     let rendered = PinnedRenderedCache {
         inner_width: inner.width,
         line_wrap: false,
+        image_zoom_percent,
         lines: text_lines,
         wrapped_plain_lines,
         wrapped_copy_offsets,

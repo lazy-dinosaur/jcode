@@ -136,7 +136,9 @@ impl App {
     }
 
     pub(super) fn diff_pane_visible(&self) -> bool {
-        self.diff_mode.has_side_pane() || self.side_panel.focused_page().is_some()
+        self.diff_mode.has_side_pane()
+            || self.side_panel.focused_page().is_some()
+            || self.side_pane_has_visual_images()
     }
 
     pub(super) fn set_diff_pane_focus(&mut self, focus: bool) {
@@ -152,9 +154,10 @@ impl App {
                 self.set_status_notice(
                     "Focus: split view (j/k scroll, Esc to return, Ctrl+H back to chat)",
                 );
-            } else if self.side_panel.focused_page().is_some() {
+            } else if self.side_panel.focused_page().is_some() || self.side_pane_has_visual_images()
+            {
                 self.set_status_notice(
-                    "Focus: side pane (j/k scroll, h/l pan diagrams, Esc to return)",
+                    "Focus: side pane (j/k scroll, h/l pan images, +/- zoom, 0 reset, Esc to return)",
                 );
             } else {
                 self.set_status_notice("Focus: side pane (j/k scroll, Esc to return)");
@@ -180,6 +183,7 @@ impl App {
         self.side_panel_image_zoom_percent = next;
         self.diff_pane_scroll_x = 0;
         crate::tui::clear_side_panel_render_caches();
+        crate::tui::clear_pinned_render_cache();
         crate::tui::mermaid::clear_image_state();
         self.set_status_notice(format!("Side image zoom: {}%", next));
     }
@@ -191,6 +195,7 @@ impl App {
         self.side_panel_image_zoom_percent = 100;
         self.diff_pane_scroll_x = 0;
         crate::tui::clear_side_panel_render_caches();
+        crate::tui::clear_pinned_render_cache();
         crate::tui::mermaid::clear_image_state();
         self.set_status_notice("Side image zoom: fit".to_string());
     }
@@ -238,19 +243,19 @@ impl App {
             KeyCode::BackTab if self.side_panel.focused_page().is_some() => {
                 self.focus_adjacent_side_panel_page(-1);
             }
-            KeyCode::Char('h') | KeyCode::Left if self.side_panel.focused_page().is_some() => {
+            KeyCode::Char('h') | KeyCode::Left if self.side_pane_accepts_image_controls() => {
                 self.pan_diff_pane_x(-4);
             }
-            KeyCode::Char('l') | KeyCode::Right if self.side_panel.focused_page().is_some() => {
+            KeyCode::Char('l') | KeyCode::Right if self.side_pane_accepts_image_controls() => {
                 self.pan_diff_pane_x(4);
             }
-            KeyCode::Char('+') | KeyCode::Char('=') if self.side_panel.focused_page().is_some() => {
+            KeyCode::Char('+') | KeyCode::Char('=') if self.side_pane_accepts_image_controls() => {
                 self.adjust_side_panel_image_zoom(10);
             }
-            KeyCode::Char('-') if self.side_panel.focused_page().is_some() => {
+            KeyCode::Char('-') if self.side_pane_accepts_image_controls() => {
                 self.adjust_side_panel_image_zoom(-10);
             }
-            KeyCode::Char('0') if self.side_panel.focused_page().is_some() => {
+            KeyCode::Char('0') if self.side_pane_accepts_image_controls() => {
                 self.reset_side_panel_image_zoom();
             }
             KeyCode::Esc => {
@@ -294,6 +299,10 @@ impl App {
             return false;
         }
         self.side_pane_has_visual_images_ignoring_user_hidden()
+    }
+
+    fn side_pane_accepts_image_controls(&self) -> bool {
+        self.side_panel.focused_page().is_some() || self.side_pane_has_visual_images()
     }
 
     fn side_pane_has_visual_images_ignoring_user_hidden(&self) -> bool {

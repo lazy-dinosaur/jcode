@@ -1233,6 +1233,10 @@ pub fn clear_side_panel_render_caches() {
     ui::clear_side_panel_render_caches();
 }
 
+pub fn clear_pinned_render_cache() {
+    ui::clear_pinned_render_cache();
+}
+
 pub fn prewarm_focused_side_panel(
     snapshot: &crate::side_panel::SidePanelSnapshot,
     terminal_width: u16,
