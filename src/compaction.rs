@@ -101,6 +101,11 @@ pub struct CompactionManager {
     /// Last compaction event (if any)
     last_compaction: Option<CompactionEvent>,
 
+    /// Most recent runtime tool-output prune report (M48-C3b). This is a
+    /// provider-payload optimization only; the persisted transcript remains
+    /// lossless and future compaction summaries still see the original content.
+    last_prune: Option<jcode_compaction_core::m48_prune::PruneReport>,
+
     // ── Mode & strategy ────────────────────────────────────────────────────
     /// Active compaction mode (set from config at construction)
     mode: crate::config::CompactionMode,
@@ -159,6 +164,7 @@ impl CompactionManager {
             token_budget: DEFAULT_TOKEN_BUDGET,
             observed_input_tokens: None,
             last_compaction: None,
+            last_prune: None,
             mode,
             compaction_config: cfg,
             token_history: VecDeque::with_capacity(TOKEN_HISTORY_WINDOW + 1),
@@ -1051,6 +1057,10 @@ impl CompactionManager {
         self.last_compaction.take()
     }
 
+    pub fn last_prune_report(&self) -> Option<jcode_compaction_core::m48_prune::PruneReport> {
+        self.last_prune
+    }
+
     /// Inspect the most recently applied compaction event without consuming it.
     ///
     /// Session sync uses this to persist sidecar metadata (manual vs auto) while
@@ -1066,6 +1076,8 @@ impl CompactionManager {
         self.discard_oversized_openai_native_compaction();
 
         let active = self.active_messages(all_messages);
+        let pruned_active = self.pruned_active_messages_for_api(active);
+        let active_for_api = pruned_active.as_deref().unwrap_or(active);
 
         match &self.active_summary {
             Some(summary) => {
@@ -1080,7 +1092,7 @@ impl CompactionManager {
                         cache_control: None,
                     });
 
-                let mut result = Vec::with_capacity(active.len() + 1);
+                let mut result = Vec::with_capacity(active_for_api.len() + 1);
 
                 result.push(Message {
                     role: Role::User,
@@ -1089,12 +1101,28 @@ impl CompactionManager {
                     tool_duration_ms: None,
                 });
 
-                // Clone only the active (non-compacted) messages
-                result.extend(active.iter().cloned());
+                // Clone only the active (non-compacted) messages, with optional
+                // provider-payload-only tool-output pruning applied.
+                result.extend(active_for_api.iter().cloned());
 
                 result
             }
-            None => active.to_vec(),
+            None => active_for_api.to_vec(),
+        }
+    }
+
+    fn pruned_active_messages_for_api(&mut self, active: &[Message]) -> Option<Vec<Message>> {
+        if !self.compaction_config.prune || active.is_empty() {
+            self.last_prune = None;
+            return None;
+        }
+
+        let (messages, report) = jcode_compaction_core::m48_prune::prune_with_defaults(active);
+        self.last_prune = Some(report);
+        if report.committed {
+            Some(messages)
+        } else {
+            None
         }
     }
 

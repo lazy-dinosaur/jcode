@@ -42,6 +42,32 @@ fn make_text_message(role: Role, text: &str) -> Message {
     }
 }
 
+fn make_tool_use_message(turn: usize, tool_id: &str) -> Message {
+    Message {
+        role: Role::Assistant,
+        content: vec![ContentBlock::ToolUse {
+            id: tool_id.to_string(),
+            name: "bash".to_string(),
+            input: serde_json::json!({ "command": format!("echo {turn}") }),
+        }],
+        timestamp: None,
+        tool_duration_ms: None,
+    }
+}
+
+fn make_tool_result_message(tool_id: &str, content: &str) -> Message {
+    Message {
+        role: Role::User,
+        content: vec![ContentBlock::ToolResult {
+            tool_use_id: tool_id.to_string(),
+            content: content.to_string(),
+            is_error: None,
+        }],
+        timestamp: None,
+        tool_duration_ms: None,
+    }
+}
+
 #[test]
 fn durable_compaction_prompt_uses_anchored_template_and_previous_summary() {
     let prompt = build_durable_compaction_prompt(
@@ -81,6 +107,42 @@ fn durable_compaction_history_rewrites_media_and_caps_tool_results() {
     assert!(!history.contains("secret-image-bytes"));
     assert!(history.contains("[tool output truncated for summary prompt]"));
     assert!(!history.contains(&"x".repeat(DURABLE_SUMMARY_TOOL_RESULT_MAX_CHARS + 1)));
+}
+
+#[test]
+fn runtime_prune_applies_to_provider_payload_and_records_report() {
+    let mut manager = CompactionManager::new().with_budget(DEFAULT_TOKEN_BUDGET);
+    let mut messages = Vec::new();
+    let payload = "tool output\n".repeat(4_000);
+    for turn in 0..6 {
+        let tool_id = format!("tool-{turn}");
+        messages.push(make_text_message(Role::User, &format!("turn {turn}")));
+        messages.push(make_tool_use_message(turn, &tool_id));
+        messages.push(make_tool_result_message(&tool_id, &payload));
+    }
+    manager.seed_restored_messages_with(&messages);
+
+    let provider_messages = manager.messages_for_api_with(&messages);
+    let report = manager.last_prune_report().expect("runtime prune ran");
+    assert!(report.committed);
+    assert!(report.blocks_pruned > 0);
+    assert!(provider_messages.iter().any(|message| {
+        message.content.iter().any(|block| {
+            matches!(
+                block,
+                ContentBlock::ToolResult { content, .. }
+                    if content == jcode_compaction_core::m48_prune::PRUNED_PLACEHOLDER
+            )
+        })
+    }));
+    assert!(messages.iter().any(|message| {
+        message.content.iter().any(|block| {
+            matches!(
+                block,
+                ContentBlock::ToolResult { content, .. } if content == &payload
+            )
+        })
+    }));
 }
 
 #[test]
