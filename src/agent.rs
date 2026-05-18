@@ -31,7 +31,7 @@ use crate::message::{
     ContentBlock, Message, Role, StreamEvent, TOOL_OUTPUT_MISSING_TEXT, ToolCall, ToolDefinition,
 };
 use crate::protocol::{HistoryMessage, ServerEvent};
-use crate::provider::{NativeToolResult, Provider, ProviderRuntimeState};
+use crate::provider::{CompletionOptions, NativeToolResult, Provider, ProviderRuntimeState};
 use crate::session::{GitState, Session, SessionStatus, StoredDisplayRole, StoredMessage};
 use crate::skill::SkillRegistry;
 use crate::tool::{Registry, ToolContext, ToolExecutionMode};

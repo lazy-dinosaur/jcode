@@ -122,6 +122,7 @@ impl Agent {
             };
             let provider = Arc::clone(&self.provider);
             let resume_session_id = self.provider_session_id.clone();
+            let completion_options = CompletionOptions::with_cancel_signal(self.turn_stop_signal());
             self.last_status_detail = None;
             let _ = event_tx.send(kv_cache_request_event(
                 &cache_signature_messages,
@@ -131,12 +132,13 @@ impl Agent {
             ));
             let mut keepalive = stream_keepalive_ticker();
             let mut stream = {
-                let mut complete_future = std::pin::pin!(provider.complete_split(
+                let mut complete_future = std::pin::pin!(provider.complete_split_with_options(
                     send_messages,
                     &tools,
                     &split_prompt.static_part,
                     &split_prompt.dynamic_part,
                     resume_session_id.as_deref(),
+                    completion_options.clone(),
                 ));
                 loop {
                     tokio::select! {

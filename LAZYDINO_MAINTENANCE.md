@@ -1436,6 +1436,25 @@ The 10-stage M47 patch series (`patch/m47-c0-deep-merge-profiles` through `patch
      - `cargo check -p jcode`.
    - Binary reinstall required: yes (server interrupt control-plane behavior and debug diagnostics changed).
 
+65. Provider completion cancellation surface (M49-C2)
+   - Commit: `106300fb` `[m49-c2] add provider cancellation surface`.
+   - Patch branch: `patch/m49-c2-provider-cancel-surface`.
+   - Purpose: expose the M49 typed per-turn cancellation signal to provider completion calls without breaking existing provider implementations. This gives native/HTTP providers a cooperative abort path before later C3/C4 work removes hard-abort transcript gaps.
+   - Runtime changes:
+     - Added additive `CompletionOptions` in `jcode-provider-core` with optional `InterruptSignal` plus `with_cancel_signal`, `cancel_signal`, and `is_cancelled` helpers.
+     - Added default trait methods `Provider::complete_with_options` and `Provider::complete_split_with_options`; legacy `complete` and `complete_split` signatures remain valid and continue to delegate by default.
+     - Rewired `MultiProvider::complete_with_failover`, provider dispatch, same-provider account failover, and `JcodeProvider` to preserve and forward completion options.
+     - Rewired both `run_turn_streaming_mpsc` and broadcast `run_turn_streaming` to pass `Agent::turn_stop_signal()` to provider completion calls.
+   - Tests:
+     - Added `CancelAwareProvider` fake provider and `run_turn_streaming_mpsc_passes_turn_cancel_signal_to_provider`, proving a provider receives the turn cancel signal and exits cooperatively when `TurnControl` fires.
+   - Validation:
+     - `cargo test -p jcode-provider-core`.
+     - `cargo test -p jcode --lib agent::tests::run_turn_streaming_mpsc_passes_turn_cancel_signal_to_provider`.
+     - `cargo test -p jcode --lib server::debug_command_exec::tests::debug_cancel_does_not_wait_for_busy_agent_lock`.
+     - `cargo test -p jcode --lib server::client_lifecycle::tests::user_cancel_turn_control_does_not_set_graceful_reload_signal`.
+     - `cargo check -p jcode`.
+   - Binary reinstall required: yes (provider call surface and agent streaming runtime behavior changed).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.

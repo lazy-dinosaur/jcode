@@ -1,11 +1,11 @@
 use super::*;
 use crate::agent::environment::EnvSnapshotDetail;
 use crate::message::{Message, StreamEvent, ToolDefinition};
-use crate::provider::{EventStream, Provider};
+use crate::provider::{CompletionOptions, EventStream, Provider};
 use crate::tool::{Registry, Tool, ToolContext, ToolOutput};
 use async_trait::async_trait;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::sync::mpsc as tokio_mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -29,6 +29,11 @@ struct GatedToolProvider {
 
 struct SingleToolProvider {
     calls: Arc<AtomicUsize>,
+}
+
+struct CancelAwareProvider {
+    entered: Arc<tokio::sync::Notify>,
+    observed_cancel: Arc<AtomicBool>,
 }
 
 struct DelayTestTool;
@@ -301,6 +306,49 @@ impl Provider for SingleToolProvider {
 }
 
 #[async_trait]
+impl Provider for CancelAwareProvider {
+    async fn complete(
+        &self,
+        _messages: &[Message],
+        _tools: &[ToolDefinition],
+        _system: &str,
+        _resume_session_id: Option<&str>,
+    ) -> Result<EventStream> {
+        Err(anyhow::anyhow!(
+            "CancelAwareProvider requires complete_with_options"
+        ))
+    }
+
+    async fn complete_with_options(
+        &self,
+        _messages: &[Message],
+        _tools: &[ToolDefinition],
+        _system: &str,
+        _resume_session_id: Option<&str>,
+        options: CompletionOptions,
+    ) -> Result<EventStream> {
+        let cancel_signal = options
+            .cancel_signal()
+            .expect("agent should pass a turn cancel signal to provider");
+        self.entered.notify_waiters();
+        cancel_signal.notified().await;
+        self.observed_cancel.store(true, Ordering::SeqCst);
+        Err(anyhow::anyhow!("provider observed cancellation"))
+    }
+
+    fn name(&self) -> &str {
+        "cancel-aware"
+    }
+
+    fn fork(&self) -> Arc<dyn Provider> {
+        Arc::new(Self {
+            entered: self.entered.clone(),
+            observed_cancel: self.observed_cancel.clone(),
+        })
+    }
+}
+
+#[async_trait]
 impl Tool for DelayTestTool {
     fn name(&self) -> &str {
         "delay_test"
@@ -461,6 +509,48 @@ async fn run_turn_streaming_mpsc_emits_keepalive_while_provider_is_quiet() {
 
     assert!(saw_text, "expected delayed provider text after keepalive");
     task.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn run_turn_streaming_mpsc_passes_turn_cancel_signal_to_provider() {
+    let _guard = crate::storage::lock_test_env();
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let observed_cancel = Arc::new(AtomicBool::new(false));
+    let provider: Arc<dyn Provider> = Arc::new(CancelAwareProvider {
+        entered: entered.clone(),
+        observed_cancel: observed_cancel.clone(),
+    });
+    let registry = Registry::new(provider.clone()).await;
+    let mut agent = Agent::new(provider, registry);
+    agent.add_message(
+        Role::User,
+        vec![ContentBlock::Text {
+            text: "wait for cancellation".to_string(),
+            cache_control: None,
+        }],
+    );
+
+    let turn_control = agent.turn_control();
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let task = tokio::spawn(async move { agent.run_turn_streaming_mpsc(tx).await });
+
+    tokio::time::timeout(Duration::from_secs(5), entered.notified())
+        .await
+        .expect("provider should receive completion request");
+    turn_control.request_stop(TurnStopReason::UserInterrupt);
+
+    let result = tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .expect("streaming task should finish after provider observes cancel")
+        .expect("task should join");
+    assert!(result.is_err(), "provider returns a cancellation error");
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("provider observed cancellation")
+    );
+    assert!(observed_cancel.load(Ordering::SeqCst));
 }
 
 fn empty_response_events() -> Vec<StreamEvent> {

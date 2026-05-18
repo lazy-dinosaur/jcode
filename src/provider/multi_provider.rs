@@ -10,6 +10,7 @@ impl MultiProvider {
         mode: CompletionMode<'_>,
         initial_reason: &str,
         notes: &mut Vec<String>,
+        options: CompletionOptions,
     ) -> Result<Option<EventStream>> {
         if !same_provider_account_failover_enabled() {
             return Ok(None);
@@ -46,8 +47,15 @@ impl MultiProvider {
 
             let attempt = match mode {
                 CompletionMode::Unified { system } => {
-                    self.complete_on_provider(provider, messages, tools, system, None)
-                        .await
+                    self.complete_on_provider(
+                        provider,
+                        messages,
+                        tools,
+                        system,
+                        None,
+                        options.clone(),
+                    )
+                    .await
                 }
                 CompletionMode::Split {
                     system_static,
@@ -60,6 +68,7 @@ impl MultiProvider {
                         system_static,
                         system_dynamic,
                         None,
+                        options.clone(),
                     )
                     .await
                 }
