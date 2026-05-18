@@ -63,7 +63,7 @@ impl Tool for McpManagementTool {
                 "intent": super::intent_schema_property(),
                 "action": {
                     "type": "string",
-                    "enum": ["list", "connect", "disconnect", "reload", "login"],
+                    "enum": ["list", "connect", "disconnect", "reload", "reconcile", "login"],
                     "description": "Action."
                 },
                 "server": {
@@ -105,9 +105,10 @@ impl Tool for McpManagementTool {
             "connect" => self.connect_server(params, &ctx.session_id).await,
             "disconnect" => self.disconnect_server(params).await,
             "reload" => self.reload_config(&ctx.session_id).await,
+            "reconcile" => self.reconcile_registry().await,
             "login" => self.login_server(params).await,
             _ => Ok(ToolOutput::new(format!(
-                "Unknown action: {}. Use 'list', 'connect', 'disconnect', 'reload', or 'login'.",
+                "Unknown action: {}. Use 'list', 'connect', 'disconnect', 'reload', 'reconcile', or 'login'.",
                 params.action
             ))),
         }
@@ -123,6 +124,7 @@ impl McpManagementTool {
 
 impl McpManagementTool {
     async fn list_servers(&self) -> Result<ToolOutput> {
+        self.auto_reconcile_registry("list").await;
         let manager = self.manager.read().await;
         let servers = manager.connected_servers().await;
         let all_tools = manager.all_tools().await;
@@ -190,6 +192,50 @@ impl McpManagementTool {
                 output.push_str(&format!("    - {}\n", name));
             }
         }
+    }
+
+    async fn auto_reconcile_registry(&self, reason: &str) {
+        let Some(registry) = self.registry.as_ref() else {
+            return;
+        };
+        let report = registry
+            .reconcile_mcp_tools_from_manager(Arc::clone(&self.manager))
+            .await;
+        if !report.repaired_tool_names.is_empty() {
+            crate::logging::warn(&format!(
+                "MCP: repaired {} missing registry tool(s) during {}: {:?}",
+                report.repaired_tool_names.len(),
+                reason,
+                report.repaired_tool_names
+            ));
+        }
+    }
+
+    async fn reconcile_registry(&self) -> Result<ToolOutput> {
+        let Some(registry) = self.registry.as_ref() else {
+            return Ok(ToolOutput::new(
+                "MCP registry reconciliation is unavailable: management tool has no registry handle.",
+            )
+            .with_title("MCP: Reconcile unavailable"));
+        };
+
+        let report = registry
+            .reconcile_mcp_tools_from_manager(Arc::clone(&self.manager))
+            .await;
+        let mut output = format!(
+            "Reconciled MCP registry\n\nExpected MCP server tools: {}\nAlready registered: {}\nRepaired missing tools: {}\n",
+            report.expected_mcp_server_tool_count,
+            report.already_registered_count,
+            report.repaired_tool_names.len()
+        );
+        if !report.repaired_tool_names.is_empty() {
+            output.push_str("\nRepaired tools:\n");
+            for name in &report.repaired_tool_names {
+                output.push_str(&format!("  - {}\n", name));
+            }
+        }
+        self.append_registry_diagnostics(&mut output).await;
+        Ok(ToolOutput::new(output).with_title("MCP: Reconciled"))
     }
 
     async fn connect_server(&self, params: McpToolInput, session_id: &str) -> Result<ToolOutput> {

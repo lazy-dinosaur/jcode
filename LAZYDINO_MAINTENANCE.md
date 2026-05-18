@@ -1346,6 +1346,22 @@ The 10-stage M47 patch series (`patch/m47-c0-deep-merge-profiles` through `patch
      - `cargo check -p jcode`.
    - Binary reinstall required: yes (MCP subscribe/reconnect readiness behavior changed).
 
+60. MCP registry reconciliation and auto-heal (M50-C2)
+   - Commit: `3c17a828` `[m50-c2] reconcile missing mcp registry tools`.
+   - Patch branch: `patch/m50-c2-mcp-registry-reconcile`.
+   - Purpose: recover from post-reconnect states where `McpManager` is connected and knows server tools, but the session `Registry` is missing one or more `mcp__*` entries.
+   - Runtime changes:
+     - Added `Registry::reconcile_mcp_tools_from_manager`, comparing connected MCP tools with registered tool names and re-registering missing entries.
+     - Added `McpRegistryReconcileReport` for expected/already-registered/repaired tool counts and repaired names.
+     - Added `mcp action="reconcile"` as an explicit repair path that does not perform a full reload.
+     - Added auto-heal during `mcp list`; status inspection now repairs missing registry entries if manager state is valid.
+     - Added warn logs listing repaired tool names.
+   - Validation:
+     - `cargo test -p jcode --lib tool::tests::reconcile_mcp_tools_restores_missing_registry_entries`.
+     - `cargo test -p jcode --lib tool::mcp::tests::test_list_includes_registry_diagnostics_when_registry_is_available`.
+     - `cargo check -p jcode`.
+   - Binary reinstall required: yes (MCP management and registry recovery behavior changed).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
