@@ -66,6 +66,8 @@ use tokio::sync::{Mutex, RwLock, broadcast, mpsc};
 type SessionAgents = Arc<RwLock<HashMap<String, Arc<Mutex<Agent>>>>>;
 type ChannelSubscriptions = Arc<RwLock<HashMap<String, HashMap<String, HashSet<String>>>>>;
 const RELOAD_STARTING_GUARD_MAX_AGE: Duration = Duration::from_secs(30);
+const PROCESSING_CANCEL_GRACE: Duration = Duration::from_millis(1500);
+const PROCESSING_ABORT_JOIN_GRACE: Duration = Duration::from_secs(2);
 
 struct ProcessingMessage {
     id: u64,
@@ -79,6 +81,14 @@ struct ProcessingState<'a> {
     message_id: &'a mut Option<u64>,
     session_id: &'a mut Option<String>,
     task: &'a mut Option<tokio::task::JoinHandle<()>>,
+    cancel_state: &'a mut ProcessingCancelState,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum ProcessingCancelState {
+    #[default]
+    Idle,
+    Cancelling,
 }
 
 #[cfg(test)]
@@ -89,6 +99,7 @@ struct ProcessingInterruptSnapshot {
     session_id: Option<String>,
     task_present: bool,
     task_finished: Option<bool>,
+    cancel_state: ProcessingCancelState,
 }
 
 #[cfg(test)]
@@ -99,6 +110,7 @@ fn processing_interrupt_snapshot(state: &ProcessingState<'_>) -> ProcessingInter
         session_id: state.session_id.clone(),
         task_present: state.task.is_some(),
         task_finished: state.task.as_ref().map(|task| task.is_finished()),
+        cancel_state: *state.cancel_state,
     }
 }
 
@@ -886,6 +898,7 @@ pub(super) async fn handle_client(
     let mut processing_task: Option<tokio::task::JoinHandle<()>> = None;
     let mut processing_message_id: Option<u64> = None;
     let mut processing_session_id: Option<String> = None;
+    let mut processing_cancel_state = ProcessingCancelState::Idle;
     // Client selfdev status is determined by Subscribe request, not server's env
     let mut client_selfdev = false;
 
@@ -1174,6 +1187,8 @@ pub(super) async fn handle_client(
                     ));
                     processing_message_id = None;
                     processing_task = None;
+                    processing_cancel_state = ProcessingCancelState::Idle;
+                    session_control.reset_cancel();
                     client_is_processing = false;
                     {
                         let mut connections = client_connections.write().await;
@@ -1253,6 +1268,7 @@ pub(super) async fn handle_client(
                                 message_id: &mut processing_message_id,
                                 session_id: &mut processing_session_id,
                                 task: &mut processing_task,
+                                cancel_state: &mut processing_cancel_state,
                             },
                             &agent,
                             &client_event_tx,
@@ -1308,6 +1324,7 @@ pub(super) async fn handle_client(
                                 message_id: &mut processing_message_id,
                                 session_id: &mut processing_session_id,
                                 task: &mut processing_task,
+                                cancel_state: &mut processing_cancel_state,
                             },
                             &agent,
                             &client_event_tx,
@@ -1462,6 +1479,7 @@ pub(super) async fn handle_client(
                         message_id: &mut processing_message_id,
                         session_id: &mut processing_session_id,
                         task: &mut processing_task,
+                        cancel_state: &mut processing_cancel_state,
                     },
                     &agent,
                     &client_event_tx,
@@ -1485,6 +1503,7 @@ pub(super) async fn handle_client(
                         message_id: &mut processing_message_id,
                         session_id: &mut processing_session_id,
                         task: &mut processing_task,
+                        cancel_state: &mut processing_cancel_state,
                     },
                     &session_control,
                     &client_event_tx,
@@ -2966,6 +2985,7 @@ async fn start_processing_message(
         ));
     });
     crate::logging::info(&format!("Processing message id={} spawning task", id));
+    *state.cancel_state = ProcessingCancelState::Idle;
     *state.task = Some(tokio::spawn(async move {
         let event_tx = fanout_tx;
         let result = match std::panic::AssertUnwindSafe(process_message_streaming_mpsc(
@@ -3020,17 +3040,31 @@ async fn cancel_processing_message(
     client_event_tx: &mpsc::UnboundedSender<ServerEvent>,
     swarm: &SwarmStatusRefs<'_>,
 ) {
+    if matches!(*state.cancel_state, ProcessingCancelState::Cancelling) {
+        crate::logging::info(
+            "Cancel request ignored because processing turn is already cancelling",
+        );
+        return;
+    }
+
     if let Some(mut handle) = state.task.take() {
         if handle.is_finished() {
             *state.task = Some(handle);
             return;
         }
+        *state.cancel_state = ProcessingCancelState::Cancelling;
         session_control.request_cancel();
-        match tokio::time::timeout(std::time::Duration::from_millis(500), &mut handle).await {
-            Ok(_) => {}
+        match tokio::time::timeout(PROCESSING_CANCEL_GRACE, &mut handle).await {
+            Ok(_) => {
+                crate::logging::info("Processing task completed during cooperative cancel grace");
+            }
             Err(_) => {
+                crate::logging::warn(&format!(
+                    "Processing task did not stop within {}ms; aborting fallback",
+                    PROCESSING_CANCEL_GRACE.as_millis()
+                ));
                 handle.abort();
-                match tokio::time::timeout(std::time::Duration::from_millis(2000), handle).await {
+                match tokio::time::timeout(PROCESSING_ABORT_JOIN_GRACE, handle).await {
                     Ok(_) => crate::logging::info("Aborted processing task released resources"),
                     Err(_) => crate::logging::warn(
                         "Aborted processing task did not release resources within 2s",
@@ -3039,6 +3073,7 @@ async fn cancel_processing_message(
             }
         }
         session_control.reset_cancel();
+        *state.cancel_state = ProcessingCancelState::Idle;
         *state.task = None;
         *state.client_is_processing = false;
         if let Some(session_id) = state.session_id.take() {

@@ -1499,6 +1499,28 @@ The 10-stage M47 patch series (`patch/m47-c0-deep-merge-profiles` through `patch
      - `cargo check -p jcode`.
    - Binary reinstall required: yes (agent stream interruption and transcript persistence behavior changed).
 
+68. Server lifecycle idempotent cooperative cancel (M49-C5)
+   - Commit: `ea3cb5aa` `[m49-c5] make server cancel idempotent`.
+   - Patch branch: `patch/m49-c5-server-cancel-idempotent`.
+   - Purpose: replace the old 500ms server hard-abort path with an idempotent lifecycle state and a longer cooperative grace period so C2-C4 provider/tool/transcript cancellation has time to complete.
+   - Runtime changes:
+     - Added `ProcessingCancelState::{Idle,Cancelling}` to per-client `ProcessingState`.
+     - Reset cancel state at turn start and after normal processing completion.
+     - `cancel_processing_message()` now returns early when the turn is already cancelling, avoiding duplicate `Interrupted` / `Done` sends for repeated cancel requests.
+     - Increased cooperative cancel grace from 500ms to 1500ms before fallback `JoinHandle::abort()`.
+     - Reset `TurnControl` only after the processing task has completed cooperatively or the fallback abort has joined.
+   - Tests:
+     - `cancel_processing_message_waits_for_cooperative_completion_before_abort` proves a task that observes `TurnControl` exits before fallback abort.
+     - `cancel_processing_message_ignores_repeated_cancel_while_cancelling` proves duplicate cancel does not mutate state or emit events.
+     - `cancel_processing_message_uses_cooperative_grace_then_abort_fallback` preserves the stubborn-task fallback path.
+   - Validation:
+     - `cargo test -p jcode --lib server::client_lifecycle::tests::cancel_processing_message_waits_for_cooperative_completion_before_abort`.
+     - `cargo test -p jcode --lib server::client_lifecycle::tests::cancel_processing_message_ignores_repeated_cancel_while_cancelling`.
+     - `cargo test -p jcode --lib server::client_lifecycle::tests::cancel_processing_message_uses_cooperative_grace_then_abort_fallback`.
+     - `cargo test -p jcode --lib server::client_lifecycle::tests::processing_interrupt_snapshot_tracks_active_task_without_agent_lock`.
+     - `cargo check -p jcode`.
+   - Binary reinstall required: yes (server cancel lifecycle behavior changed).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
