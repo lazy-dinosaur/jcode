@@ -141,6 +141,21 @@ impl Agent {
                 }
                 let (dropped, usage_pct) = {
                     let all_messages = self.session.provider_messages();
+                    if crate::config::config().compaction.overflow_replay {
+                        match jcode_compaction_core::m48_overflow::plan_overflow_replay(
+                            all_messages,
+                            all_messages.len(),
+                        ) {
+                            Some((blocks, head_len)) => logging::info(&format!(
+                                "Context-limit overflow replay candidate prepared (blocks={}, residual_head_messages={})",
+                                blocks.len(),
+                                head_len
+                            )),
+                            None => logging::info(
+                                "Context-limit overflow replay skipped: no safe replay candidate",
+                            ),
+                        }
+                    }
                     manager.update_observed_input_tokens(context_limit);
                     let usage_pct = manager.context_usage_with(all_messages) * 100.0;
                     let dropped = match manager.hard_compact_with(all_messages) {
@@ -162,7 +177,7 @@ impl Agent {
                     };
                     (dropped, usage_pct)
                 };
-                self.sync_session_compaction_state_from_manager(&manager);
+                self.sync_session_compaction_state_from_manager_with_overflow(&manager, true);
                 (dropped, usage_pct)
             }
             Err(_) => {
@@ -192,7 +207,7 @@ impl Agent {
             .force_attribution(),
         );
 
-        true
+        crate::config::config().compaction.auto_continue
     }
 
     fn try_recover_oversized_openai_native_compaction(&mut self) -> bool {

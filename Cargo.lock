@@ -3442,6 +3442,7 @@ name = "jcode-config-types"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "toml",
 ]
 
 [[package]]
