@@ -181,7 +181,10 @@ pub(super) async fn handle_tick(app: &mut App, remote: &mut RemoteConnection) ->
         return needs_redraw;
     }
 
-    if !app.is_processing && !app.queued_messages.is_empty() {
+    if !app.is_processing
+        && !app.queued_messages_held_after_interrupt
+        && !app.queued_messages.is_empty()
+    {
         let queued_messages = std::mem::take(&mut app.queued_messages);
         let hidden_reminders = std::mem::take(&mut app.hidden_queued_system_messages);
         let (messages, reminder, display_system_messages) =
@@ -893,7 +896,7 @@ pub(super) async fn process_remote_followups(app: &mut App, remote: &mut RemoteC
                 )));
             }
         }
-    } else if !app.queued_messages.is_empty() {
+    } else if !app.queued_messages_held_after_interrupt && !app.queued_messages.is_empty() {
         let queued_messages = std::mem::take(&mut app.queued_messages);
         let hidden_reminders = std::mem::take(&mut app.hidden_queued_system_messages);
         let (messages, reminder, display_system_messages) =
@@ -938,6 +941,10 @@ pub(super) async fn process_remote_followups(app: &mut App, remote: &mut RemoteC
 async fn detect_and_cancel_stall(app: &mut App, remote: &mut RemoteConnection) {
     const STALL_TIMEOUT: Duration = Duration::from_secs(2 * 60);
     let is_running_tool = matches!(app.status, ProcessingStatus::RunningTool(_));
+    if app.foreground_tool_handoff_started.is_some() {
+        app.last_stream_activity = Some(Instant::now());
+        return;
+    }
     if app.is_processing && !is_running_tool {
         let stalled = app
             .last_stream_activity

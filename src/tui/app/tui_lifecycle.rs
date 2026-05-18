@@ -2,6 +2,17 @@ use super::state_ui::RestoredReloadInput;
 use super::*;
 use crate::tui::{backend, keybind};
 
+fn sync_process_cwd_from_session(session: &Session) {
+    let Some(working_dir) = session.working_dir.as_deref() else {
+        return;
+    };
+    if let Err(error) = std::env::set_current_dir(working_dir) {
+        crate::logging::warn(&format!(
+            "Failed to restore process cwd from session working_dir `{working_dir}`: {error}"
+        ));
+    }
+}
+
 impl App {
     pub(super) fn apply_restored_reload_input(&mut self, restored: RestoredReloadInput) {
         self.input = restored.input;
@@ -268,6 +279,7 @@ impl App {
             session.parent_id.clone(),
             false,
         );
+        sync_process_cwd_from_session(&session);
 
         let mut app = Self {
             provider,
@@ -322,6 +334,8 @@ impl App {
             context_warning_shown: false,
             context_info: crate::prompt::ContextInfo::default(),
             last_stream_activity: None,
+            foreground_tool_handoff_started: None,
+            queued_messages_held_after_interrupt: false,
             stream_message_ended: false,
             remote_resume_activity: None,
             pending_reload_reconnect_status: None,
@@ -637,6 +651,7 @@ impl App {
             session.parent_id.clone(),
             false,
         );
+        sync_process_cwd_from_session(&session);
 
         let mut app = Self {
             provider,
@@ -691,6 +706,8 @@ impl App {
             context_warning_shown: false,
             context_info,
             last_stream_activity: None,
+            foreground_tool_handoff_started: None,
+            queued_messages_held_after_interrupt: false,
             stream_message_ended: false,
             remote_resume_activity: None,
             pending_reload_reconnect_status: None,

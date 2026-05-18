@@ -599,6 +599,13 @@ pub struct App {
     context_info: crate::prompt::ContextInfo,
     // Track last streaming activity for "stale" detection
     last_stream_activity: Option<Instant>,
+    // Current terminal foreground handoff (e.g. /nvim or /lazygit) temporarily
+    // stops the client event loop. While it is active, elapsed wall-clock time
+    // must not count toward remote stream stall detection.
+    foreground_tool_handoff_started: Option<Instant>,
+    // Interrupt cancels only the active turn. User queued messages should remain
+    // visible/queued afterward instead of being auto-dispatched on the next tick.
+    queued_messages_held_after_interrupt: bool,
     // Provider has emitted MessageEnd, but the turn is still finalizing bookkeeping.
     stream_message_ended: bool,
     // Server-reported processing snapshot captured from resume/history before live events arrive.

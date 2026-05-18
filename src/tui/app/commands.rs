@@ -1283,7 +1283,9 @@ fn run_external_tool_in_current_terminal(
     cwd: PathBuf,
     completed_notice: impl FnOnce(&Path) -> String,
 ) {
+    app.foreground_tool_handoff_started = Some(Instant::now());
     if let Err(error) = suspend_tui_for_external_tool() {
+        app.foreground_tool_handoff_started = None;
         app.push_display_message(DisplayMessage::error(error));
         return;
     }
@@ -1294,6 +1296,19 @@ fn run_external_tool_in_current_terminal(
         .status();
 
     let restore_result = restore_tui_after_external_tool();
+    let handoff_elapsed = app
+        .foreground_tool_handoff_started
+        .take()
+        .map(|started| started.elapsed());
+    if app.is_processing {
+        app.last_stream_activity = Some(Instant::now());
+        if let Some(elapsed) = handoff_elapsed {
+            crate::logging::info(&format!(
+                "Foreground `{program}` handoff returned after {:?}; resetting remote stream stall timer",
+                elapsed
+            ));
+        }
+    }
     app.request_full_redraw();
 
     if let Err(error) = restore_result {

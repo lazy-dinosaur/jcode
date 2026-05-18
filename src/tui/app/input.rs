@@ -806,7 +806,8 @@ impl App {
 
     pub(super) fn schedule_queued_dispatch_after_interrupt(&mut self) {
         if self.has_queued_followups() {
-            self.pending_queued_dispatch = true;
+            self.pending_queued_dispatch = false;
+            self.queued_messages_held_after_interrupt = true;
         }
     }
 

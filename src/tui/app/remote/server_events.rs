@@ -349,7 +349,12 @@ pub(in crate::tui::app) fn handle_server_event(
                     app.pending_soft_interrupts.len()
                 ));
             }
-            app.schedule_queued_dispatch_after_interrupt();
+            // Interrupt should only stop the active turn. Messages that the user
+            // explicitly queued behind that turn must remain queued for the user
+            // to review/send later instead of being auto-dispatched immediately.
+            app.pending_queued_dispatch = false;
+            app.queued_messages_held_after_interrupt =
+                !app.queued_messages.is_empty() || !app.hidden_queued_system_messages.is_empty();
             app.push_display_message(DisplayMessage::system("Interrupted"));
             app.is_processing = false;
             app.status = ProcessingStatus::Idle;

@@ -688,7 +688,7 @@ fn test_handle_server_event_interrupted_clears_stream_state_and_sets_idle() {
 }
 
 #[test]
-fn test_remote_interrupted_defers_queued_followup_dispatch_by_one_cycle() {
+fn test_remote_interrupted_preserves_queued_followup_without_auto_dispatch() {
     let mut app = create_test_app();
     let rt = tokio::runtime::Runtime::new().unwrap();
     let _guard = rt.enter();
@@ -702,20 +702,14 @@ fn test_remote_interrupted_defers_queued_followup_dispatch_by_one_cycle() {
 
     app.handle_server_event(crate::protocol::ServerEvent::Interrupted, &mut remote);
 
-    assert!(app.pending_queued_dispatch);
+    assert!(!app.pending_queued_dispatch);
+    assert!(app.queued_messages_held_after_interrupt);
     assert_eq!(app.queued_messages(), &["queued later"]);
     assert!(!app.is_processing);
 
     rt.block_on(remote::process_remote_followups(&mut app, &mut remote));
     assert_eq!(app.queued_messages(), &["queued later"]);
     assert!(!app.is_processing);
-
-    app.pending_queued_dispatch = false;
-    rt.block_on(remote::process_remote_followups(&mut app, &mut remote));
-    assert!(app.queued_messages().is_empty());
-    assert!(app.is_processing);
-    assert!(matches!(app.status, ProcessingStatus::Sending));
-    assert!(app.current_message_id.is_some());
 }
 
 #[test]
@@ -736,7 +730,8 @@ fn test_remote_interrupted_recovers_pending_interleaves_in_order() {
 
     app.handle_server_event(crate::protocol::ServerEvent::Interrupted, &mut remote);
 
-    assert!(app.pending_queued_dispatch);
+    assert!(!app.pending_queued_dispatch);
+    assert!(app.queued_messages_held_after_interrupt);
     assert_eq!(
         app.queued_messages(),
         &["unsent interleave", "queued later"]
@@ -752,14 +747,15 @@ fn test_remote_interrupted_recovers_pending_interleaves_in_order() {
     );
     assert!(!app.is_processing);
 
-    app.pending_queued_dispatch = false;
     rt.block_on(remote::process_remote_followups(&mut app, &mut remote));
 
     assert!(app.pending_soft_interrupts.is_empty());
     assert!(app.pending_soft_interrupt_requests.is_empty());
-    assert!(app.queued_messages().is_empty());
-    assert!(app.is_processing);
-    assert!(matches!(app.status, ProcessingStatus::Sending));
+    assert_eq!(
+        app.queued_messages(),
+        &["acked interleave", "unsent interleave", "queued later"]
+    );
+    assert!(!app.is_processing);
 
     let user_messages: Vec<&str> = app
         .display_messages()
@@ -767,10 +763,7 @@ fn test_remote_interrupted_recovers_pending_interleaves_in_order() {
         .filter(|msg| msg.role == "user")
         .map(|msg| msg.content.as_str())
         .collect();
-    assert_eq!(
-        user_messages,
-        vec!["acked interleave", "unsent interleave", "queued later"]
-    );
+    assert!(user_messages.is_empty());
 }
 
 #[test]
