@@ -304,6 +304,45 @@ impl McpManager {
         self.connect_all().await
     }
 
+    /// Atomically reload owned-mode MCP servers when possible. A candidate
+    /// manager is connected before the existing clients are disconnected, so a
+    /// fully failed reload preserves the old connections. Shared-pool managers
+    /// currently fall back to the legacy pool reload path because pool handles
+    /// are keyed by session id.
+    pub async fn reload_atomic_preserving_existing(
+        &mut self,
+    ) -> Result<(usize, Vec<(String, String)>, bool)> {
+        if self.pool.is_some() {
+            let (successes, failures) = self.reload().await?;
+            return Ok((successes, failures, true));
+        }
+
+        let new_config = McpConfig::load();
+        if new_config.servers.is_empty() {
+            self.disconnect_all().await;
+            self.config = new_config;
+            return Ok((0, Vec::new(), true));
+        }
+
+        let candidate = McpManager {
+            pool: None,
+            pool_handles: RwLock::new(HashMap::new()),
+            owned_clients: RwLock::new(HashMap::new()),
+            config: new_config,
+            session_id: self.session_id.clone(),
+        };
+        let (successes, failures) = candidate.connect_all().await?;
+        if successes == 0 && !failures.is_empty() {
+            return Ok((successes, failures, false));
+        }
+
+        self.disconnect_all().await;
+        self.config = candidate.config;
+        *self.owned_clients.write().await = candidate.owned_clients.into_inner();
+        *self.pool_handles.write().await = candidate.pool_handles.into_inner();
+        Ok((successes, failures, true))
+    }
+
     /// Get config
     pub fn config(&self) -> &McpConfig {
         &self.config
