@@ -16,6 +16,7 @@ mod memory_profile;
 pub mod mermaid;
 pub mod permissions;
 mod remote_diff;
+pub(crate) mod scratchpad_terminal;
 pub mod screenshot;
 pub mod session_picker;
 mod stream_buffer;
@@ -290,6 +291,12 @@ pub trait TuiState {
     fn account_picker_overlay(&self) -> Option<&std::cell::RefCell<account_picker::AccountPicker>>;
     /// Usage overlay for /usage command
     fn usage_overlay(&self) -> Option<&std::cell::RefCell<usage_overlay::UsageOverlay>>;
+    /// Embedded async terminal scratchpad for /nvim and /lazygit.
+    fn scratchpad_terminal(
+        &self,
+    ) -> Option<&std::cell::RefCell<scratchpad_terminal::ScratchpadTerminal>> {
+        None
+    }
     /// Working directory for this session
     fn working_dir(&self) -> Option<String>;
     /// Monotonic clock for viewport animations

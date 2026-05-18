@@ -2200,6 +2200,11 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
         overlays::draw_debug_overlay(frame, &placements, &chunks);
     }
 
+    if let Some(scratchpad_cell) = app.scratchpad_terminal() {
+        let mut scratchpad = scratchpad_cell.borrow_mut();
+        scratchpad.render(frame, area);
+    }
+
     // Record the frame capture if enabled
     if let Some(capture) = debug_capture {
         let total_draw = draw_start.elapsed();

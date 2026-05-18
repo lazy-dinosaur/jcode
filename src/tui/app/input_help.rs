@@ -50,10 +50,13 @@ impl App {
                 "`/git`\nShow `git status --short --branch` for the current session working directory.\n\n`/git status`\nAlias for `/git`."
             }
             "lazygit" | "lg" => {
-                "`/lazygit`\nRun `lazygit` in the current Jcode terminal at the session working directory. Jcode returns when lazygit exits.\n\n`/lg`\nAlias for `/lazygit`."
+                "`/lazygit`\nOpen `lazygit` in an embedded async scratchpad at the session working directory. Jcode continues streaming and accepting interrupts while it is open. Ctrl+G hides the scratchpad; `/scratchpad` shows it again.\n\n`/lg`\nAlias for `/lazygit`."
             }
             "nvim" => {
-                "`/nvim [file-or-dir]`\nRun `nvim` in the current Jcode terminal at the session working directory. Relative paths are resolved from the session cwd. If no target is provided, opens the current cwd. Jcode returns when nvim exits."
+                "`/nvim [file-or-dir]`\nOpen `nvim` in an embedded async scratchpad at the session working directory. Relative paths are resolved from the session cwd. If no target is provided, opens the current cwd. Jcode continues streaming and accepting interrupts while it is open. Ctrl+G hides the scratchpad; `/scratchpad` shows it again."
+            }
+            "scratchpad" | "sp" => {
+                "`/scratchpad`\nToggle the active embedded terminal scratchpad. Use `/nvim` or `/lazygit` to create one.\n\nInside the scratchpad: Ctrl+G hides it, Ctrl+Q kills the child process."
             }
             "catchup" => {
                 "`/catchup`\nOpen the Catch Up picker for finished sessions that need attention.\n\n`/catchup next`\nTeleport to the next session needing attention and open a Catch Up brief in the side panel.\n\n`/catchup list`\nAlias for opening the picker."

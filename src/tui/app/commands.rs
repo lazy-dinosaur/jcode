@@ -1248,92 +1248,6 @@ fn external_tool_manual_command(program: &str, args: &[String], cwd: &Path) -> S
     }
 }
 
-fn suspend_tui_for_external_tool() -> Result<(), String> {
-    crate::tui::disable_keyboard_enhancement();
-    let _ = crossterm::terminal::disable_raw_mode();
-    crossterm::execute!(
-        std::io::stdout(),
-        crossterm::event::DisableBracketedPaste,
-        crossterm::event::DisableFocusChange,
-        crossterm::event::DisableMouseCapture,
-        crossterm::terminal::LeaveAlternateScreen
-    )
-    .map_err(|error| format!("failed to suspend jcode terminal UI: {error}"))
-}
-
-fn restore_tui_after_external_tool() -> Result<(), String> {
-    crossterm::terminal::enable_raw_mode()
-        .map_err(|error| format!("failed to restore raw mode: {error}"))?;
-    crossterm::execute!(
-        std::io::stdout(),
-        crossterm::terminal::EnterAlternateScreen,
-        crossterm::event::EnableBracketedPaste,
-        crossterm::event::EnableFocusChange,
-        crossterm::event::EnableMouseCapture
-    )
-    .map_err(|error| format!("failed to restore jcode terminal UI: {error}"))?;
-    let _ = crate::tui::enable_keyboard_enhancement();
-    Ok(())
-}
-
-fn run_external_tool_in_current_terminal(
-    app: &mut App,
-    program: &str,
-    args: Vec<String>,
-    cwd: PathBuf,
-    completed_notice: impl FnOnce(&Path) -> String,
-) {
-    app.foreground_tool_handoff_started = Some(Instant::now());
-    if let Err(error) = suspend_tui_for_external_tool() {
-        app.foreground_tool_handoff_started = None;
-        app.push_display_message(DisplayMessage::error(error));
-        return;
-    }
-
-    let status_result = std::process::Command::new(program)
-        .args(&args)
-        .current_dir(&cwd)
-        .status();
-
-    let restore_result = restore_tui_after_external_tool();
-    let handoff_elapsed = app
-        .foreground_tool_handoff_started
-        .take()
-        .map(|started| started.elapsed());
-    if app.is_processing {
-        app.last_stream_activity = Some(Instant::now());
-        if let Some(elapsed) = handoff_elapsed {
-            crate::logging::info(&format!(
-                "Foreground `{program}` handoff returned after {:?}; resetting remote stream stall timer",
-                elapsed
-            ));
-        }
-    }
-    app.request_full_redraw();
-
-    if let Err(error) = restore_result {
-        app.push_display_message(DisplayMessage::error(error));
-        return;
-    }
-
-    match status_result {
-        Ok(status) if status.success() => {
-            app.push_display_message(DisplayMessage::system(completed_notice(&cwd)));
-            app.set_status_notice(format!("Closed {program}"));
-        }
-        Ok(status) => {
-            app.push_display_message(DisplayMessage::error(format!(
-                "`{program}` exited with status {status}"
-            )));
-        }
-        Err(error) => {
-            app.push_display_message(DisplayMessage::error(format!(
-                "Failed to run `{program}` in the current terminal: {error}"
-            )));
-        }
-    }
-}
-
 fn handle_lazygit_command(app: &mut App, trimmed: &str) -> bool {
     if trimmed != "/lazygit" && trimmed != "/lg" {
         if trimmed.starts_with("/lazygit ") || trimmed.starts_with("/lg ") {
@@ -1346,9 +1260,22 @@ fn handle_lazygit_command(app: &mut App, trimmed: &str) -> bool {
     }
 
     let cwd = active_or_process_working_dir(app);
-    run_external_tool_in_current_terminal(app, "lazygit", Vec::new(), cwd, |cwd| {
-        format!("Returned from `lazygit` at `{}`.", cwd.display())
-    });
+    app.open_scratchpad_terminal("lazygit", "lazygit", Vec::new(), cwd);
+    true
+}
+
+fn handle_scratchpad_command(app: &mut App, trimmed: &str) -> bool {
+    if trimmed != "/scratchpad" && trimmed != "/sp" {
+        if trimmed.starts_with("/scratchpad ") || trimmed.starts_with("/sp ") {
+            app.push_display_message(DisplayMessage::error(
+                "Usage: `/scratchpad` or `/sp`".to_string(),
+            ));
+            return true;
+        }
+        return false;
+    }
+
+    app.toggle_scratchpad_terminal();
     true
 }
 
@@ -1415,14 +1342,7 @@ fn handle_nvim_command(app: &mut App, trimmed: &str) -> bool {
     };
 
     let args = vec![target.display().to_string()];
-    let target_for_notice = target.clone();
-    run_external_tool_in_current_terminal(app, "nvim", args, cwd, move |cwd| {
-        format!(
-            "Returned from `nvim` for `{}` at `{}`.",
-            target_for_notice.display(),
-            cwd.display()
-        )
-    });
+    app.open_scratchpad_terminal("nvim", "nvim", args, cwd);
     true
 }
 
@@ -1511,6 +1431,7 @@ pub(super) fn handle_session_command(app: &mut App, trimmed: &str) -> bool {
         || handle_transcript_command(app, trimmed)
         || handle_git_command(app, trimmed)
         || handle_lazygit_command(app, trimmed)
+        || handle_scratchpad_command(app, trimmed)
         || handle_nvim_command(app, trimmed)
         || handle_cwd_command(app, trimmed)
         || handle_catchup_command(app, trimmed)

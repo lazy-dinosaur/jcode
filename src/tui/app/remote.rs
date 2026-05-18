@@ -64,6 +64,7 @@ pub(super) async fn handle_tick(app: &mut App, remote: &mut RemoteConnection) ->
     let mut needs_redraw = crate::tui::periodic_redraw_required(app);
     needs_redraw |= handle_awaiting_history_timeout(app, remote).await;
     app.maybe_capture_runtime_memory_heartbeat();
+    needs_redraw |= app.poll_scratchpad_terminal();
     app.progress_mouse_scroll_animation();
     needs_redraw |= dispatch_compacted_history_load(app, remote).await;
     if let Some(chunk) = app.stream_buffer.flush() {
@@ -328,6 +329,9 @@ pub(super) async fn handle_terminal_event(
             app.note_client_interaction();
             app.update_copy_badge_key_event(key);
             if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+                if app.handle_scratchpad_key(key)? {
+                    return Ok(true);
+                }
                 handle_remote_key_event(app, key, remote).await?;
                 if let Some(spec) = app.pending_model_switch.take() {
                     match remote.set_model(&spec).await {
@@ -407,6 +411,9 @@ pub(super) async fn handle_terminal_event(
         }
         Some(Ok(Event::Paste(text))) => {
             app.note_client_interaction();
+            if app.handle_scratchpad_paste(&text) {
+                return Ok(true);
+            }
             app.handle_paste(text);
             needs_redraw = true;
         }

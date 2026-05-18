@@ -74,6 +74,7 @@ pub(super) fn handle_tick(app: &mut App) -> bool {
     needs_redraw |= super::commands::poll_local_transfer_prepare(app);
     needs_redraw |= super::commands::maybe_begin_pending_local_transfer(app);
     needs_redraw |= app.maybe_progress_provider_failover_countdown();
+    needs_redraw |= app.poll_scratchpad_terminal();
     app.check_debug_command();
     needs_redraw |= app.check_stable_version();
     needs_redraw |= app.maybe_finish_background_client_reload();
@@ -330,6 +331,9 @@ fn apply_terminal_event(
         }
         Some(Ok(Event::Paste(text))) => {
             app.note_client_interaction();
+            if app.handle_scratchpad_paste(&text) {
+                return Ok(true);
+            }
             app.handle_paste(text);
             Ok(true)
         }

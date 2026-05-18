@@ -1540,6 +1540,9 @@ impl App {
     }
 
     pub(super) fn handle_key_press_event(&mut self, event: KeyEvent) -> Result<()> {
+        if self.handle_scratchpad_key(event)? {
+            return Ok(());
+        }
         self.handle_key_core(
             event.code,
             event.modifiers,

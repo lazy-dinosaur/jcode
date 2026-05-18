@@ -77,6 +77,7 @@ mod remote_notifications;
 mod replay;
 mod run_shell;
 mod runtime_memory;
+mod scratchpad_terminal;
 mod split_view;
 mod state_ui;
 pub(crate) mod state_ui_input_helpers;
@@ -1018,6 +1019,8 @@ pub struct App {
     account_picker_overlay: Option<RefCell<super::account_picker::AccountPicker>>,
     /// Usage overlay (None = not visible)
     usage_overlay: Option<RefCell<super::usage_overlay::UsageOverlay>>,
+    /// Embedded async terminal scratchpad for tools such as nvim/lazygit.
+    scratchpad_terminal: Option<RefCell<super::scratchpad_terminal::ScratchpadTerminal>>,
     /// Whether a usage refresh request is currently in flight.
     usage_report_refreshing: bool,
     /// Last time the passive overnight progress card polled its run files.

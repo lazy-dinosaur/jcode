@@ -1288,6 +1288,12 @@ impl crate::tui::TuiState for App {
         self.usage_overlay.as_ref()
     }
 
+    fn scratchpad_terminal(
+        &self,
+    ) -> Option<&RefCell<crate::tui::scratchpad_terminal::ScratchpadTerminal>> {
+        self.scratchpad_terminal.as_ref()
+    }
+
     fn working_dir(&self) -> Option<String> {
         self.session.working_dir.clone()
     }
