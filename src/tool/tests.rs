@@ -209,21 +209,51 @@ async fn mcp_registry_diagnostics_tracks_management_and_server_tools() {
 }
 
 #[tokio::test]
-async fn register_mcp_tools_returns_before_delayed_server_tools_are_ready() {
+async fn register_mcp_tools_waits_for_delayed_server_tools_within_barrier() {
     let registry = Registry::empty();
     let (_temp_dir, config) = delayed_mcp_server_config(0.4);
     let manager = Arc::new(RwLock::new(McpManager::with_config(config)));
 
+    let started = std::time::Instant::now();
     registry
         .register_mcp_tools_from_manager(None, manager)
         .await;
 
-    let immediate = registry.mcp_registry_diagnostics().await;
-    assert!(immediate.mcp_management_registered);
-    assert_eq!(
-        immediate.mcp_server_tool_count, 0,
-        "C0 fixture documents the current readiness gap: management tool is registered synchronously, server tools arrive later"
+    assert!(
+        started.elapsed() >= std::time::Duration::from_millis(300),
+        "readiness barrier should wait for delayed MCP registration instead of returning immediately"
     );
+    let diagnostics = registry.mcp_registry_diagnostics().await;
+    assert!(diagnostics.mcp_management_registered);
+    assert_eq!(diagnostics.mcp_server_tool_count, 1);
+    assert_eq!(
+        diagnostics.mcp_server_tool_names,
+        vec!["mcp__delayed__hello"]
+    );
+}
+
+#[tokio::test]
+async fn register_mcp_tools_times_out_but_continues_background_registration() {
+    let registry = Registry::empty();
+    let (_temp_dir, config) = delayed_mcp_server_config(0.4);
+    let manager = Arc::new(RwLock::new(McpManager::with_config(config)));
+
+    let started = std::time::Instant::now();
+    registry
+        .register_mcp_tools_from_manager_with_timeout(
+            None,
+            manager,
+            std::time::Duration::from_millis(50),
+        )
+        .await;
+
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(300),
+        "short timeout should keep reconnect readiness bounded"
+    );
+    let after_timeout = registry.mcp_registry_diagnostics().await;
+    assert!(after_timeout.mcp_management_registered);
+    assert_eq!(after_timeout.mcp_server_tool_count, 0);
 
     for _ in 0..30 {
         let diagnostics = registry.mcp_registry_diagnostics().await;
@@ -238,7 +268,7 @@ async fn register_mcp_tools_returns_before_delayed_server_tools_are_ready() {
     }
 
     panic!(
-        "delayed MCP server tool never appeared after background registration; diagnostics={:?}",
+        "background MCP registration did not complete after timeout; diagnostics={:?}",
         registry.mcp_registry_diagnostics().await
     );
 }
