@@ -379,23 +379,25 @@ impl McpManagementTool {
             ).with_title("MCP: Empty config"));
         }
 
-        // Unregister all existing MCP server tools before reload
-        if let Some(ref registry) = self.registry {
-            registry.unregister_prefix("mcp__").await;
-        }
-
         let mut manager = self.manager.write().await;
-        let (successes, failures) = manager.reload().await?;
+        let (successes, failures, reload_applied) =
+            manager.reload_atomic_preserving_existing().await?;
 
         let servers = manager.connected_servers().await;
         let all_tools = manager.all_tools().await;
         drop(manager);
 
-        // Re-register tools from fresh connections
-        if let Some(ref registry) = self.registry {
-            let mcp_tools = crate::mcp::create_mcp_tools(Arc::clone(&self.manager)).await;
-            for (name, tool) in mcp_tools {
-                registry.register(name, tool).await;
+        // Re-register tools only after the candidate reload has been accepted.
+        // If the reload failed before any new server connected, keep old
+        // registry entries so a transient config/server failure does not make a
+        // previously usable tool list worse.
+        if reload_applied {
+            if let Some(ref registry) = self.registry {
+                registry.unregister_prefix("mcp__").await;
+                let mcp_tools = crate::mcp::create_mcp_tools(Arc::clone(&self.manager)).await;
+                for (name, tool) in mcp_tools {
+                    registry.register(name, tool).await;
+                }
             }
         }
 
@@ -432,6 +434,12 @@ impl McpManagementTool {
                 output.push_str(&format!("  - {}\n", tool.name));
             }
             output.push('\n');
+        }
+
+        if !reload_applied {
+            output.push_str(
+                "## Previous MCP registry preserved\n  Reload did not connect any new servers, so existing registered MCP tools were left in place.\n\n",
+            );
         }
 
         self.append_registry_diagnostics(&mut output).await;
@@ -485,6 +493,7 @@ impl McpManagementTool {
 mod tests {
     use super::*;
     use crate::tool::Tool;
+    use std::collections::HashMap;
     use std::fs;
     use std::path::PathBuf;
 
@@ -503,6 +512,44 @@ mod tests {
             graceful_shutdown_signal: None,
             execution_mode: crate::tool::ToolExecutionMode::Direct,
         }
+    }
+
+    fn test_mcp_server_config() -> (tempfile::TempDir, McpConfig) {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let server_script = temp_dir.path().join("test-mcp.sh");
+        std::fs::write(
+            &server_script,
+            r#"#!/usr/bin/env bash
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+  case "$line" in
+    *initialize*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"test","version":"1.0.0"}}}\n' "$id"
+      ;;
+    *tools/list*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"hello","description":"Test hello","inputSchema":{"type":"object","properties":{}}}]}}\n' "$id"
+      ;;
+  esac
+done
+"#,
+        )
+        .expect("write MCP test script");
+
+        let mut servers = HashMap::new();
+        servers.insert(
+            "atomic".to_string(),
+            McpServerConfig {
+                command: "bash".to_string(),
+                args: vec![server_script.to_string_lossy().to_string()],
+                env: HashMap::new(),
+                transport: None,
+                url: None,
+                headers: HashMap::new(),
+                auth: None,
+                shared: false,
+            },
+        );
+        (temp_dir, McpConfig { servers })
     }
 
     struct LocalMcpConfigGuard {
@@ -551,6 +598,28 @@ mod tests {
                         let _ = fs::remove_dir(dir);
                     }
                 }
+            }
+        }
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set_path(key: &'static str, value: &std::path::Path) -> Self {
+            let previous = std::env::var_os(key);
+            crate::env::set_var(key, value);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => crate::env::set_var(self.key, value),
+                None => crate::env::remove_var(self.key),
             }
         }
     }
@@ -604,6 +673,55 @@ mod tests {
                 .contains("mcp management tool registered: false")
         );
         assert!(result.output.contains("registered MCP server tools: 0"));
+    }
+
+    #[tokio::test]
+    async fn test_reload_preserves_existing_registry_tools_when_candidate_fails() {
+        let isolated_home = tempfile::tempdir().expect("isolated JCODE_HOME");
+        let _home = EnvVarGuard::set_path("JCODE_HOME", isolated_home.path());
+        let registry = crate::tool::Registry::empty();
+        let (_temp_dir, initial_config) = test_mcp_server_config();
+        let manager = Arc::new(RwLock::new(McpManager::with_config(initial_config)));
+        let tool = McpManagementTool::new(Arc::clone(&manager)).with_registry(registry.clone());
+
+        {
+            let manager_guard = manager.write().await;
+            let (successes, failures) = manager_guard.connect_all().await.unwrap();
+            assert_eq!(successes, 1);
+            assert!(failures.is_empty());
+        }
+        let report = registry
+            .reconcile_mcp_tools_from_manager(Arc::clone(&manager))
+            .await;
+        assert_eq!(report.repaired_tool_names, vec!["mcp__atomic__hello"]);
+
+        let _guard = LocalMcpConfigGuard::new(
+            r#"{
+  "servers": {
+    "broken": {
+      "command": "/definitely/missing/mcp-server",
+      "args": [],
+      "env": {},
+      "shared": false
+    }
+  }
+}"#,
+        )
+        .expect("write broken reload config");
+
+        let result = tool
+            .execute(json!({"action": "reload"}), create_test_context())
+            .await
+            .unwrap();
+        assert!(result.output.contains("Previous MCP registry preserved"));
+        assert_eq!(
+            registry
+                .mcp_registry_diagnostics()
+                .await
+                .mcp_server_tool_names,
+            vec!["mcp__atomic__hello"]
+        );
+        assert_eq!(manager.read().await.connected_servers().await, vec!["atomic"]);
     }
 
     #[tokio::test]
