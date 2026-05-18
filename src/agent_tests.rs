@@ -45,6 +45,12 @@ struct CancelAwareTool {
     observed_cancel: Arc<AtomicBool>,
 }
 
+struct CountingCancelAwareTool {
+    entered: Arc<tokio::sync::Notify>,
+    entered_count: Arc<AtomicUsize>,
+    observed_cancel_count: Arc<AtomicUsize>,
+}
+
 struct DelayTestTool;
 struct SpawnTestTool;
 
@@ -442,6 +448,32 @@ impl Tool for CancelAwareTool {
 }
 
 #[async_trait]
+impl Tool for CountingCancelAwareTool {
+    fn name(&self) -> &str {
+        "counting_cancel_aware_test"
+    }
+
+    fn description(&self) -> &str {
+        "Test-only parallel cancellation-aware tool"
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object", "properties": {}})
+    }
+
+    async fn execute(&self, _input: serde_json::Value, ctx: ToolContext) -> Result<ToolOutput> {
+        let cancel_signal = ctx
+            .turn_cancel_signal()
+            .expect("agent parallel tool context should include turn cancel signal");
+        self.entered_count.fetch_add(1, Ordering::SeqCst);
+        self.entered.notify_waiters();
+        cancel_signal.notified().await;
+        self.observed_cancel_count.fetch_add(1, Ordering::SeqCst);
+        Ok(ToolOutput::new("parallel tool observed cancellation"))
+    }
+}
+
+#[async_trait]
 impl Tool for SpawnTestTool {
     fn name(&self) -> &str {
         "swarm"
@@ -787,6 +819,91 @@ async fn run_turn_streaming_mpsc_passes_turn_cancel_signal_to_tool_context() {
         outputs
             .iter()
             .any(|output| output.contains("tool observed cancellation"))
+    );
+}
+
+#[tokio::test]
+async fn run_turn_streaming_mpsc_parallel_tools_observe_turn_cancel_signal() {
+    let _guard = crate::storage::lock_test_env();
+    let (provider, calls) = SequentialProvider::new(vec![
+        vec![
+            StreamEvent::ToolUseStart {
+                id: "parallel_cancel_a".to_string(),
+                name: "counting_cancel_aware_test".to_string(),
+            },
+            StreamEvent::ToolInputDelta("{}".to_string()),
+            StreamEvent::ToolUseEnd,
+            StreamEvent::ToolUseStart {
+                id: "parallel_cancel_b".to_string(),
+                name: "counting_cancel_aware_test".to_string(),
+            },
+            StreamEvent::ToolInputDelta("{}".to_string()),
+            StreamEvent::ToolUseEnd,
+            StreamEvent::MessageEnd {
+                stop_reason: Some("tool_use".to_string()),
+            },
+        ],
+        text_response_events("done after parallel cooperative cancel"),
+    ]);
+    let provider: Arc<dyn Provider> = Arc::new(provider);
+    let registry = Registry::new(provider.clone()).await;
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let entered_count = Arc::new(AtomicUsize::new(0));
+    let observed_cancel_count = Arc::new(AtomicUsize::new(0));
+    registry
+        .register(
+            "counting_cancel_aware_test".to_string(),
+            Arc::new(CountingCancelAwareTool {
+                entered: entered.clone(),
+                entered_count: entered_count.clone(),
+                observed_cancel_count: observed_cancel_count.clone(),
+            }),
+        )
+        .await;
+
+    let mut agent = Agent::new(provider, registry);
+    agent.add_message(
+        Role::User,
+        vec![ContentBlock::Text {
+            text: "call parallel cancel aware tools".to_string(),
+            cache_control: None,
+        }],
+    );
+    let turn_control = agent.turn_control();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let task = tokio::spawn(async move { agent.run_turn_streaming_mpsc(tx).await });
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while entered_count.load(Ordering::SeqCst) < 2 {
+            entered.notified().await;
+        }
+    })
+    .await
+    .expect("both parallel tools should start");
+    turn_control.request_stop(TurnStopReason::UserInterrupt);
+
+    tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .expect("streaming task should finish after parallel tools observe cancel")
+        .expect("task should join")
+        .expect("turn should recover after parallel cooperative tool cancellation");
+
+    assert_eq!(entered_count.load(Ordering::SeqCst), 2);
+    assert_eq!(observed_cancel_count.load(Ordering::SeqCst), 2);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+    let outputs: Vec<String> = std::iter::from_fn(|| rx.try_recv().ok())
+        .filter_map(|event| match event {
+            ServerEvent::ToolDone { output, .. } => Some(output),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        outputs
+            .iter()
+            .filter(|output| output.contains("parallel tool observed cancellation"))
+            .count(),
+        2
     );
 }
 
