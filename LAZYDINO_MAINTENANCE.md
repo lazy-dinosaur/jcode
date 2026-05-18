@@ -1098,6 +1098,41 @@ The 10-stage M47 patch series (`patch/m47-c0-deep-merge-profiles` through `patch
    - Validation: 57 `jcode-compaction-core` lib tests pass (46 prior + 11 new). `cargo check -p jcode` clean. No runtime caller wired yet; M48-C4b will combine `select_tail` (C-2) + `prune` (C-3) + `build_prompt` (C-4a) + `plan_overflow_replay` (C-5a) into the actual compaction agent execution path. M48 milestone tracker note: this stage is C-5a (helpers); the full C-5 scope (creating the synthetic replay message, auto-continue plugin trigger, persisting overflow state) is deferred to C-5b alongside the agent execution path.
    - Binary reinstall required: no (test-only module; production binary unchanged).
 
+48. OpenAI native compaction coexistence helpers (M48-C6a)
+   - Commit: `ccac7ee5` `[m48-c6] OpenAI native compaction coexistence helpers`.
+   - Patch branch: `patch/m48-c6-native-coexistence` (parent: `deploy/m9-m27-catchup`).
+   - Purpose: jcode keeps two parallel summary representations once an OpenAI Responses session has been native-compacted: the provider-side opaque `encrypted_content` blob and the plain-text Markdown anchored summary (M48-C4a). This stage formalizes the *precedence rules* between them as a pure decision module so every caller (provider request builder, session export, search index, replay path) makes the same choice instead of re-implementing the same `discard_oversized_openai_native_compaction` logic.
+   - New module `jcode-compaction-core::m48_native`:
+     - `enum ProviderKind { OpenAIResponses, Anthropic, Gemini, OpenRouter, Other }` with `supports_native_encrypted_content()`. Today only `OpenAIResponses` returns true.
+     - `classify_provider_id(id: &str) -> ProviderKind` — case-insensitive lookup with sensible aliases (`openai`/`openai-responses`, `anthropic`/`claude`, `gemini`/`google`, `openrouter`). Unknown providers fall through to `Other`.
+     - `enum SummaryRepresentation { Native { encrypted_content_len }, Text { dropped_native_len: Option<usize> }, None }` carries enough context for telemetry without leaking the actual blob/text bytes.
+     - `fn decide_summary_representation(provider, encrypted_content, text_summary, safe_max_chars) -> SummaryRepresentation` — the central rule:
+       - Non-OpenAI provider → `Text` (when text available) or `None`.
+       - OpenAI + blob fits in `safe_max_chars` → `Native { len }`. Text is suppressed in the payload to save tokens.
+       - OpenAI + oversized blob + has text → `Text { dropped_native_len: Some(len) }` so the call-site can log the discard once.
+       - OpenAI + oversized blob + no text → `None`. Callers must resend the verbatim head or trigger another compaction.
+       - OpenAI + no blob + has text → `Text { dropped_native_len: None }`.
+       - Whitespace-only text summaries are treated as absent.
+     - `fn provider_can_consume_blob(provider)` for the cross-provider failover path to decide whether to retain or invalidate the current `Session.compaction.openai_encrypted_content`.
+   - Design choices:
+     - Provider-agnostic: callers pass `safe_max_chars` from `jcode-provider-openai::request::OPENAI_ENCRYPTED_CONTENT_SAFE_MAX_CHARS` rather than reaching into the provider crate. `jcode-compaction-core` keeps its narrow dep tree.
+     - `dropped_native_len` is preserved on the `Text` variant so the call-site can emit a one-line diagnostic matching the existing `src/compaction.rs::discard_oversized_openai_native_compaction` warning.
+   - Tests (10 new in `m48_native::native_tests`):
+     - `provider_kind_only_openai_supports_native_blob` (support matrix).
+     - `classify_provider_id_handles_known_aliases` (case-insensitive aliases + unknown → Other).
+     - `openai_with_sendable_blob_returns_native`.
+     - `openai_with_oversized_blob_falls_back_to_text_with_dropped_len`.
+     - `openai_with_oversized_blob_and_no_text_returns_none`.
+     - `openai_without_blob_uses_text`.
+     - `anthropic_with_blob_still_uses_text` (blob discarded for non-OpenAI providers).
+     - `anthropic_with_no_text_returns_none`.
+     - `whitespace_only_text_summary_is_ignored`.
+     - `provider_can_consume_blob_matches_supports_helper`.
+   - Touched paths:
+     - `crates/jcode-compaction-core/src/lib.rs` (+299 lines: new `pub mod m48_native` with `ProviderKind`, `SummaryRepresentation`, `decide_summary_representation`, `provider_can_consume_blob`, `classify_provider_id`, and inline tests).
+   - Validation: 67 `jcode-compaction-core` lib tests pass (57 prior + 10 new). `cargo check -p jcode` clean. No runtime caller wired yet; M48-C6b will replace the existing `discard_oversized_openai_native_compaction` call sites and provider-switch cleanup logic in `src/compaction.rs` + `src/provider/jcode.rs` with calls to `decide_summary_representation` / `provider_can_consume_blob`.
+   - Binary reinstall required: no (test-only module; production binary unchanged).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
