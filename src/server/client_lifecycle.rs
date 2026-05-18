@@ -80,6 +80,27 @@ struct ProcessingState<'a> {
     task: &'a mut Option<tokio::task::JoinHandle<()>>,
 }
 
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ProcessingInterruptSnapshot {
+    client_is_processing: bool,
+    message_id: Option<u64>,
+    session_id: Option<String>,
+    task_present: bool,
+    task_finished: Option<bool>,
+}
+
+#[cfg(test)]
+fn processing_interrupt_snapshot(state: &ProcessingState<'_>) -> ProcessingInterruptSnapshot {
+    ProcessingInterruptSnapshot {
+        client_is_processing: *state.client_is_processing,
+        message_id: *state.message_id,
+        session_id: state.session_id.clone(),
+        task_present: state.task.is_some(),
+        task_finished: state.task.as_ref().map(|task| task.is_finished()),
+    }
+}
+
 struct SwarmStatusRefs<'a> {
     members: &'a Arc<RwLock<HashMap<String, SwarmMember>>>,
     swarms_by_id: &'a Arc<RwLock<HashMap<String, HashSet<String>>>>,

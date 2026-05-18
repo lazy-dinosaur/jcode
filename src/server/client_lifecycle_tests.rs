@@ -48,6 +48,135 @@ async fn session_control_handle_does_not_wait_for_busy_agent_lock() {
     assert!(queue.lock().expect("queue lock").is_empty());
 }
 
+#[tokio::test]
+async fn session_control_interrupt_diagnostics_report_signal_state() {
+    let queue = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let background_signal = InterruptSignal::new();
+    let stop_signal = InterruptSignal::new();
+    let control = SessionControlHandle::new(
+        "session_interrupt_diag",
+        Arc::clone(&queue),
+        background_signal.clone(),
+        stop_signal.clone(),
+    );
+
+    let initial = control.interrupt_diagnostics();
+    assert_eq!(initial.session_id, "session_interrupt_diag");
+    assert_eq!(initial.soft_interrupt_count, 0);
+    assert_eq!(initial.urgent_soft_interrupt_count, 0);
+    assert!(initial.background_tool_signal_registered);
+    assert!(!initial.background_tool_signal_set);
+    assert!(!initial.stop_current_turn_signal_set);
+
+    assert!(control.queue_soft_interrupt(
+        "soft stop".to_string(),
+        true,
+        SoftInterruptSource::User,
+    ));
+    assert!(control.request_background_current_tool());
+    control.request_cancel();
+
+    let after = control.interrupt_diagnostics();
+    assert_eq!(after.soft_interrupt_count, 1);
+    assert_eq!(after.urgent_soft_interrupt_count, 1);
+    assert!(after.background_tool_signal_set);
+    assert!(after.stop_current_turn_signal_set);
+
+    control.reset_cancel();
+    assert!(!control.interrupt_diagnostics().stop_current_turn_signal_set);
+}
+
+#[tokio::test]
+async fn processing_interrupt_snapshot_tracks_active_task_without_agent_lock() {
+    let mut client_is_processing = true;
+    let mut processing_message_id = Some(777);
+    let mut processing_session_id = Some("session_processing_diag".to_string());
+    let mut processing_task = Some(tokio::spawn(async {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }));
+
+    let snapshot = processing_interrupt_snapshot(&ProcessingState {
+        client_is_processing: &mut client_is_processing,
+        message_id: &mut processing_message_id,
+        session_id: &mut processing_session_id,
+        task: &mut processing_task,
+    });
+
+    assert!(snapshot.client_is_processing);
+    assert_eq!(snapshot.message_id, Some(777));
+    assert_eq!(
+        snapshot.session_id.as_deref(),
+        Some("session_processing_diag")
+    );
+    assert!(snapshot.task_present);
+    assert_eq!(snapshot.task_finished, Some(false));
+}
+
+#[tokio::test]
+async fn cancel_processing_message_baseline_hard_aborts_stubborn_task() {
+    let queue = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let background_signal = InterruptSignal::new();
+    let stop_signal = InterruptSignal::new();
+    let control = SessionControlHandle::new(
+        "session_cancel_baseline",
+        Arc::clone(&queue),
+        background_signal,
+        stop_signal.clone(),
+    );
+
+    let (client_event_tx, mut client_event_rx) = mpsc::unbounded_channel::<ServerEvent>();
+    let mut client_is_processing = true;
+    let mut processing_message_id = Some(4242);
+    let mut processing_session_id = Some("session_cancel_baseline".to_string());
+    let stubborn_started = Arc::new(AtomicBool::new(false));
+    let stubborn_started_task = Arc::clone(&stubborn_started);
+    let mut processing_task = Some(tokio::spawn(async move {
+        stubborn_started_task.store(true, Ordering::SeqCst);
+        loop {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+        }
+    }));
+    while !stubborn_started.load(Ordering::SeqCst) {
+        tokio::task::yield_now().await;
+    }
+
+    let swarm_members = Arc::new(RwLock::new(HashMap::new()));
+    let swarms_by_id = Arc::new(RwLock::new(HashMap::new()));
+    let event_history = Arc::new(RwLock::new(std::collections::VecDeque::new()));
+    let event_counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let (swarm_event_tx, _) = broadcast::channel(8);
+
+    cancel_processing_message(
+        &mut ProcessingState {
+            client_is_processing: &mut client_is_processing,
+            message_id: &mut processing_message_id,
+            session_id: &mut processing_session_id,
+            task: &mut processing_task,
+        },
+        &control,
+        &client_event_tx,
+        &SwarmStatusRefs {
+            members: &swarm_members,
+            swarms_by_id: &swarms_by_id,
+            event_history: &event_history,
+            event_counter: &event_counter,
+            event_tx: &swarm_event_tx,
+        },
+    )
+    .await;
+
+    assert!(!client_is_processing);
+    assert!(processing_message_id.is_none());
+    assert!(processing_session_id.is_none());
+    assert!(processing_task.is_none());
+    assert!(!stop_signal.is_set(), "current baseline resets cancel immediately after abort fallback");
+    assert!(matches!(client_event_rx.recv().await, Some(ServerEvent::Interrupted)));
+    assert!(matches!(
+        client_event_rx.recv().await,
+        Some(ServerEvent::Done { id: 4242 })
+    ));
+}
+
 impl IsolatedRuntimeDir {
     fn new() -> Self {
         let temp = tempfile::TempDir::new().expect("runtime dir");

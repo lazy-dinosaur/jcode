@@ -1398,6 +1398,22 @@ The 10-stage M47 patch series (`patch/m47-c0-deep-merge-profiles` through `patch
      - `cargo check -p jcode`.
    - Binary reinstall required: yes (MCP retry/readiness runtime behavior changed).
 
+63. Interrupt baseline diagnostics and hard-abort fixtures (M49-C0)
+   - Commit: `1e5bcbaf` `[m49-c0] add interrupt baseline diagnostics`.
+   - Patch branch: `patch/m49-c0-interrupt-fixtures`.
+   - Purpose: start M49 by capturing the current interrupt/control-plane baseline before changing semantics. This records the existing hard-abort behavior and adds diagnostics for the currently separate soft/background/stop signals.
+   - Runtime/test changes:
+     - Added `SessionControlDiagnostics` and `SessionControlHandle::interrupt_diagnostics()` for lock-free interrupt state snapshots.
+     - Added debug socket commands `interrupt:info` / `interrupts:info` to inspect the current session interrupt-control snapshot.
+     - Added test-only `ProcessingInterruptSnapshot` for active processing state snapshots.
+     - Added baseline test documenting current `cancel_processing_message` behavior: request cancel, wait 500ms, abort stubborn task, reset cancel, clear processing state, emit `Interrupted` then `Done`.
+   - Validation:
+     - `cargo test -p jcode --lib server::client_lifecycle::tests::session_control_interrupt_diagnostics_report_signal_state`.
+     - `cargo test -p jcode --lib server::client_lifecycle::tests::processing_interrupt_snapshot_tracks_active_task_without_agent_lock`.
+     - `cargo test -p jcode --lib server::client_lifecycle::tests::cancel_processing_message_baseline_hard_aborts_stubborn_task`.
+     - `cargo check -p jcode`.
+   - Binary reinstall required: yes (debug socket interrupt diagnostics changed).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
