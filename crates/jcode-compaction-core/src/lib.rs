@@ -2572,6 +2572,325 @@ pub mod m48_native {
     }
 }
 
+/// M48-C7: compaction-state diagnostics for TUI and debug overlays.
+///
+/// Provides one structured summary of the compaction subsystem that
+/// every UI surface can render the same way. Without this layer, each
+/// TUI component invents its own "% used / chars / turns" calculation
+/// and they drift apart, which is what made the original emergency
+/// compaction so hard to debug.
+///
+/// This module owns only the rendering shape. The numbers themselves
+/// come from existing types (`CompactionStats` in `src/compaction.rs`,
+/// `StoredCompactionTurn` from M48-C1, prune reports from M48-C3,
+/// `SummaryRepresentation` from M48-C6a). C-7b will wire the actual
+/// TUI panel + debug socket command.
+pub mod m48_diagnostics {
+    use super::m48_native::SummaryRepresentation;
+    use super::m48_prune::PruneReport;
+
+    /// One-line summary of a compaction marker / summary pair, suitable
+    /// for the TUI context info popup. Each field maps to a concrete
+    /// source so reviewers can grep for the origin.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct CompactionTurnDigest {
+        /// `StoredCompactionTurn.id` (sidecar from M48-C1).
+        pub turn_id: String,
+        /// `StoredCompactionTurn.marker_message_id` or empty when this
+        /// turn was reconstructed from the legacy `Session.compaction`
+        /// field (backfill from M48-C1).
+        pub marker_message_id: String,
+        /// `StoredCompactionTurn.summary_message_id` or empty for legacy
+        /// backfills.
+        pub summary_message_id: String,
+        /// `StoredCompactionTurn.tail_start_id` (the message id where
+        /// the verbatim tail begins; M48-C2 produced this index).
+        pub tail_start_id: Option<String>,
+        /// Synthetic legacy backfill flag (from M48-C1).
+        pub backfilled_from_legacy: bool,
+        /// True when the compaction was triggered by a hard overflow
+        /// rather than a routine ratio check (M48-C1 schema field).
+        pub overflow: bool,
+        /// Whether a chained `previous_summary_id` exists; useful for
+        /// "anchored summary chain length" displays.
+        pub has_previous_summary: bool,
+    }
+
+    /// One-line summary of the OpenAI native compaction state, suitable
+    /// for the same popup. Derived from `m48_native::decide_summary_representation`.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct NativeStateDigest {
+        /// Provider id string from the active config (lowercased). UI
+        /// shows this raw so users can compare against their config.
+        pub provider_id: String,
+        /// Result of the latest precedence decision. UI converts this
+        /// into a short label: "native (N kB)", "text (dropped native NkB)",
+        /// "text", or "none".
+        pub representation: SummaryRepresentation,
+    }
+
+    /// Aggregate digest. UI panels render this struct directly so the
+    /// numbers stay consistent across the TUI context popup, the debug
+    /// memory profile, and any future export tooling.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct CompactionDiagnostics {
+        /// Token usage ratio in `[0.0, 1.0]` (1.0 = full context).
+        pub context_usage_ratio: f32,
+        /// Effective (post-compaction) input token estimate.
+        pub effective_tokens: usize,
+        /// Total active (un-compacted) message count.
+        pub active_messages: usize,
+        /// All durable compaction turns currently known to the session.
+        /// Empty when the session has never been compacted.
+        pub turns: Vec<CompactionTurnDigest>,
+        /// Last prune pass result, if any prune has run since session load.
+        pub last_prune: Option<PruneReport>,
+        /// OpenAI native vs text precedence for the *next* request.
+        pub native_state: Option<NativeStateDigest>,
+    }
+
+    impl CompactionDiagnostics {
+        /// Single-line header used by the TUI status bar. Format:
+        /// `"ctx N% | M msgs | K turns compacted | native|text|none"`.
+        /// All numbers are floor'd; ratios are shown as integer %.
+        pub fn one_line_header(&self) -> String {
+            let pct = (self.context_usage_ratio.clamp(0.0, 1.0) * 100.0) as u32;
+            let kind = match self.native_state.as_ref().map(|s| &s.representation) {
+                Some(SummaryRepresentation::Native { .. }) => "native",
+                Some(SummaryRepresentation::Text { .. }) => "text",
+                Some(SummaryRepresentation::None) => "none",
+                None => "—",
+            };
+            format!(
+                "ctx {pct}% | {} msgs | {} turns compacted | {kind}",
+                self.active_messages,
+                self.turns.len()
+            )
+        }
+
+        /// Multi-line popup body. Mirrors what `/status` would show; one
+        /// line per turn plus a tail block for the prune report and
+        /// native state. UI components are free to truncate but should
+        /// keep this exact ordering so the numbers do not drift.
+        pub fn multi_line_body(&self) -> String {
+            use std::fmt::Write as _;
+            let mut out = String::new();
+            let _ = writeln!(out, "{}", self.one_line_header());
+            let _ = writeln!(out, "effective tokens: {}", self.effective_tokens);
+            let _ = writeln!(out, "active messages: {}", self.active_messages);
+            if self.turns.is_empty() {
+                let _ = writeln!(out, "compaction turns: (none)");
+            } else {
+                let _ = writeln!(out, "compaction turns:");
+                for (i, t) in self.turns.iter().enumerate() {
+                    let _ = writeln!(
+                        out,
+                        "  [{i}] id={} marker={} summary={} tail_start={:?} legacy={} overflow={} chained={}",
+                        t.turn_id,
+                        if t.marker_message_id.is_empty() { "—" } else { &t.marker_message_id },
+                        if t.summary_message_id.is_empty() { "—" } else { &t.summary_message_id },
+                        t.tail_start_id,
+                        t.backfilled_from_legacy,
+                        t.overflow,
+                        t.has_previous_summary,
+                    );
+                }
+            }
+            if let Some(p) = self.last_prune {
+                let _ = writeln!(
+                    out,
+                    "last prune: blocks={} bytes={} committed={}",
+                    p.blocks_pruned, p.bytes_recovered, p.committed
+                );
+            }
+            if let Some(n) = &self.native_state {
+                let label = match &n.representation {
+                    SummaryRepresentation::Native { encrypted_content_len } => {
+                        format!("native ({} bytes)", encrypted_content_len)
+                    }
+                    SummaryRepresentation::Text { dropped_native_len: Some(n) } => {
+                        format!("text (dropped native {} bytes)", n)
+                    }
+                    SummaryRepresentation::Text { dropped_native_len: None } => {
+                        "text".to_string()
+                    }
+                    SummaryRepresentation::None => "none".to_string(),
+                };
+                let _ = writeln!(out, "native state ({}): {}", n.provider_id, label);
+            }
+            out
+        }
+    }
+
+    #[cfg(test)]
+    mod diagnostics_tests {
+        use super::super::m48_native::{ProviderKind, SummaryRepresentation};
+        use super::super::m48_prune::PruneReport;
+        use super::*;
+
+        fn sample_turn(i: usize, legacy: bool, overflow: bool, chained: bool) -> CompactionTurnDigest {
+            CompactionTurnDigest {
+                turn_id: format!("turn-{i}"),
+                marker_message_id: if legacy { String::new() } else { format!("marker-{i}") },
+                summary_message_id: if legacy { String::new() } else { format!("summary-{i}") },
+                tail_start_id: Some(format!("tail-{i}")),
+                backfilled_from_legacy: legacy,
+                overflow,
+                has_previous_summary: chained,
+            }
+        }
+
+        #[test]
+        fn one_line_header_formats_percent_and_counts() {
+            let diag = CompactionDiagnostics {
+                context_usage_ratio: 0.42,
+                effective_tokens: 12_000,
+                active_messages: 18,
+                turns: vec![sample_turn(1, false, false, false)],
+                last_prune: None,
+                native_state: None,
+            };
+            assert_eq!(
+                diag.one_line_header(),
+                "ctx 42% | 18 msgs | 1 turns compacted | —"
+            );
+        }
+
+        #[test]
+        fn one_line_header_clamps_ratio() {
+            let diag = CompactionDiagnostics {
+                context_usage_ratio: 1.7,
+                effective_tokens: 0,
+                active_messages: 0,
+                turns: vec![],
+                last_prune: None,
+                native_state: None,
+            };
+            assert_eq!(
+                diag.one_line_header(),
+                "ctx 100% | 0 msgs | 0 turns compacted | —"
+            );
+        }
+
+        #[test]
+        fn one_line_header_labels_native_vs_text_vs_none() {
+            for (rep, expected_suffix) in [
+                (SummaryRepresentation::Native { encrypted_content_len: 1 }, "native"),
+                (SummaryRepresentation::Text { dropped_native_len: None }, "text"),
+                (SummaryRepresentation::None, "none"),
+            ] {
+                let diag = CompactionDiagnostics {
+                    context_usage_ratio: 0.0,
+                    effective_tokens: 0,
+                    active_messages: 0,
+                    turns: vec![],
+                    last_prune: None,
+                    native_state: Some(NativeStateDigest {
+                        provider_id: "openai".to_string(),
+                        representation: rep,
+                    }),
+                };
+                let header = diag.one_line_header();
+                assert!(
+                    header.ends_with(expected_suffix),
+                    "expected header to end with {expected_suffix:?}, got {header:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn multi_line_body_renders_no_turns_marker() {
+            let diag = CompactionDiagnostics {
+                context_usage_ratio: 0.0,
+                effective_tokens: 0,
+                active_messages: 0,
+                turns: vec![],
+                last_prune: None,
+                native_state: None,
+            };
+            let body = diag.multi_line_body();
+            assert!(body.contains("compaction turns: (none)"));
+            assert!(!body.contains("last prune:"));
+            assert!(!body.contains("native state"));
+        }
+
+        #[test]
+        fn multi_line_body_renders_legacy_and_real_turns() {
+            let diag = CompactionDiagnostics {
+                context_usage_ratio: 0.5,
+                effective_tokens: 5_000,
+                active_messages: 7,
+                turns: vec![
+                    sample_turn(1, true, false, false),
+                    sample_turn(2, false, true, true),
+                ],
+                last_prune: Some(PruneReport {
+                    blocks_pruned: 3,
+                    bytes_recovered: 25_000,
+                    committed: true,
+                }),
+                native_state: Some(NativeStateDigest {
+                    provider_id: "openai".to_string(),
+                    representation: SummaryRepresentation::Text {
+                        dropped_native_len: Some(10_485_760),
+                    },
+                }),
+            };
+            let body = diag.multi_line_body();
+            // Legacy turn renders empty marker/summary as em-dash.
+            assert!(body.contains("marker=— summary=—"));
+            // Real turn renders ids.
+            assert!(body.contains("marker=marker-2 summary=summary-2"));
+            // Prune line.
+            assert!(body.contains("last prune: blocks=3 bytes=25000 committed=true"));
+            // Native fallback line with dropped len.
+            assert!(body.contains("native state (openai): text (dropped native 10485760 bytes)"));
+            // Overflow + chained flags are visible.
+            assert!(body.contains("overflow=true"));
+            assert!(body.contains("chained=true"));
+        }
+
+        #[test]
+        fn multi_line_body_renders_native_in_use_label() {
+            let diag = CompactionDiagnostics {
+                context_usage_ratio: 0.0,
+                effective_tokens: 0,
+                active_messages: 0,
+                turns: vec![],
+                last_prune: None,
+                native_state: Some(NativeStateDigest {
+                    provider_id: "openai".to_string(),
+                    representation: SummaryRepresentation::Native {
+                        encrypted_content_len: 4096,
+                    },
+                }),
+            };
+            let body = diag.multi_line_body();
+            assert!(body.contains("native state (openai): native (4096 bytes)"));
+        }
+
+        #[test]
+        fn one_line_header_with_no_turns_and_no_native_state() {
+            // Smoke test: defaults compile and produce a sane string.
+            let diag = CompactionDiagnostics {
+                context_usage_ratio: 0.0,
+                effective_tokens: 0,
+                active_messages: 0,
+                turns: vec![],
+                last_prune: None,
+                native_state: None,
+            };
+            // Helps consumers depend on a stable empty-state header.
+            assert_eq!(
+                diag.one_line_header(),
+                "ctx 0% | 0 msgs | 0 turns compacted | —"
+            );
+            // Make sure all referenced types still link.
+            let _ = ProviderKind::Other;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
