@@ -210,11 +210,31 @@ impl Agent {
 
             let mut retry_after_compaction = false;
             let mut keepalive = stream_keepalive_ticker();
+            let turn_stop_signal = self.turn_stop_signal();
             loop {
                 let next_event = std::pin::pin!(stream.next());
                 let event = tokio::select! {
                     _ = keepalive.tick() => {
                         send_stream_keepalive_mpsc(&event_tx);
+                        continue;
+                    }
+                    _ = turn_stop_signal.notified() => {
+                        if turn_stop_signal.is_set() {
+                            let reason = self.turn_control.reason();
+                            let _ = event_tx.send(ServerEvent::TextDelta {
+                                text: format!("\n\n{}", Self::interruption_text_for_reason(reason)),
+                            });
+                            self.persist_interrupted_assistant_turn(
+                                &text_content,
+                                &reasoning_content,
+                                store_reasoning_content,
+                                &tool_calls,
+                                current_tool.take(),
+                                &current_tool_input,
+                                reason,
+                            )?;
+                            return Ok(());
+                        }
                         continue;
                     }
                     event = next_event => event,
@@ -250,6 +270,19 @@ impl Agent {
                                 active_messages: None,
                             });
                             break;
+                        }
+                        if self.turn_control.is_stopped() {
+                            let reason = self.turn_control.reason();
+                            self.persist_interrupted_assistant_turn(
+                                &text_content,
+                                &reasoning_content,
+                                store_reasoning_content,
+                                &tool_calls,
+                                current_tool.take(),
+                                &current_tool_input,
+                                reason,
+                            )?;
+                            return Ok(());
                         }
                         return Err(e);
                     }
@@ -729,16 +762,11 @@ impl Agent {
                     "Graceful shutdown - skipping {} tool call(s)",
                     tool_calls.len()
                 ));
-                for tc in &tool_calls {
-                    self.add_message(
-                        Role::User,
-                        vec![ContentBlock::ToolResult {
-                            tool_use_id: tc.id.clone(),
-                            content: "[Skipped - server reloading]".to_string(),
-                            is_error: Some(true),
-                        }],
-                    );
-                }
+                self.add_interrupted_tool_results_for_calls(
+                    &tool_calls,
+                    Some(TurnStopReason::ServerReload),
+                    None,
+                );
                 self.session.save()?;
                 break;
             }
@@ -941,16 +969,11 @@ impl Agent {
                     self.session.save()?;
 
                     // Add results for any remaining tools too.
-                    for remaining_tc in &tool_calls[(index + 1)..] {
-                        self.add_message(
-                            Role::User,
-                            vec![ContentBlock::ToolResult {
-                                tool_use_id: remaining_tc.id.clone(),
-                                content: "[Skipped - server reloading]".to_string(),
-                                is_error: Some(true),
-                            }],
-                        );
-                    }
+                    self.add_interrupted_tool_results_for_calls(
+                        &tool_calls[(index + 1)..],
+                        Some(TurnStopReason::ServerReload),
+                        None,
+                    );
                     self.session.save()?;
                     return Ok(());
                 } else {

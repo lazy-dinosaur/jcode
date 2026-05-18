@@ -36,6 +36,10 @@ struct CancelAwareProvider {
     observed_cancel: Arc<AtomicBool>,
 }
 
+struct PendingAfterTextProvider {
+    text_sent: Arc<tokio::sync::Notify>,
+}
+
 struct CancelAwareTool {
     entered: Arc<tokio::sync::Notify>,
     observed_cancel: Arc<AtomicBool>,
@@ -354,6 +358,38 @@ impl Provider for CancelAwareProvider {
 }
 
 #[async_trait]
+impl Provider for PendingAfterTextProvider {
+    async fn complete(
+        &self,
+        _messages: &[Message],
+        _tools: &[ToolDefinition],
+        _system: &str,
+        _resume_session_id: Option<&str>,
+    ) -> Result<EventStream> {
+        let text_sent = self.text_sent.clone();
+        let (tx, rx) = tokio_mpsc::channel::<Result<StreamEvent>>(8);
+        tokio::spawn(async move {
+            let _ = tx
+                .send(Ok(StreamEvent::TextDelta("partial answer".to_string())))
+                .await;
+            text_sent.notify_waiters();
+            std::future::pending::<()>().await;
+        });
+        Ok(Box::pin(ReceiverStream::new(rx)))
+    }
+
+    fn name(&self) -> &str {
+        "pending-after-text"
+    }
+
+    fn fork(&self) -> Arc<dyn Provider> {
+        Arc::new(Self {
+            text_sent: self.text_sent.clone(),
+        })
+    }
+}
+
+#[async_trait]
 impl Tool for DelayTestTool {
     fn name(&self) -> &str {
         "delay_test"
@@ -581,6 +617,108 @@ async fn run_turn_streaming_mpsc_passes_turn_cancel_signal_to_provider() {
             .contains("provider observed cancellation")
     );
     assert!(observed_cancel.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn run_turn_streaming_mpsc_persists_partial_text_on_user_interrupt() {
+    let _guard = crate::storage::lock_test_env();
+    let text_sent = Arc::new(tokio::sync::Notify::new());
+    let provider: Arc<dyn Provider> = Arc::new(PendingAfterTextProvider {
+        text_sent: text_sent.clone(),
+    });
+    let registry = Registry::new(provider.clone()).await;
+    let mut agent = Agent::new(provider, registry);
+    agent.add_message(
+        Role::User,
+        vec![ContentBlock::Text {
+            text: "start a partial answer".to_string(),
+            cache_control: None,
+        }],
+    );
+
+    let turn_control = agent.turn_control();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let task = tokio::spawn(async move {
+        let result = agent.run_turn_streaming_mpsc(tx).await;
+        (result, agent)
+    });
+
+    tokio::time::timeout(Duration::from_secs(5), text_sent.notified())
+        .await
+        .expect("provider should emit partial text");
+    turn_control.request_stop(TurnStopReason::UserInterrupt);
+
+    let (result, mut agent) = tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .expect("streaming task should finish after user interrupt")
+        .expect("task should join");
+    result.expect("user interrupt should finalize partial transcript cleanly");
+
+    let transcript = agent.export_conversation_markdown();
+    assert!(transcript.contains("partial answer"));
+    assert!(transcript.contains("[Interrupted: user cancelled]"));
+
+    let saw_interrupted_delta = std::iter::from_fn(|| rx.try_recv().ok()).any(|event| {
+        matches!(event, ServerEvent::TextDelta { text } if text.contains("[Interrupted: user cancelled]"))
+    });
+    assert!(saw_interrupted_delta);
+
+    let messages = &agent.session_mut_for_test().messages;
+    assert!(matches!(
+        messages.last().map(|m| m.role.clone()),
+        Some(Role::Assistant)
+    ));
+}
+
+#[tokio::test]
+async fn interrupted_transcript_finalization_pairs_inflight_tool_use() {
+    let _guard = crate::storage::lock_test_env();
+    let (provider, _calls) = SequentialProvider::new(vec![]);
+    let provider: Arc<dyn Provider> = Arc::new(provider);
+    let registry = Registry::new(provider.clone()).await;
+    let mut agent = Agent::new(provider, registry);
+
+    agent
+        .persist_interrupted_assistant_turn(
+            "partial before tool",
+            "",
+            false,
+            &[],
+            Some(ToolCall {
+                id: "call_inflight".to_string(),
+                name: "bash".to_string(),
+                input: serde_json::Value::Null,
+                intent: None,
+            }),
+            "{\"command\":\"sleep 10\"}",
+            Some(TurnStopReason::ServerReload),
+        )
+        .expect("interrupted transcript should persist");
+
+    let messages = &agent.session_mut_for_test().messages;
+    let assistant = messages
+        .iter()
+        .rev()
+        .find(|message| message.role == Role::Assistant)
+        .expect("assistant message should be present");
+    assert!(assistant.content.iter().any(|block| matches!(
+        block,
+        ContentBlock::ToolUse { id, name, input }
+            if id == "call_inflight" && name == "bash" && input["command"] == "sleep 10"
+    )));
+
+    let user = messages
+        .iter()
+        .rev()
+        .find(|message| message.role == Role::User)
+        .expect("tool result message should be present");
+    assert!(user.content.iter().any(|block| matches!(
+        block,
+        ContentBlock::ToolResult { tool_use_id, content, is_error }
+            if tool_use_id == "call_inflight"
+                && content.contains("server reloading")
+                && *is_error == Some(true)
+    )));
 }
 
 #[tokio::test]
