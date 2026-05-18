@@ -1226,6 +1226,7 @@ fn active_or_process_working_dir(app: &App) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+#[cfg(test)]
 fn external_tool_manual_command(program: &str, args: &[String], cwd: &Path) -> String {
     let command = std::iter::once(program.to_string())
         .chain(args.iter().cloned())
@@ -1247,33 +1248,72 @@ fn external_tool_manual_command(program: &str, args: &[String], cwd: &Path) -> S
     }
 }
 
-fn spawn_external_tool_in_terminal(
+fn suspend_tui_for_external_tool() -> Result<(), String> {
+    crate::tui::disable_keyboard_enhancement();
+    let _ = crossterm::terminal::disable_raw_mode();
+    crossterm::execute!(
+        std::io::stdout(),
+        crossterm::event::DisableBracketedPaste,
+        crossterm::event::DisableFocusChange,
+        crossterm::event::DisableMouseCapture,
+        crossterm::terminal::LeaveAlternateScreen
+    )
+    .map_err(|error| format!("failed to suspend jcode terminal UI: {error}"))
+}
+
+fn restore_tui_after_external_tool() -> Result<(), String> {
+    crossterm::terminal::enable_raw_mode()
+        .map_err(|error| format!("failed to restore raw mode: {error}"))?;
+    crossterm::execute!(
+        std::io::stdout(),
+        crossterm::terminal::EnterAlternateScreen,
+        crossterm::event::EnableBracketedPaste,
+        crossterm::event::EnableFocusChange,
+        crossterm::event::EnableMouseCapture
+    )
+    .map_err(|error| format!("failed to restore jcode terminal UI: {error}"))?;
+    let _ = crate::tui::enable_keyboard_enhancement();
+    Ok(())
+}
+
+fn run_external_tool_in_current_terminal(
     app: &mut App,
     program: &str,
     args: Vec<String>,
-    title: &str,
     cwd: PathBuf,
-    opened_notice: impl FnOnce(&Path) -> String,
+    completed_notice: impl FnOnce(&Path) -> String,
 ) {
-    let command = crate::terminal_launch::TerminalCommand::new(program, args.clone())
-        .title(title.to_string())
-        .fresh_spawn();
+    if let Err(error) = suspend_tui_for_external_tool() {
+        app.push_display_message(DisplayMessage::error(error));
+        return;
+    }
 
-    match crate::terminal_launch::spawn_command_in_new_terminal(&command, &cwd) {
-        Ok(true) => {
-            app.push_display_message(DisplayMessage::system(opened_notice(&cwd)));
-            app.set_status_notice(format!("Opened {program}"));
+    let status_result = std::process::Command::new(program)
+        .args(&args)
+        .current_dir(&cwd)
+        .status();
+
+    let restore_result = restore_tui_after_external_tool();
+    app.request_full_redraw();
+
+    if let Err(error) = restore_result {
+        app.push_display_message(DisplayMessage::error(error));
+        return;
+    }
+
+    match status_result {
+        Ok(status) if status.success() => {
+            app.push_display_message(DisplayMessage::system(completed_notice(&cwd)));
+            app.set_status_notice(format!("Closed {program}"));
         }
-        Ok(false) => {
-            app.push_display_message(DisplayMessage::system(format!(
-                "No supported terminal was found for `{program}`. Run manually:\n\n```text\n{}\n```",
-                external_tool_manual_command(program, &args, &cwd)
+        Ok(status) => {
+            app.push_display_message(DisplayMessage::error(format!(
+                "`{program}` exited with status {status}"
             )));
-            app.set_status_notice("No supported terminal found");
         }
         Err(error) => {
             app.push_display_message(DisplayMessage::error(format!(
-                "Failed to launch `{program}` in a new terminal: {error}"
+                "Failed to run `{program}` in the current terminal: {error}"
             )));
         }
     }
@@ -1298,8 +1338,8 @@ fn handle_lazygit_command(app: &mut App, trimmed: &str) -> bool {
     }
 
     let cwd = active_or_process_working_dir(app);
-    spawn_external_tool_in_terminal(app, "lazygit", Vec::new(), "jcode lazygit", cwd, |cwd| {
-        format!("Opened `lazygit` in a new terminal at `{}`.", cwd.display())
+    run_external_tool_in_current_terminal(app, "lazygit", Vec::new(), cwd, |cwd| {
+        format!("Returned from `lazygit` at `{}`.", cwd.display())
     });
     true
 }
@@ -1375,9 +1415,9 @@ fn handle_nvim_command(app: &mut App, trimmed: &str) -> bool {
 
     let args = vec![target.display().to_string()];
     let target_for_notice = target.clone();
-    spawn_external_tool_in_terminal(app, "nvim", args, "jcode nvim", cwd, move |cwd| {
+    run_external_tool_in_current_terminal(app, "nvim", args, cwd, move |cwd| {
         format!(
-            "Opened `{}` with `nvim` in a new terminal at `{}`.",
+            "Returned from `nvim` for `{}` at `{}`.",
             target_for_notice.display(),
             cwd.display()
         )
