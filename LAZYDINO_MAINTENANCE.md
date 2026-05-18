@@ -1228,6 +1228,27 @@ The 10-stage M47 patch series (`patch/m47-c0-deep-merge-profiles` through `patch
    - Validation: `cargo test -p jcode-config-types`; `cargo test -p jcode --lib session::tests::cases::test_record_durable_compaction_turn_marks_overflow_recovery`; `cargo check -p jcode`.
    - Binary reinstall required: yes (runtime overflow recovery behavior and config schema changed).
 
+53. Synthetic overflow replay / continue message persistence (M48-C5c)
+   - Commit: `1ecaad4d` `[m48-c5c] persist overflow replay messages`.
+   - Patch branch: `patch/m48-c5c-overflow-replay-message`.
+   - Purpose: finish the opencode-style overflow auto-continue path by mutating the transcript after a successful overflow compaction, instead of only logging a replay candidate.
+   - Runtime/schema changes:
+     - Agent context-limit recovery now appends one synthetic user message after overflow compaction when both `compaction.auto_continue` and `compaction.overflow_replay` are enabled.
+     - Safe replay candidates from `m48_overflow::plan_overflow_replay` are persisted as user messages with media already rewritten to text labels.
+     - Unsafe/no-candidate cases append an opencode-style continue prompt instructing the model to continue only when it has next steps, otherwise ask for clarification.
+     - `StoredCompactionTurn` gained backward-compatible optional `replay_message_id` and `replay_kind = replay|continue` fields.
+     - `Session::record_overflow_replay_message` only attaches to a fresh overflow turn with no replay metadata, so a retried overflow cannot keep injecting duplicate synthetic messages.
+   - Tests:
+     - `session::tests::cases::test_record_overflow_replay_message_persists_replay_metadata_and_labels` covers replay metadata, image-byte stripping to text labels, and duplicate-injection guard.
+     - `session::tests::cases::test_record_overflow_replay_message_can_persist_continue_prompt` covers fallback continue metadata.
+     - Existing durable compaction turn tests were updated for the extended schema.
+   - Validation:
+     - `rustfmt --edition 2024 --check crates/jcode-session-types/src/lib.rs src/agent/compaction.rs src/compaction_tests.rs src/session.rs src/session_tests/cases.rs`.
+     - `cargo test -p jcode-session-types`.
+     - `cargo test -p jcode --lib session::tests::cases::test_record`.
+     - `cargo check -p jcode`.
+   - Binary reinstall required: yes (runtime overflow retry transcript behavior changed).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
