@@ -1330,6 +1330,22 @@ The 10-stage M47 patch series (`patch/m47-c0-deep-merge-profiles` through `patch
      - `cargo check -p jcode`.
    - Binary reinstall required: yes (MCP management output and registry diagnostics changed).
 
+59. Bounded MCP readiness barrier after reconnect (M50-C1)
+   - Commit: `2e3c5cdf` `[m50-c1] wait for mcp readiness on reconnect`.
+   - Patch branch: `patch/m50-c1-mcp-readiness-barrier`.
+   - Purpose: remove the common post-selfdev-reload race where a session can be marked ready while MCP server tools are still being registered in the background.
+   - Runtime changes:
+     - `register_mcp_tools_from_manager` now waits for MCP connect/tool registration to reach a final state before returning, up to a bounded readiness timeout.
+     - The early `McpStatus` connecting event is preserved, and final `McpStatus` still reports registered tool counts after registration completes.
+     - If the barrier times out, readiness remains bounded and the registration task continues in the background.
+     - Added `JCODE_MCP_READINESS_TIMEOUT_MS` override with a default of 5000ms.
+     - Added timeout-injected helper for deterministic tests without global env mutation.
+   - Validation:
+     - `cargo test -p jcode --lib tool::tests::register_mcp_tools_waits_for_delayed_server_tools_within_barrier`.
+     - `cargo test -p jcode --lib tool::tests::register_mcp_tools_times_out_but_continues_background_registration`.
+     - `cargo check -p jcode`.
+   - Binary reinstall required: yes (MCP subscribe/reconnect readiness behavior changed).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
