@@ -453,6 +453,26 @@ impl Agent {
         // Return locked tools if available (prevents cache invalidation from
         // MCP tools arriving asynchronously after the first API request)
         if let Some(ref locked) = self.locked_tools {
+            let locked_has_mcp_tools = locked.iter().any(|tool| tool.name.starts_with("mcp__"));
+            if !locked_has_mcp_tools
+                && self
+                    .registry
+                    .mcp_registry_diagnostics()
+                    .await
+                    .mcp_server_tool_count
+                    > 0
+            {
+                logging::info(&format!(
+                    "Unlocking stale {}-tool list because MCP tools are now registered",
+                    locked.len()
+                ));
+                self.locked_tools = None;
+            } else {
+                return locked.clone();
+            }
+        }
+
+        if let Some(ref locked) = self.locked_tools {
             return locked.clone();
         }
 
