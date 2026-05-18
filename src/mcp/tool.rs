@@ -28,6 +28,11 @@ impl McpTool {
             manager,
         }
     }
+
+    fn is_unknown_tool_error(error: &anyhow::Error) -> bool {
+        let text = format!("{:#}", error).to_ascii_lowercase();
+        text.contains("unknowntool") || text.contains("unknown tool")
+    }
 }
 
 #[async_trait]
@@ -52,9 +57,35 @@ impl Tool for McpTool {
             input
         };
         let manager = self.manager.read().await;
-        let result = manager
-            .call_tool(&self.server_name, &self.tool_def.name, input)
-            .await?;
+        let result = match manager
+            .call_tool(&self.server_name, &self.tool_def.name, input.clone())
+            .await
+        {
+            Ok(result) => result,
+            Err(err) if Self::is_unknown_tool_error(&err) => {
+                crate::logging::warn(&format!(
+                    "MCP tool '{}:{}' returned UnknownTool; refreshing tools and retrying once",
+                    self.server_name, self.tool_def.name
+                ));
+                let _ = manager.refresh_server_tools(&self.server_name).await;
+                match manager
+                    .call_tool(&self.server_name, &self.tool_def.name, input)
+                    .await
+                {
+                    Ok(result) => result,
+                    Err(retry_err) if Self::is_unknown_tool_error(&retry_err) => {
+                        let title = format!("mcp:{}:{}", self.server_name, self.tool_def.name);
+                        return Ok(ToolOutput::new(format!(
+                            "Error: MCP tool '{}' is no longer available on server '{}'. The server reported UnknownTool even after refreshing the tool list. Try reconnecting or reloading MCP tools before calling it again.",
+                            self.tool_def.name, self.server_name
+                        ))
+                        .with_title(title));
+                    }
+                    Err(retry_err) => return Err(retry_err),
+                }
+            }
+            Err(err) => return Err(err),
+        };
 
         // Convert MCP content blocks to output string
         let mut output_parts = Vec::new();
@@ -106,4 +137,22 @@ pub async fn create_mcp_tools(manager: Arc<RwLock<McpManager>>) -> Vec<(String, 
         tools.push((prefixed_name, Arc::new(mcp_tool) as Arc<dyn Tool>));
     }
     tools
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_common_unknown_tool_errors() {
+        assert!(McpTool::is_unknown_tool_error(&anyhow::anyhow!(
+            "MCP error -32602: UnknownTool: inspect_frame"
+        )));
+        assert!(McpTool::is_unknown_tool_error(&anyhow::anyhow!(
+            "unknown tool: figma_get_node"
+        )));
+        assert!(!McpTool::is_unknown_tool_error(&anyhow::anyhow!(
+            "MCP error -32000: timeout"
+        )));
+    }
 }

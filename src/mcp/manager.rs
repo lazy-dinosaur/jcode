@@ -287,6 +287,25 @@ impl McpManager {
         anyhow::bail!("MCP server '{}' not connected", server)
     }
 
+    /// Refresh a connected server's tool list.
+    pub async fn refresh_server_tools(&self, server: &str) -> Result<()> {
+        {
+            let handles = self.pool_handles.read().await;
+            if let Some(handle) = handles.get(server) {
+                return handle.refresh_tools().await;
+            }
+        }
+
+        {
+            let clients = self.owned_clients.read().await;
+            if let Some(client) = clients.get(server) {
+                return client.refresh_tools().await;
+            }
+        }
+
+        anyhow::bail!("MCP server '{}' not connected", server)
+    }
+
     /// Reload config and reconnect to servers
     pub async fn reload(&mut self) -> Result<(usize, Vec<(String, String)>)> {
         // Disconnect all (releases pool handles, shuts down owned)
