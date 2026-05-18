@@ -366,6 +366,7 @@ impl McpClient {
                 match reader.read_line(&mut line).await {
                     Ok(0) => {
                         crate::logging::debug(&format!("MCP [{}]: stdout EOF", reader_name));
+                        pending_clone.lock().await.clear();
                         break;
                     }
                     Ok(_) => {
@@ -388,6 +389,7 @@ impl McpClient {
                     }
                     Err(e) => {
                         crate::logging::warn(&format!("MCP [{}] read error: {}", reader_name, e));
+                        pending_clone.lock().await.clear();
                         break;
                     }
                 }
@@ -408,6 +410,13 @@ impl McpClient {
             handle,
             child: Some(child),
         };
+
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        if let Some(child) = client.child.as_mut()
+            && let Some(status) = child.try_wait().context("Failed to poll MCP server process")?
+        {
+            anyhow::bail!("MCP server '{}' exited before initialize: {}", name, status);
+        }
 
         client
             .initialize()
