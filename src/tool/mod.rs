@@ -89,6 +89,8 @@ impl Clone for Registry {
 
 impl Registry {
     const DEFAULT_MCP_READINESS_TIMEOUT_MS: u64 = 5_000;
+    const DEFAULT_MCP_CONNECT_ATTEMPTS: usize = 3;
+    const DEFAULT_MCP_RETRY_BACKOFF_MS: u64 = 150;
 
     fn mcp_readiness_timeout() -> Duration {
         std::env::var("JCODE_MCP_READINESS_TIMEOUT_MS")
@@ -96,6 +98,58 @@ impl Registry {
             .and_then(|value| value.parse::<u64>().ok())
             .map(Duration::from_millis)
             .unwrap_or_else(|| Duration::from_millis(Self::DEFAULT_MCP_READINESS_TIMEOUT_MS))
+    }
+
+    fn mcp_connect_attempts() -> usize {
+        std::env::var("JCODE_MCP_CONNECT_ATTEMPTS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|attempts| *attempts > 0)
+            .unwrap_or(Self::DEFAULT_MCP_CONNECT_ATTEMPTS)
+    }
+
+    fn mcp_retry_backoff() -> Duration {
+        std::env::var("JCODE_MCP_RETRY_BACKOFF_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .map(Duration::from_millis)
+            .unwrap_or_else(|| Duration::from_millis(Self::DEFAULT_MCP_RETRY_BACKOFF_MS))
+    }
+
+    async fn connect_mcp_manager_with_retries(
+        mcp_manager: Arc<RwLock<crate::mcp::McpManager>>,
+    ) -> (usize, Vec<(String, String)>, usize) {
+        let max_attempts = Self::mcp_connect_attempts();
+        let backoff = Self::mcp_retry_backoff();
+        let mut last_failures = Vec::new();
+        for attempt in 1..=max_attempts {
+            let result = {
+                let manager = mcp_manager.write().await;
+                manager.connect_all().await
+            };
+            match result {
+                Ok((successes, failures)) => {
+                    if successes > 0 || failures.is_empty() || attempt == max_attempts {
+                        return (successes, failures, attempt);
+                    }
+                    last_failures = failures;
+                }
+                Err(err) => {
+                    last_failures = vec![("manager".to_string(), err.to_string())];
+                    if attempt == max_attempts {
+                        return (0, last_failures, attempt);
+                    }
+                }
+            }
+            crate::logging::warn(&format!(
+                "MCP: connect attempt {}/{} failed; retrying in {}ms",
+                attempt,
+                max_attempts,
+                backoff.as_millis()
+            ));
+            tokio::time::sleep(backoff).await;
+        }
+        (0, last_failures, max_attempts)
     }
 
     fn shared_skills_registry() -> Arc<RwLock<SkillRegistry>> {
@@ -626,13 +680,14 @@ impl Registry {
             // expires, the task is detached and continues in the background.
             let registry = self.clone();
             let mut registration = tokio::spawn(async move {
-                let (successes, failures) = {
-                    let manager = mcp_manager.write().await;
-                    manager.connect_all().await.unwrap_or((0, Vec::new()))
-                };
+                let (successes, failures, attempts) =
+                    Self::connect_mcp_manager_with_retries(Arc::clone(&mcp_manager)).await;
 
                 if successes > 0 {
-                    crate::logging::info(&format!("MCP: Connected to {} server(s)", successes));
+                    crate::logging::info(&format!(
+                        "MCP: Connected to {} server(s) after {} attempt(s)",
+                        successes, attempts
+                    ));
                 }
                 if !failures.is_empty() {
                     for (name, error) in &failures {

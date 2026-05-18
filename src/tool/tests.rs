@@ -176,6 +176,74 @@ done
     (temp_dir, McpConfig { servers })
 }
 
+fn flaky_once_mcp_server_config() -> (tempfile::TempDir, McpConfig) {
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let marker = temp_dir.path().join("failed-once");
+    let server_script = temp_dir.path().join("flaky-once-mcp.sh");
+    std::fs::write(
+        &server_script,
+        r#"#!/usr/bin/env bash
+marker="$MARKER"
+if [ ! -f "$marker" ]; then
+  touch "$marker"
+  exit 42
+fi
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+  case "$line" in
+    *initialize*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"flaky","version":"1.0.0"}}}\n' "$id"
+      ;;
+    *tools/list*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"hello","description":"Flaky hello","inputSchema":{"type":"object","properties":{}}}]}}\n' "$id"
+      ;;
+  esac
+done
+"#,
+    )
+    .expect("write flaky MCP script");
+
+    let mut servers = HashMap::new();
+    let mut env = HashMap::new();
+    env.insert("MARKER".to_string(), marker.to_string_lossy().to_string());
+    servers.insert(
+        "flaky".to_string(),
+        McpServerConfig {
+            command: "bash".to_string(),
+            args: vec![server_script.to_string_lossy().to_string()],
+            env,
+            transport: None,
+            url: None,
+            headers: HashMap::new(),
+            auth: None,
+            shared: false,
+        },
+    );
+    (temp_dir, McpConfig { servers })
+}
+
+struct EnvVarGuard {
+    key: &'static str,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+        let previous = std::env::var_os(key);
+        crate::env::set_var(key, value);
+        Self { key, previous }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match &self.previous {
+            Some(value) => crate::env::set_var(self.key, value),
+            None => crate::env::remove_var(self.key),
+        }
+    }
+}
+
 #[tokio::test]
 async fn mcp_registry_diagnostics_tracks_management_and_server_tools() {
     let registry = Registry::empty();
@@ -311,6 +379,24 @@ async fn reconcile_mcp_tools_restores_missing_registry_entries() {
             .mcp_server_tool_names,
         vec!["mcp__delayed__hello"]
     );
+}
+
+#[tokio::test]
+async fn register_mcp_tools_retries_transient_startup_failure() {
+    let _attempts = EnvVarGuard::set("JCODE_MCP_CONNECT_ATTEMPTS", "3");
+    let _backoff = EnvVarGuard::set("JCODE_MCP_RETRY_BACKOFF_MS", "10");
+    let _readiness = EnvVarGuard::set("JCODE_MCP_READINESS_TIMEOUT_MS", "30000");
+    let registry = Registry::empty();
+    let (_temp_dir, config) = flaky_once_mcp_server_config();
+    let manager = Arc::new(RwLock::new(McpManager::with_config(config)));
+
+    registry
+        .register_mcp_tools_from_manager(None, manager)
+        .await;
+
+    let diagnostics = registry.mcp_registry_diagnostics().await;
+    assert!(diagnostics.mcp_management_registered);
+    assert_eq!(diagnostics.mcp_server_tool_names, vec!["mcp__flaky__hello"]);
 }
 
 #[test]
