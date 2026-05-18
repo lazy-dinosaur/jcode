@@ -128,13 +128,15 @@ impl McpManagementTool {
         let all_tools = manager.all_tools().await;
 
         if servers.is_empty() {
-            return Ok(ToolOutput::new(
+            let mut output = String::from(
                 "No MCP servers connected.\n\n\
                 To connect a server, use:\n\
                 {\"action\": \"connect\", \"server\": \"name\", \"command\": \"/path/to/server\", \"args\": []}\n\n\
                 Or add servers to ~/.jcode/mcp.json or .jcode/mcp.json and use {\"action\": \"reload\"}.\n\
-                .claude/mcp.json is also supported for compatibility."
-            ).with_title("MCP: No servers"));
+                .claude/mcp.json is also supported for compatibility.",
+            );
+            self.append_registry_diagnostics(&mut output).await;
+            return Ok(ToolOutput::new(output).with_title("MCP: No servers"));
         }
 
         let mut output = String::new();
@@ -159,7 +161,35 @@ impl McpManagementTool {
             output.push('\n');
         }
 
+        self.append_registry_diagnostics(&mut output).await;
+
         Ok(ToolOutput::new(output).with_title("MCP: Server list"))
+    }
+
+    async fn append_registry_diagnostics(&self, output: &mut String) {
+        let Some(registry) = self.registry.as_ref() else {
+            return;
+        };
+        let diagnostics = registry.mcp_registry_diagnostics().await;
+        output.push_str("\n## Registry diagnostics\n");
+        output.push_str(&format!(
+            "  - mcp management tool registered: {}\n",
+            diagnostics.mcp_management_registered
+        ));
+        output.push_str(&format!(
+            "  - registered MCP server tools: {}\n",
+            diagnostics.mcp_server_tool_count
+        ));
+        output.push_str(&format!(
+            "  - total registered tools: {}\n",
+            diagnostics.total_tool_count
+        ));
+        if !diagnostics.mcp_server_tool_names.is_empty() {
+            output.push_str("  - registered MCP tool names:\n");
+            for name in diagnostics.mcp_server_tool_names {
+                output.push_str(&format!("    - {}\n", name));
+            }
+        }
     }
 
     async fn connect_server(&self, params: McpToolInput, session_id: &str) -> Result<ToolOutput> {
@@ -358,6 +388,8 @@ impl McpManagementTool {
             output.push('\n');
         }
 
+        self.append_registry_diagnostics(&mut output).await;
+
         Ok(ToolOutput::new(output).with_title("MCP: Reloaded"))
     }
 
@@ -508,6 +540,24 @@ mod tests {
 
         let result = tool.execute(input, ctx).await.unwrap();
         assert!(result.output.contains("No MCP servers connected"));
+    }
+
+    #[tokio::test]
+    async fn test_list_includes_registry_diagnostics_when_registry_is_available() {
+        let registry = crate::tool::Registry::empty();
+        let manager = Arc::new(RwLock::new(McpManager::new()));
+        let tool = McpManagementTool::new(manager).with_registry(registry.clone());
+        let ctx = create_test_context();
+        let input = json!({"action": "list"});
+
+        let result = tool.execute(input, ctx).await.unwrap();
+        assert!(result.output.contains("## Registry diagnostics"));
+        assert!(
+            result
+                .output
+                .contains("mcp management tool registered: false")
+        );
+        assert!(result.output.contains("registered MCP server tools: 0"));
     }
 
     #[tokio::test]

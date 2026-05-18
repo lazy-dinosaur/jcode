@@ -1,8 +1,11 @@
 use super::*;
+use crate::mcp::{McpConfig, McpManager, McpServerConfig};
 use crate::message::{Message, ToolDefinition};
 use crate::provider::{EventStream, Provider};
 use async_trait::async_trait;
 use serde_json::Value;
+use std::collections::HashMap;
+use tokio::sync::RwLock;
 
 struct MockProvider;
 
@@ -130,6 +133,114 @@ async fn first_party_tool_definitions_include_optional_intent_explicitly() {
             def.name
         );
     }
+}
+
+fn delayed_mcp_server_config(delay_seconds: f32) -> (tempfile::TempDir, McpConfig) {
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let server_script = temp_dir.path().join("delayed-mcp.sh");
+    std::fs::write(
+        &server_script,
+        format!(
+            r#"#!/usr/bin/env bash
+sleep {delay_seconds}
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+  case "$line" in
+    *initialize*)
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"protocolVersion":"2024-11-05","capabilities":{{"tools":{{}}}},"serverInfo":{{"name":"delayed","version":"1.0.0"}}}}}}\n' "$id"
+      ;;
+    *tools/list*)
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"tools":[{{"name":"hello","description":"Delayed hello","inputSchema":{{"type":"object","properties":{{}}}}}}]}}}}\n' "$id"
+      ;;
+  esac
+done
+"#
+        ),
+    )
+    .expect("write delayed MCP script");
+
+    let mut servers = HashMap::new();
+    servers.insert(
+        "delayed".to_string(),
+        McpServerConfig {
+            command: "bash".to_string(),
+            args: vec![server_script.to_string_lossy().to_string()],
+            env: HashMap::new(),
+            transport: None,
+            url: None,
+            headers: HashMap::new(),
+            auth: None,
+            shared: false,
+        },
+    );
+    (temp_dir, McpConfig { servers })
+}
+
+#[tokio::test]
+async fn mcp_registry_diagnostics_tracks_management_and_server_tools() {
+    let registry = Registry::empty();
+    let diagnostics = registry.mcp_registry_diagnostics().await;
+    assert!(!diagnostics.mcp_management_registered);
+    assert_eq!(diagnostics.mcp_server_tool_count, 0);
+
+    let (_temp_dir, config) = delayed_mcp_server_config(0.0);
+    let manager = Arc::new(RwLock::new(McpManager::with_config(config)));
+    registry
+        .register_mcp_tools_from_manager(None, manager)
+        .await;
+
+    for _ in 0..20 {
+        let diagnostics = registry.mcp_registry_diagnostics().await;
+        if diagnostics.mcp_server_tool_count == 1 {
+            assert!(diagnostics.mcp_management_registered);
+            assert_eq!(
+                diagnostics.mcp_server_tool_names,
+                vec!["mcp__delayed__hello"]
+            );
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    panic!(
+        "delayed MCP fixture did not register server tool; diagnostics={:?}",
+        registry.mcp_registry_diagnostics().await
+    );
+}
+
+#[tokio::test]
+async fn register_mcp_tools_returns_before_delayed_server_tools_are_ready() {
+    let registry = Registry::empty();
+    let (_temp_dir, config) = delayed_mcp_server_config(0.4);
+    let manager = Arc::new(RwLock::new(McpManager::with_config(config)));
+
+    registry
+        .register_mcp_tools_from_manager(None, manager)
+        .await;
+
+    let immediate = registry.mcp_registry_diagnostics().await;
+    assert!(immediate.mcp_management_registered);
+    assert_eq!(
+        immediate.mcp_server_tool_count, 0,
+        "C0 fixture documents the current readiness gap: management tool is registered synchronously, server tools arrive later"
+    );
+
+    for _ in 0..30 {
+        let diagnostics = registry.mcp_registry_diagnostics().await;
+        if diagnostics.mcp_server_tool_count == 1 {
+            assert_eq!(
+                diagnostics.mcp_server_tool_names,
+                vec!["mcp__delayed__hello"]
+            );
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    panic!(
+        "delayed MCP server tool never appeared after background registration; diagnostics={:?}",
+        registry.mcp_registry_diagnostics().await
+    );
 }
 
 #[test]
