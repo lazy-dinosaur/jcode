@@ -45,6 +45,7 @@ async fn side_panel_tool_writes_page() {
                 working_dir: None,
                 stdin_request_tx: None,
                 graceful_shutdown_signal: None,
+            turn_cancel_signal: None,
                 execution_mode: crate::tool::ToolExecutionMode::AgentTurn,
             },
         )
@@ -76,6 +77,7 @@ async fn side_panel_tool_loads_file_with_derived_page_id() {
                 working_dir: Some(temp.path().to_path_buf()),
                 stdin_request_tx: None,
                 graceful_shutdown_signal: None,
+            turn_cancel_signal: None,
                 execution_mode: crate::tool::ToolExecutionMode::AgentTurn,
             },
         )

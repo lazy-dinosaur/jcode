@@ -10,6 +10,7 @@ fn test_ctx(root: &Path) -> ToolContext {
         working_dir: Some(root.to_path_buf()),
         stdin_request_tx: None,
         graceful_shutdown_signal: None,
+            turn_cancel_signal: None,
         execution_mode: super::super::ToolExecutionMode::Direct,
     }
 }

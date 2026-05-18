@@ -848,6 +848,7 @@ impl BashTool {
         let mut child = crate::platform::spawn_detached(&mut cmd)?;
         let pid = child.id();
         let shutdown_signal = ctx.graceful_shutdown_signal.clone();
+        let turn_cancel_signal = ctx.turn_cancel_signal.clone();
 
         loop {
             if let Some(status) = child.try_wait()? {
@@ -871,6 +872,21 @@ impl BashTool {
                 let _ = tokio::fs::remove_file(&info.output_file).await;
                 let _ = tokio::fs::remove_file(&info.status_file).await;
                 return Err(anyhow::anyhow!("Command timed out after {}ms", timeout_ms));
+            }
+
+            if turn_cancel_signal
+                .as_ref()
+                .map(|signal| signal.is_set())
+                .unwrap_or(false)
+            {
+                let _ = crate::platform::signal_detached_process_group(pid, libc::SIGTERM);
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                if child.try_wait()?.is_none() {
+                    let _ = crate::platform::signal_detached_process_group(pid, libc::SIGKILL);
+                }
+                let _ = tokio::fs::remove_file(&info.output_file).await;
+                let _ = tokio::fs::remove_file(&info.status_file).await;
+                return Err(anyhow::anyhow!("Command cancelled by user interrupt"));
             }
 
             if shutdown_signal

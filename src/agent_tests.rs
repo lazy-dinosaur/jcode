@@ -36,6 +36,11 @@ struct CancelAwareProvider {
     observed_cancel: Arc<AtomicBool>,
 }
 
+struct CancelAwareTool {
+    entered: Arc<tokio::sync::Notify>,
+    observed_cancel: Arc<AtomicBool>,
+}
+
 struct DelayTestTool;
 struct SpawnTestTool;
 
@@ -376,6 +381,31 @@ impl Tool for DelayTestTool {
 }
 
 #[async_trait]
+impl Tool for CancelAwareTool {
+    fn name(&self) -> &str {
+        "cancel_aware_test"
+    }
+
+    fn description(&self) -> &str {
+        "Test-only cancellation-aware tool"
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object", "properties": {}})
+    }
+
+    async fn execute(&self, _input: serde_json::Value, ctx: ToolContext) -> Result<ToolOutput> {
+        let cancel_signal = ctx
+            .turn_cancel_signal()
+            .expect("agent turn tool context should include turn cancel signal");
+        self.entered.notify_waiters();
+        cancel_signal.notified().await;
+        self.observed_cancel.store(true, Ordering::SeqCst);
+        Ok(ToolOutput::new("tool observed cancellation"))
+    }
+}
+
+#[async_trait]
 impl Tool for SpawnTestTool {
     fn name(&self) -> &str {
         "swarm"
@@ -551,6 +581,75 @@ async fn run_turn_streaming_mpsc_passes_turn_cancel_signal_to_provider() {
             .contains("provider observed cancellation")
     );
     assert!(observed_cancel.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn run_turn_streaming_mpsc_passes_turn_cancel_signal_to_tool_context() {
+    let _guard = crate::storage::lock_test_env();
+    let (provider, calls) = SequentialProvider::new(vec![
+        vec![
+            StreamEvent::ToolUseStart {
+                id: "call_cancel_aware".to_string(),
+                name: "cancel_aware_test".to_string(),
+            },
+            StreamEvent::ToolInputDelta("{}".to_string()),
+            StreamEvent::ToolUseEnd,
+            StreamEvent::MessageEnd {
+                stop_reason: Some("tool_use".to_string()),
+            },
+        ],
+        text_response_events("done after cooperative tool cancel"),
+    ]);
+    let provider: Arc<dyn Provider> = Arc::new(provider);
+    let registry = Registry::new(provider.clone()).await;
+    let tool_entered = Arc::new(tokio::sync::Notify::new());
+    let tool_observed_cancel = Arc::new(AtomicBool::new(false));
+    registry
+        .register(
+            "cancel_aware_test".to_string(),
+            Arc::new(CancelAwareTool {
+                entered: tool_entered.clone(),
+                observed_cancel: tool_observed_cancel.clone(),
+            }),
+        )
+        .await;
+
+    let mut agent = Agent::new(provider, registry);
+    agent.add_message(
+        Role::User,
+        vec![ContentBlock::Text {
+            text: "call cancel aware tool".to_string(),
+            cache_control: None,
+        }],
+    );
+    let turn_control = agent.turn_control();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let task = tokio::spawn(async move { agent.run_turn_streaming_mpsc(tx).await });
+
+    tokio::time::timeout(Duration::from_secs(5), tool_entered.notified())
+        .await
+        .expect("tool should start and receive context");
+    turn_control.request_stop(TurnStopReason::UserInterrupt);
+
+    tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .expect("streaming task should finish after tool observes cancel")
+        .expect("task should join")
+        .expect("turn should recover after cooperative tool cancellation");
+    assert!(tool_observed_cancel.load(Ordering::SeqCst));
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+    let outputs: Vec<String> = std::iter::from_fn(|| rx.try_recv().ok())
+        .filter_map(|event| match event {
+            ServerEvent::ToolDone { output, .. } => Some(output),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        outputs
+            .iter()
+            .any(|output| output.contains("tool observed cancellation"))
+    );
 }
 
 fn empty_response_events() -> Vec<StreamEvent> {

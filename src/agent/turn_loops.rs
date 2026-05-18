@@ -804,6 +804,7 @@ impl Agent {
                             working_dir: self.working_dir().map(PathBuf::from),
                             stdin_request_tx: self.stdin_request_tx.clone(),
                             graceful_shutdown_signal: Some(self.graceful_shutdown.clone()),
+                            turn_cancel_signal: Some(self.turn_stop_signal()),
                             execution_mode: ToolExecutionMode::AgentTurn,
                         };
                         crate::telemetry::record_tool_call();
@@ -1079,6 +1080,7 @@ impl Agent {
                     working_dir: self.working_dir().map(PathBuf::from),
                     stdin_request_tx: self.stdin_request_tx.clone(),
                     graceful_shutdown_signal: Some(self.graceful_shutdown.clone()),
+                    turn_cancel_signal: Some(self.turn_stop_signal()),
                     execution_mode: ToolExecutionMode::AgentTurn,
                 };
                 let per_tool_start = |tc: &ToolCall| {

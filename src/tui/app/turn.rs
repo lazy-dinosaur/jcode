@@ -809,6 +809,7 @@ impl App {
                                             working_dir: self.session.working_dir.as_deref().map(PathBuf::from),
                                             stdin_request_tx: None,
                                             graceful_shutdown_signal: None,
+            turn_cancel_signal: None,
                                             execution_mode: crate::tool::ToolExecutionMode::AgentTurn,
                                         };
                                         let tool_result = self.registry.execute(&tool_name, input, ctx).await;
@@ -1067,6 +1068,7 @@ impl App {
                     working_dir: self.session.working_dir.as_deref().map(PathBuf::from),
                     stdin_request_tx: None,
                     graceful_shutdown_signal: None,
+            turn_cancel_signal: None,
                     execution_mode: crate::tool::ToolExecutionMode::AgentTurn,
                 };
 

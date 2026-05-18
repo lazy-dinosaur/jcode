@@ -8,6 +8,7 @@ fn make_ctx() -> ToolContext {
         working_dir: Some(std::env::temp_dir()),
         stdin_request_tx: None,
         graceful_shutdown_signal: None,
+            turn_cancel_signal: None,
         execution_mode: crate::tool::ToolExecutionMode::Direct,
     }
 }
