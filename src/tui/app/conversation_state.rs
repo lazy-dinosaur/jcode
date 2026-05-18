@@ -264,6 +264,24 @@ impl App {
     ) {
         let new_state = manager.persisted_state();
         if self.session.compaction != new_state {
+            let previous_state = self.session.compaction.clone();
+            if let Some(state) = new_state.as_ref() {
+                let newly_compacted = previous_state
+                    .as_ref()
+                    .map(|previous| state.compacted_count > previous.compacted_count)
+                    .unwrap_or(state.compacted_count > 0);
+                if newly_compacted {
+                    let auto = manager
+                        .last_compaction_event()
+                        .is_some_and(|event| event.trigger != "manual");
+                    self.session.record_durable_compaction_turn(
+                        previous_state.as_ref(),
+                        state,
+                        auto,
+                        false,
+                    );
+                }
+            }
             self.session.compaction = new_state;
             if let Err(err) = self.session.save() {
                 crate::logging::error(&format!(
@@ -349,10 +367,11 @@ impl App {
                     }
                 }
                 let messages = manager.messages_for_api_with(&base_messages);
-                let event = manager.take_compaction_event();
-                if event.is_some() || discarded_oversized_native {
+                let has_event = manager.last_compaction_event().is_some();
+                if has_event || discarded_oversized_native {
                     self.sync_session_compaction_state_from_manager(&manager);
                 }
+                let event = manager.take_compaction_event();
                 (messages, event)
             }
             Err(_) => (base_messages, None),
@@ -367,12 +386,15 @@ impl App {
         }
         let provider_messages = self.materialized_provider_messages();
         let compaction = self.registry.compaction();
-        if let Ok(mut manager) = compaction.try_write()
-            && let Some(event) = manager.poll_compaction_event_with(&provider_messages)
-        {
-            self.sync_session_compaction_state_from_manager(&manager);
-            self.handle_compaction_event(event);
-            return true;
+        if let Ok(mut manager) = compaction.try_write() {
+            manager.check_and_apply_compaction_with(&provider_messages);
+            if manager.last_compaction_event().is_some() {
+                self.sync_session_compaction_state_from_manager(&manager);
+                if let Some(event) = manager.take_compaction_event() {
+                    self.handle_compaction_event(event);
+                    return true;
+                }
+            }
         }
         false
     }

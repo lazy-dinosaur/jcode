@@ -811,18 +811,20 @@ fn test_save_persists_compaction_turns_round_trip() -> Result<()> {
         None,
         Some("compaction turns persistence test".to_string()),
     );
-    session.compaction_turns.push(crate::session::StoredCompactionTurn {
-        id: "turn-1".to_string(),
-        marker_message_id: "msg-marker-1".to_string(),
-        summary_message_id: "msg-summary-1".to_string(),
-        auto: true,
-        overflow: false,
-        tail_start_id: Some("msg-tail-7".to_string()),
-        previous_summary_id: None,
-        summary_of_message_ids: vec!["msg-1".to_string(), "msg-2".to_string()],
-        backfilled_from_legacy: false,
-        created_at: Some(chrono::Utc::now()),
-    });
+    session
+        .compaction_turns
+        .push(crate::session::StoredCompactionTurn {
+            id: "turn-1".to_string(),
+            marker_message_id: "msg-marker-1".to_string(),
+            summary_message_id: "msg-summary-1".to_string(),
+            auto: true,
+            overflow: false,
+            tail_start_id: Some("msg-tail-7".to_string()),
+            previous_summary_id: None,
+            summary_of_message_ids: vec!["msg-1".to_string(), "msg-2".to_string()],
+            backfilled_from_legacy: false,
+            created_at: Some(chrono::Utc::now()),
+        });
 
     session.save()?;
 
@@ -841,6 +843,76 @@ fn test_save_persists_compaction_turns_round_trip() -> Result<()> {
     );
     assert!(!loaded_turn.is_legacy_backfill());
     assert!(loaded_turn.has_durable_messages());
+    Ok(())
+}
+
+#[test]
+fn test_record_durable_compaction_turn_persists_artifacts_but_hides_from_provider() -> Result<()> {
+    let mut session = Session::create_with_id(
+        "session_durable_compaction_runtime_test".to_string(),
+        None,
+        Some("durable compaction runtime test".to_string()),
+    );
+    let msg1 = session.add_message(
+        Role::User,
+        vec![ContentBlock::Text {
+            text: "first".to_string(),
+            cache_control: None,
+        }],
+    );
+    let msg2 = session.add_message(
+        Role::Assistant,
+        vec![ContentBlock::Text {
+            text: "second".to_string(),
+            cache_control: None,
+        }],
+    );
+    let msg3 = session.add_message(
+        Role::User,
+        vec![ContentBlock::Text {
+            text: "tail".to_string(),
+            cache_control: None,
+        }],
+    );
+
+    let state = StoredCompactionState {
+        summary_text: "durable summary".to_string(),
+        openai_encrypted_content: None,
+        covers_up_to_turn: 2,
+        original_turn_count: 2,
+        compacted_count: 2,
+    };
+
+    assert!(session.record_durable_compaction_turn(None, &state, true, false));
+    assert_eq!(session.compaction_turns.len(), 1);
+    let turn = &session.compaction_turns[0];
+    assert!(turn.has_durable_messages());
+    assert!(turn.auto);
+    assert_eq!(turn.tail_start_id.as_deref(), Some(msg3.as_str()));
+    assert_eq!(turn.summary_of_message_ids, vec![msg1, msg2]);
+    assert_eq!(session.messages.len(), 5);
+
+    let uncached_provider_messages = session.messages_for_provider_uncached();
+    assert_eq!(uncached_provider_messages.len(), 3);
+    assert!(!uncached_provider_messages.iter().any(|message| {
+        message.content.iter().any(
+            |block| matches!(block, ContentBlock::Text { text, .. } if text == "durable summary"),
+        )
+    }));
+
+    let provider_messages = session.messages_for_provider();
+    assert_eq!(provider_messages.len(), 3);
+    assert!(provider_messages.iter().any(|message| {
+        message
+            .content
+            .iter()
+            .any(|block| matches!(block, ContentBlock::Text { text, .. } if text == "tail"))
+    }));
+    assert!(!provider_messages.iter().any(|message| {
+        message.content.iter().any(
+            |block| matches!(block, ContentBlock::Text { text, .. } if text == "durable summary"),
+        )
+    }));
     Ok(())
 }
 
@@ -911,18 +983,20 @@ fn test_load_does_not_backfill_when_compaction_turns_already_present() -> Result
         original_turn_count: 1,
         compacted_count: 1,
     });
-    session.compaction_turns.push(crate::session::StoredCompactionTurn {
-        id: "turn-real".to_string(),
-        marker_message_id: "msg-a".to_string(),
-        summary_message_id: "msg-b".to_string(),
-        auto: false,
-        overflow: false,
-        tail_start_id: None,
-        previous_summary_id: None,
-        summary_of_message_ids: Vec::new(),
-        backfilled_from_legacy: false,
-        created_at: None,
-    });
+    session
+        .compaction_turns
+        .push(crate::session::StoredCompactionTurn {
+            id: "turn-real".to_string(),
+            marker_message_id: "msg-a".to_string(),
+            summary_message_id: "msg-b".to_string(),
+            auto: false,
+            overflow: false,
+            tail_start_id: None,
+            previous_summary_id: None,
+            summary_of_message_ids: Vec::new(),
+            backfilled_from_legacy: false,
+            created_at: None,
+        });
     session.save()?;
 
     // Backfill must be idempotent: the existing turn stays, no synthetic

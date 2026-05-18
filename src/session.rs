@@ -42,10 +42,6 @@ pub(crate) use storage_paths::session_path_in_dir;
 use storage_paths::{estimate_json_bytes, persist_vector_mode_label};
 pub use storage_paths::{session_exists, session_journal_path, session_path};
 
-fn stored_messages_to_messages(messages: &[StoredMessage]) -> Vec<Message> {
-    messages.iter().map(StoredMessage::to_message).collect()
-}
-
 fn is_internal_system_reminder_message(message: &StoredMessage) -> bool {
     message
         .content
@@ -298,6 +294,111 @@ pub fn derive_session_provider_key(provider_name: &str) -> Option<String> {
 }
 
 impl Session {
+    fn compaction_artifact_message_ids(&self) -> HashSet<String> {
+        let mut ids = HashSet::new();
+        for turn in &self.compaction_turns {
+            if !turn.marker_message_id.is_empty() {
+                ids.insert(turn.marker_message_id.clone());
+            }
+            if !turn.summary_message_id.is_empty() {
+                ids.insert(turn.summary_message_id.clone());
+            }
+        }
+        ids
+    }
+
+    fn is_provider_visible_stored_message_id(
+        message: &StoredMessage,
+        compaction_artifact_ids: &HashSet<String>,
+    ) -> bool {
+        !compaction_artifact_ids.contains(message.id.as_str())
+    }
+
+    /// Record the durable C-1/C-4b sidecar artifacts for a newly-applied
+    /// compaction state.
+    ///
+    /// The legacy `Session.compaction` field remains the active provider payload
+    /// source. The marker + summary messages are persisted for replay/export and
+    /// diagnostics, then explicitly filtered out of provider payload rebuilding
+    /// by `provider_messages()` so the model does not see duplicate summaries.
+    pub(crate) fn record_durable_compaction_turn(
+        &mut self,
+        previous_state: Option<&StoredCompactionState>,
+        new_state: &StoredCompactionState,
+        auto: bool,
+        overflow: bool,
+    ) -> bool {
+        if previous_state == Some(new_state) {
+            return false;
+        }
+
+        let artifact_ids = self.compaction_artifact_message_ids();
+        let provider_visible: Vec<&StoredMessage> = self
+            .messages
+            .iter()
+            .filter(|message| Self::is_provider_visible_stored_message_id(message, &artifact_ids))
+            .collect();
+
+        let summary_of_message_ids: Vec<String> = provider_visible
+            .iter()
+            .take(new_state.compacted_count)
+            .map(|message| message.id.clone())
+            .collect();
+        let tail_start_id = provider_visible
+            .iter()
+            .nth(new_state.compacted_count)
+            .map(|message| message.id.clone());
+        let previous_summary_id = self
+            .compaction_turns
+            .iter()
+            .rev()
+            .find(|turn| !turn.is_legacy_backfill() && !turn.summary_message_id.is_empty())
+            .map(|turn| turn.id.clone());
+
+        let turn_id = new_id("compaction_turn");
+        let marker_message_id = new_id("message");
+        let summary_message_id = new_id("message");
+        let now = Utc::now();
+
+        self.append_stored_message(StoredMessage {
+            id: marker_message_id.clone(),
+            role: Role::User,
+            content: Vec::new(),
+            display_role: None,
+            timestamp: Some(now),
+            tool_duration_ms: None,
+            token_usage: None,
+        });
+        self.append_stored_message(StoredMessage {
+            id: summary_message_id.clone(),
+            role: Role::Assistant,
+            content: vec![ContentBlock::Text {
+                text: new_state.summary_text.clone(),
+                cache_control: None,
+            }],
+            display_role: None,
+            timestamp: Some(now),
+            tool_duration_ms: None,
+            token_usage: None,
+        });
+
+        self.compaction_turns.push(StoredCompactionTurn {
+            id: turn_id,
+            marker_message_id,
+            summary_message_id,
+            auto,
+            overflow,
+            tail_start_id,
+            previous_summary_id,
+            summary_of_message_ids,
+            backfilled_from_legacy: false,
+            created_at: Some(now),
+        });
+        self.mark_memory_profile_dirty();
+        self.mark_messages_full_dirty();
+        true
+    }
+
     fn session_from_startup_stub(stub: SessionStartupStub) -> Self {
         let mut session = Self::create_with_id(stub.id, stub.parent_id, stub.title);
         session.custom_title = stub.custom_title;
@@ -1356,12 +1457,19 @@ impl Session {
             || self.provider_messages_cache_len > self.messages.len();
 
         if needs_full_rebuild {
+            let compaction_artifact_ids = self.compaction_artifact_message_ids();
             self.provider_messages_cache.clear();
             self.provider_message_prefix_hashes_cache.clear();
             self.provider_messages_cache.reserve(self.messages.len());
             self.provider_message_prefix_hashes_cache
                 .reserve(self.messages.len());
             for index in 0..self.messages.len() {
+                if !Self::is_provider_visible_stored_message_id(
+                    &self.messages[index],
+                    &compaction_artifact_ids,
+                ) {
+                    continue;
+                }
                 let message = self.messages[index].to_message();
                 self.push_provider_message_cache_entry(message);
             }
@@ -1373,11 +1481,18 @@ impl Session {
         if self.provider_messages_cache_mode == PersistVectorMode::Append
             && self.provider_messages_cache_len < self.messages.len()
         {
+            let compaction_artifact_ids = self.compaction_artifact_message_ids();
             let appended_len = self.messages.len() - self.provider_messages_cache_len;
             self.provider_messages_cache.reserve(appended_len);
             self.provider_message_prefix_hashes_cache
                 .reserve(appended_len);
             for index in self.provider_messages_cache_len..self.messages.len() {
+                if !Self::is_provider_visible_stored_message_id(
+                    &self.messages[index],
+                    &compaction_artifact_ids,
+                ) {
+                    continue;
+                }
                 let message = self.messages[index].to_message();
                 self.push_provider_message_cache_entry(message);
             }
@@ -1394,7 +1509,14 @@ impl Session {
     }
 
     pub fn messages_for_provider_uncached(&self) -> Vec<Message> {
-        stored_messages_to_messages(&self.messages)
+        let compaction_artifact_ids = self.compaction_artifact_message_ids();
+        self.messages
+            .iter()
+            .filter(|message| {
+                Self::is_provider_visible_stored_message_id(message, &compaction_artifact_ids)
+            })
+            .map(StoredMessage::to_message)
+            .collect()
     }
 
     pub fn messages_for_provider(&mut self) -> Vec<Message> {

@@ -13,11 +13,11 @@ impl Agent {
         let compaction = self.registry.compaction();
         let event = match compaction.try_write() {
             Ok(mut manager) => {
-                let event = manager.poll_compaction_event_with(&provider_messages);
-                if event.is_some() {
+                manager.check_and_apply_compaction_with(&provider_messages);
+                if manager.last_compaction_event().is_some() {
                     self.sync_session_compaction_state_from_manager(&manager);
                 }
-                event
+                manager.take_compaction_event()
             }
             Err(_) => return None,
         };
