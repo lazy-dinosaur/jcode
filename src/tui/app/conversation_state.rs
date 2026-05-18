@@ -252,7 +252,7 @@ impl App {
             } else {
                 manager.seed_restored_messages_with(&provider_messages);
             }
-            if manager.discard_oversized_openai_native_compaction() {
+            if manager.discard_native_compaction_for_provider(self.provider.name()) {
                 self.sync_session_compaction_state_from_manager(&manager);
             }
         };
@@ -360,7 +360,7 @@ impl App {
         match compaction.try_write() {
             Ok(mut manager) => {
                 let discarded_oversized_native =
-                    manager.discard_oversized_openai_native_compaction();
+                    manager.discard_native_compaction_for_provider(self.provider.name());
                 if self.provider.uses_jcode_compaction() {
                     let action = manager.ensure_context_fits(&base_messages, self.provider.clone());
                     match action {

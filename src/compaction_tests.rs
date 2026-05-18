@@ -365,6 +365,79 @@ async fn test_native_encrypted_compaction_blob_does_not_keep_usage_critical() {
     );
 }
 
+#[test]
+fn native_compaction_blob_is_kept_for_openai_when_sendable() {
+    let mut manager = CompactionManager::new().with_budget(DEFAULT_TOKEN_BUDGET);
+    let messages = vec![make_text_message(Role::User, "hello")];
+    let state = crate::session::StoredCompactionState {
+        summary_text: String::new(),
+        openai_encrypted_content: Some("sendable-native-blob".to_string()),
+        covers_up_to_turn: 1,
+        original_turn_count: 1,
+        compacted_count: 1,
+    };
+    manager.restore_persisted_state_with(&state, &messages);
+
+    assert!(!manager.discard_native_compaction_for_provider("openai"));
+    let persisted = manager.persisted_state().expect("state persists");
+    assert_eq!(
+        persisted.openai_encrypted_content.as_deref(),
+        Some("sendable-native-blob")
+    );
+    assert!(persisted.summary_text.is_empty());
+}
+
+#[test]
+fn native_compaction_blob_is_replaced_with_text_when_provider_cannot_consume_it() {
+    let mut manager = CompactionManager::new().with_budget(DEFAULT_TOKEN_BUDGET);
+    let messages = vec![make_text_message(Role::User, "hello")];
+    let state = crate::session::StoredCompactionState {
+        summary_text: String::new(),
+        openai_encrypted_content: Some("sendable-native-blob".to_string()),
+        covers_up_to_turn: 1,
+        original_turn_count: 1,
+        compacted_count: 1,
+    };
+    manager.restore_persisted_state_with(&state, &messages);
+
+    assert!(manager.discard_native_compaction_for_provider("anthropic"));
+    let persisted = manager.persisted_state().expect("state persists");
+    assert!(persisted.openai_encrypted_content.is_none());
+    assert!(
+        persisted
+            .summary_text
+            .contains("OpenAI native compaction state was discarded"),
+        "fallback text should make cross-provider failover usable"
+    );
+}
+
+#[test]
+fn oversized_openai_native_blob_uses_text_fallback() {
+    let mut manager = CompactionManager::new().with_budget(DEFAULT_TOKEN_BUDGET);
+    let messages = vec![make_text_message(Role::User, "hello")];
+    let state =
+        crate::session::StoredCompactionState {
+            summary_text: "existing text".to_string(),
+            openai_encrypted_content: Some("x".repeat(
+                crate::provider::openai_request::OPENAI_ENCRYPTED_CONTENT_SAFE_MAX_CHARS + 1,
+            )),
+            covers_up_to_turn: 1,
+            original_turn_count: 1,
+            compacted_count: 1,
+        };
+    manager.restore_persisted_state_with(&state, &messages);
+
+    assert!(manager.discard_native_compaction_for_provider("openai"));
+    let persisted = manager.persisted_state().expect("state persists");
+    assert!(persisted.openai_encrypted_content.is_none());
+    assert!(persisted.summary_text.contains("existing text"));
+    assert!(
+        persisted
+            .summary_text
+            .contains("OpenAI native compaction state was discarded")
+    );
+}
+
 #[tokio::test]
 async fn test_guard_at_100_percent_drops_messages() {
     let mut manager = CompactionManager::new().with_budget(1_000);
