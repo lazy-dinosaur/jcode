@@ -173,7 +173,7 @@ fn side_panel_mermaid_fit_fill_allows_wide_short_diagrams_above_200_percent() {
 }
 
 #[test]
-fn pinned_content_image_layout_does_not_auto_upscale_generated_wide_image() {
+fn pinned_content_image_layout_fits_generated_wide_image_to_width() {
     let layout = pinned_content_image_layout_with_font(
         1800,
         161,
@@ -185,12 +185,50 @@ fn pinned_content_image_layout_does_not_auto_upscale_generated_wide_image() {
 
     assert_eq!(
         layout.render_mode,
-        SidePanelImageRenderMode::ScrollableViewport { zoom_percent: 100 }
+        SidePanelImageRenderMode::ScrollableViewport { zoom_percent: 28 }
     );
     assert_eq!(
-        layout.rows, 9,
-        "pinned images should default to native-size readability instead of overfilling the pane"
+        layout.rows, 4,
+        "wide pinned images should fit the side pane width by default"
     );
+}
+
+#[test]
+fn pinned_attachment_image_layout_fits_display_wide_portrait_png_to_width() {
+    let layout = estimate_side_panel_attachment_image_layout_with_font(
+        840,
+        1100,
+        100,
+        67,
+        0,
+        false,
+        Some((8, 16)),
+    );
+
+    assert_eq!(
+        layout.render_mode,
+        SidePanelImageRenderMode::ScrollableViewport { zoom_percent: 95 }
+    );
+    assert_eq!(layout.rows, 66);
+}
+
+#[test]
+fn pinned_attachment_image_layout_fits_display_tall_image_to_height() {
+    let layout = estimate_side_panel_attachment_image_layout_with_font(
+        300,
+        1600,
+        80,
+        40,
+        0,
+        false,
+        Some((10, 20)),
+    );
+
+    assert_eq!(
+        layout.render_mode,
+        SidePanelImageRenderMode::ScrollableViewport { zoom_percent: 50 }
+    );
+    assert_eq!(layout.rows, 40);
 }
 
 #[test]
@@ -335,7 +373,10 @@ fn pinned_attachment_image_layout_does_not_auto_upscale_by_default() {
         Some((8, 16)),
     );
 
-    assert_eq!(layout.render_mode, SidePanelImageRenderMode::Fit);
+    assert_eq!(
+        layout.render_mode,
+        SidePanelImageRenderMode::ScrollableViewport { zoom_percent: 100 }
+    );
     assert_eq!(layout.rows, 15);
 }
 

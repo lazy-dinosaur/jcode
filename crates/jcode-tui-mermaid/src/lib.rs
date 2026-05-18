@@ -61,6 +61,8 @@ use std::panic;
 use std::path::{Path, PathBuf};
 #[cfg(feature = "renderer")]
 use std::process::{Command, Stdio};
+#[cfg(feature = "renderer")]
+use std::sync::RwLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock, mpsc};
 use std::time::Instant;
@@ -98,22 +100,47 @@ enum MermaidRendererPreference {
 }
 
 #[cfg(feature = "renderer")]
+type RendererPreferenceHook = fn() -> Option<&'static str>;
+
+#[cfg(feature = "renderer")]
+static RENDERER_PREFERENCE_HOOK: LazyLock<RwLock<Option<RendererPreferenceHook>>> =
+    LazyLock::new(|| RwLock::new(None));
+
+#[cfg(feature = "renderer")]
+pub fn set_renderer_preference_hook(hook: RendererPreferenceHook) {
+    if let Ok(mut guard) = RENDERER_PREFERENCE_HOOK.write() {
+        *guard = Some(hook);
+    }
+}
+
+#[cfg(not(feature = "renderer"))]
+pub fn set_renderer_preference_hook(_hook: fn() -> Option<&'static str>) {}
+
+#[cfg(feature = "renderer")]
+fn parse_renderer_preference(value: &str) -> MermaidRendererPreference {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "rust" | "mmdr" | "mermaid-rs" | "mermaid-rs-renderer" => MermaidRendererPreference::Rust,
+        "mmdc" | "cli" | "mermaid-cli" => MermaidRendererPreference::Mmdc,
+        "auto" | "" => MermaidRendererPreference::Auto,
+        other => {
+            log_warn(&format!(
+                "Unknown Mermaid renderer preference '{other}', using auto"
+            ));
+            MermaidRendererPreference::Auto
+        }
+    }
+}
+
+#[cfg(feature = "renderer")]
 fn renderer_preference_from_env() -> MermaidRendererPreference {
     match std::env::var("JCODE_MERMAID_RENDERER") {
-        Ok(value) => match value.trim().to_ascii_lowercase().as_str() {
-            "rust" | "mmdr" | "mermaid-rs" | "mermaid-rs-renderer" => {
-                MermaidRendererPreference::Rust
-            }
-            "mmdc" | "cli" | "mermaid-cli" => MermaidRendererPreference::Mmdc,
-            "auto" | "" => MermaidRendererPreference::Auto,
-            other => {
-                log_warn(&format!(
-                    "Unknown JCODE_MERMAID_RENDERER value '{other}', using auto"
-                ));
-                MermaidRendererPreference::Auto
-            }
-        },
-        Err(_) => MermaidRendererPreference::Rust,
+        Ok(value) => parse_renderer_preference(&value),
+        Err(_) => RENDERER_PREFERENCE_HOOK
+            .read()
+            .ok()
+            .and_then(|guard| guard.and_then(|hook| hook()))
+            .map(parse_renderer_preference)
+            .unwrap_or(MermaidRendererPreference::Rust),
     }
 }
 

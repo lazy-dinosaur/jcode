@@ -141,6 +141,29 @@ pub enum DiagramPanePosition {
     Top,
 }
 
+/// Mermaid rendering backend preference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MermaidRendererConfig {
+    /// Use the built-in Rust renderer (default, no external dependency).
+    #[default]
+    Rust,
+    /// Use the Mermaid CLI (`mmdc`) renderer when available.
+    Mmdc,
+    /// Use `mmdc` when available, otherwise fall back to the Rust renderer.
+    Auto,
+}
+
+impl MermaidRendererConfig {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Rust => "rust",
+            Self::Mmdc => "mmdc",
+            Self::Auto => "auto",
+        }
+    }
+}
+
 /// How much vertical spacing to use when rendering markdown blocks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -783,6 +806,8 @@ pub struct DisplayConfig {
     /// How to display mermaid diagrams (none/margin/pinned, default: none).
     /// Mermaid rendering is temporarily disabled for users unless JCODE_ENABLE_MERMAID=1.
     pub diagram_mode: DiagramDisplayMode,
+    /// Mermaid render backend (rust/mmdc/auto, default: rust). Env override: JCODE_MERMAID_RENDERER.
+    pub mermaid_renderer: MermaidRendererConfig,
     /// Markdown block spacing style (compact/document, default: compact)
     pub markdown_spacing: MarkdownSpacingMode,
     /// Pin read images to side pane (default: true)
@@ -820,6 +845,7 @@ impl Default for DisplayConfig {
             centered: false,
             show_thinking: false,
             diagram_mode: DiagramDisplayMode::default(),
+            mermaid_renderer: MermaidRendererConfig::default(),
             markdown_spacing: MarkdownSpacingMode::default(),
             idle_animation: true,
             prompt_entry_animation: true,

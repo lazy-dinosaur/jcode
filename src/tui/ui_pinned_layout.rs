@@ -128,6 +128,29 @@ fn estimate_side_panel_image_layout_with_font_inner(
     );
     let width_fill_zoom = axis_fill_zoom_percent(available_width, width, cell_w);
     let height_fill_zoom = axis_fill_zoom_percent(inner_height as u32, height, cell_h);
+    if !allow_auto_upscale {
+        let display_is_wide = width.saturating_mul(cell_h) >= height.saturating_mul(cell_w);
+        let orientation_fit_zoom = if display_is_wide {
+            width_fill_zoom
+        } else {
+            height_fill_zoom
+        }
+        .clamp(1, 100);
+        let needed = scaled_image_rows(image_h_cells, orientation_fit_zoom);
+        return SidePanelImageLayout {
+            rows: clamp_side_panel_image_rows(
+                needed
+                    .max(SIDE_PANEL_INLINE_IMAGE_MIN_ROWS)
+                    .min(inner_height.max(SIDE_PANEL_INLINE_IMAGE_MIN_ROWS)),
+                inner_height,
+                lines_before_image,
+                has_following_content,
+            ),
+            render_mode: SidePanelImageRenderMode::ScrollableViewport {
+                zoom_percent: orientation_fit_zoom,
+            },
+        };
+    }
     let max_auto_fill_zoom = if allow_auto_upscale {
         SIDE_PANEL_INLINE_IMAGE_MAX_AUTO_FILL_ZOOM_PERCENT
     } else {

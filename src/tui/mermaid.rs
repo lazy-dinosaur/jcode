@@ -2,6 +2,9 @@ pub use jcode_tui_mermaid::*;
 
 pub fn install_jcode_mermaid_hooks() {
     jcode_tui_mermaid::set_log_hooks(crate::logging::info, crate::logging::warn);
+    jcode_tui_mermaid::set_renderer_preference_hook(|| {
+        Some(crate::config::config().display.mermaid_renderer.as_str())
+    });
     jcode_tui_mermaid::set_render_completed_hook(|| {
         crate::bus::Bus::global().publish(crate::bus::BusEvent::MermaidRenderCompleted);
     });

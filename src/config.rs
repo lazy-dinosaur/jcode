@@ -8,9 +8,9 @@ pub use jcode_config_types::{
     BashToolConfig, CompactionConfig, CompactionMode, CrossProviderFailoverMode,
     DiagramDisplayMode, DiagramPanePosition, DiffDisplayMode, DisplayConfig, FeatureConfig,
     GatewayConfig, HookCommandConfig, HooksConfig, KeybindingsConfig, MarkdownSpacingMode,
-    NamedProviderAuth, NamedProviderConfig, NamedProviderModelConfig, NamedProviderType,
-    NativeScrollbarConfig, PromptConfig, ProviderConfig, ReloadConfig, SafetyConfig,
-    SessionPickerResumeAction, SwarmConfig, ToolConfig, UpdateChannel,
+    MermaidRendererConfig, NamedProviderAuth, NamedProviderConfig, NamedProviderModelConfig,
+    NamedProviderType, NativeScrollbarConfig, PromptConfig, ProviderConfig, ReloadConfig,
+    SafetyConfig, SessionPickerResumeAction, SwarmConfig, ToolConfig, UpdateChannel,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
