@@ -1212,6 +1212,22 @@ The 10-stage M47 patch series (`patch/m47-c0-deep-merge-profiles` through `patch
      - `cargo check -p jcode` clean.
    - Binary reinstall required: yes (runtime compaction prompt and session persistence behavior changed).
 
+52. Overflow recovery runtime wiring (M48-C5b)
+   - Commit: `a168b48d` `[m48-c5b] overflow recovery runtime wiring`.
+   - Patch branch: `patch/m48-c5b-overflow-runtime`.
+   - Purpose: connect the C-5a overflow helper layer to real context-limit recovery without doing the more invasive synthetic replay-message mutation yet.
+   - Runtime/config changes:
+     - Added `CompactionConfig.auto_continue` and `CompactionConfig.overflow_replay`, both defaulting to `true` with serde defaults for backward compatibility.
+     - Agent and TUI context-limit recovery paths now pass `overflow = true` when syncing a newly increased durable compaction state into `StoredCompactionTurn`.
+     - Agent overflow recovery calls `m48_overflow::plan_overflow_replay` when `overflow_replay` is enabled and logs whether a safe replay candidate exists.
+     - `auto_continue = false` gates automatic retry/continue after overflow compaction.
+     - M48 tracker splits the remaining transcript-mutation work into C-5c (`patch/m48-c5c-overflow-replay-message`).
+   - Tests:
+     - `jcode-config-types` tests cover default-on, missing-field compatibility, and explicit disable for `auto_continue` / `overflow_replay`.
+     - `session::tests::cases::test_record_durable_compaction_turn_marks_overflow_recovery` verifies durable sidecar `overflow=true` persistence.
+   - Validation: `cargo test -p jcode-config-types`; `cargo test -p jcode --lib session::tests::cases::test_record_durable_compaction_turn_marks_overflow_recovery`; `cargo check -p jcode`.
+   - Binary reinstall required: yes (runtime overflow recovery behavior and config schema changed).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
