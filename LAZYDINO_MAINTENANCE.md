@@ -1478,6 +1478,27 @@ The 10-stage M47 patch series (`patch/m47-c0-deep-merge-profiles` through `patch
      - `cargo check -p jcode`.
    - Binary reinstall required: yes (tool context ABI and bash runtime cancellation behavior changed).
 
+67. Interrupted transcript finalization (M49-C4)
+   - Commit: `79466f49` `[m49-c4] finalize interrupted transcripts`.
+   - Patch branch: `patch/m49-c4-interrupted-transcript-finalize`.
+   - Purpose: preserve partial assistant output and provider-required tool result pairing when a turn is interrupted, matching the opencode behavior where aborted parts are flushed as interrupted instead of disappearing under hard task abort.
+   - Runtime changes:
+     - Added `Agent::interruption_text_for_reason(...)` with stable placeholders for user cancel, server reload, client disconnect, superseded turns, and background moves.
+     - Added `persist_interrupted_assistant_turn(...)` to store partial text/reasoning and completed or in-flight tool calls as assistant content before exiting the turn.
+     - Added `add_interrupted_tool_results_for_calls(...)` to emit paired `ToolResult` placeholders for every interrupted `ToolUse` in a follow-up user message.
+     - Rewired the mpsc provider stream loop to listen to `turn_stop_signal` while reading provider events. On user interrupt it now emits the placeholder text, persists the partial transcript, and returns cleanly.
+     - Reused the placeholder helper for server-reload skipped tool calls after assistant tool-use messages have already been persisted.
+   - Tests:
+     - `run_turn_streaming_mpsc_persists_partial_text_on_user_interrupt` covers partial provider text surviving user interrupt.
+     - `interrupted_transcript_finalization_pairs_inflight_tool_use` covers an in-flight tool-use being finalized with a matching reload placeholder result.
+   - Validation:
+     - `cargo test -p jcode --lib agent::tests::run_turn_streaming_mpsc_persists_partial_text_on_user_interrupt`.
+     - `cargo test -p jcode --lib agent::tests::interrupted_transcript_finalization_pairs_inflight_tool_use`.
+     - `cargo test -p jcode --lib agent::tests::run_turn_streaming_mpsc_passes_turn_cancel_signal_to_provider`.
+     - `cargo test -p jcode --lib agent::tests::run_turn_streaming_mpsc_passes_turn_cancel_signal_to_tool_context`.
+     - `cargo check -p jcode`.
+   - Binary reinstall required: yes (agent stream interruption and transcript persistence behavior changed).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
