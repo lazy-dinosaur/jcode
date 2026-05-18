@@ -2273,6 +2273,305 @@ pub mod m48_overflow {
     }
 }
 
+/// M48-C6: OpenAI native compaction coexistence helpers.
+///
+/// Jcode keeps two parallel summary representations once an OpenAI Responses
+/// API session has been native-compacted:
+/// 1. The provider-side opaque `encrypted_content` blob, which lets a
+///    follow-up Responses turn skip resending the entire history.
+/// 2. A plain-text Markdown anchored summary (M48-C4a), which is what
+///    every non-OpenAI provider, the session search index, the export
+///    tooling, and human reviewers actually read.
+///
+/// This module formalizes the *precedence rules* between those two so that
+/// every caller (provider request builder, session export, replay path)
+/// makes the same decision instead of re-inventing the logic. The rules
+/// mirror the existing `discard_oversized_openai_native_compaction`
+/// behavior in `src/compaction.rs` plus the safe / hard limits already
+/// shipped in `jcode-provider-openai::request`:
+///
+/// - Active provider is OpenAI Responses AND encrypted blob length is
+///   within the safe limit -> use the native blob, suppress the text
+///   summary in the provider payload to save tokens.
+/// - Active provider is OpenAI but the blob is oversized -> drop the
+///   blob, fall back to the text summary, and emit a one-line
+///   diagnostic so the caller can log it.
+/// - Active provider is anything else (Anthropic, Gemini, OpenRouter,
+///   etc.) -> always use the text summary; the encrypted blob is
+///   meaningless to them.
+/// - Search / export contexts -> always use the text summary; encrypted
+///   bytes never leave the OpenAI request path.
+///
+/// The decision is exposed as a pure function returning a small enum so
+/// callers can pattern-match without recomputing thresholds. Constants
+/// are passed in (rather than reaching into `jcode-provider-openai`)
+/// because `jcode-compaction-core` must stay provider-agnostic; the
+/// provider crate is responsible for plugging its own limits in.
+pub mod m48_native {
+    /// Which representation of an anchored summary a caller should use
+    /// for the current provider payload.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum SummaryRepresentation {
+        /// Use the OpenAI provider-native `encrypted_content` blob; do
+        /// not also include the text summary so the request stays
+        /// compact. Carries the blob's length for telemetry only.
+        Native { encrypted_content_len: usize },
+        /// Use the plain-text summary. Set when the active provider is
+        /// not OpenAI, or when the OpenAI blob would exceed the safe
+        /// limit. `dropped_native_len` is `Some(n)` when we also had to
+        /// discard an oversized blob (so the caller can log it).
+        Text { dropped_native_len: Option<usize> },
+        /// Neither representation is available. Callers should resend
+        /// the verbatim head messages or trigger another compaction.
+        None,
+    }
+
+    /// Whether the active provider can replay an OpenAI Responses
+    /// `encrypted_content` payload. This is a tiny tagged enum so we
+    /// do not have to import provider crates into `compaction-core`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum ProviderKind {
+        /// OpenAI Responses-compatible provider (gpt-5, gpt-5.5,
+        /// gpt-5.1, etc). The only kind that can consume native blobs.
+        OpenAIResponses,
+        /// Anthropic Messages API.
+        Anthropic,
+        /// Google Gemini.
+        Gemini,
+        /// OpenRouter (Chat Completions; no native compaction support).
+        OpenRouter,
+        /// Any other provider; treated like a non-OpenAI provider.
+        Other,
+    }
+
+    impl ProviderKind {
+        /// True when this provider's request shape accepts
+        /// `encrypted_content` items. Today only the OpenAI Responses
+        /// API does; future expansion happens here.
+        pub fn supports_native_encrypted_content(self) -> bool {
+            matches!(self, ProviderKind::OpenAIResponses)
+        }
+    }
+
+    /// Decide which summary representation to use for the current
+    /// provider payload.
+    ///
+    /// `safe_max_chars` is the per-request safe ceiling for the
+    /// encrypted blob (today: `OPENAI_ENCRYPTED_CONTENT_SAFE_MAX_CHARS`
+    /// from `jcode-provider-openai::request`). Callers in non-OpenAI
+    /// paths can pass any value; we only consult it when the provider
+    /// is OpenAI and the blob is `Some`.
+    pub fn decide_summary_representation(
+        provider: ProviderKind,
+        encrypted_content: Option<&str>,
+        text_summary: Option<&str>,
+        safe_max_chars: usize,
+    ) -> SummaryRepresentation {
+        let has_text = text_summary.map(|s| !s.trim().is_empty()).unwrap_or(false);
+
+        // Non-OpenAI providers (and search/export) never get the blob.
+        if !provider.supports_native_encrypted_content() {
+            return if has_text {
+                SummaryRepresentation::Text { dropped_native_len: None }
+            } else {
+                SummaryRepresentation::None
+            };
+        }
+
+        // OpenAI path: prefer native when sendable.
+        match encrypted_content {
+            Some(blob) if blob.len() <= safe_max_chars => SummaryRepresentation::Native {
+                encrypted_content_len: blob.len(),
+            },
+            Some(blob) => {
+                // Oversized: drop blob, fall back to text.
+                if has_text {
+                    SummaryRepresentation::Text {
+                        dropped_native_len: Some(blob.len()),
+                    }
+                } else {
+                    SummaryRepresentation::None
+                }
+            }
+            None => {
+                // No blob at all (first compaction event, or already
+                // discarded). Use text if present.
+                if has_text {
+                    SummaryRepresentation::Text { dropped_native_len: None }
+                } else {
+                    SummaryRepresentation::None
+                }
+            }
+        }
+    }
+
+    /// True when the active provider can keep a previously stored
+    /// encrypted blob across the upcoming request. Used by the
+    /// compaction runtime to decide whether to retain or discard
+    /// `Session.compaction.openai_encrypted_content` when the provider
+    /// changes mid-session.
+    ///
+    /// Mirrors the precedence rule: only OpenAI Responses can keep it;
+    /// switching to any other provider must drop it (callers may still
+    /// retain it on disk for forensic export, but the active in-memory
+    /// snapshot should treat it as unavailable for the next request).
+    pub fn provider_can_consume_blob(provider: ProviderKind) -> bool {
+        provider.supports_native_encrypted_content()
+    }
+
+    /// Convert a provider id string ("anthropic", "openai", "gemini",
+    /// "openrouter", ...) into a `ProviderKind`. Case-insensitive.
+    /// Unknown providers fall through to `Other`. Kept here so callers
+    /// do not have to maintain duplicate match statements.
+    pub fn classify_provider_id(provider_id: &str) -> ProviderKind {
+        match provider_id.to_ascii_lowercase().as_str() {
+            // The chat-completions transport never goes through the
+            // Responses API; only the Responses path consumes blobs.
+            "openai" | "openai-responses" => ProviderKind::OpenAIResponses,
+            "anthropic" | "claude" => ProviderKind::Anthropic,
+            "gemini" | "google" => ProviderKind::Gemini,
+            "openrouter" => ProviderKind::OpenRouter,
+            _ => ProviderKind::Other,
+        }
+    }
+
+    #[cfg(test)]
+    mod native_tests {
+        use super::*;
+
+        const SAFE: usize = 9_500_000;
+
+        #[test]
+        fn provider_kind_only_openai_supports_native_blob() {
+            assert!(ProviderKind::OpenAIResponses.supports_native_encrypted_content());
+            assert!(!ProviderKind::Anthropic.supports_native_encrypted_content());
+            assert!(!ProviderKind::Gemini.supports_native_encrypted_content());
+            assert!(!ProviderKind::OpenRouter.supports_native_encrypted_content());
+            assert!(!ProviderKind::Other.supports_native_encrypted_content());
+        }
+
+        #[test]
+        fn classify_provider_id_handles_known_aliases() {
+            assert_eq!(classify_provider_id("openai"), ProviderKind::OpenAIResponses);
+            assert_eq!(classify_provider_id("OpenAI"), ProviderKind::OpenAIResponses);
+            assert_eq!(classify_provider_id("openai-responses"), ProviderKind::OpenAIResponses);
+            assert_eq!(classify_provider_id("anthropic"), ProviderKind::Anthropic);
+            assert_eq!(classify_provider_id("CLAUDE"), ProviderKind::Anthropic);
+            assert_eq!(classify_provider_id("gemini"), ProviderKind::Gemini);
+            assert_eq!(classify_provider_id("google"), ProviderKind::Gemini);
+            assert_eq!(classify_provider_id("openrouter"), ProviderKind::OpenRouter);
+            assert_eq!(classify_provider_id("groq"), ProviderKind::Other);
+            assert_eq!(classify_provider_id(""), ProviderKind::Other);
+        }
+
+        #[test]
+        fn openai_with_sendable_blob_returns_native() {
+            let blob = "x".repeat(100_000);
+            let result = decide_summary_representation(
+                ProviderKind::OpenAIResponses,
+                Some(&blob),
+                Some("text summary"),
+                SAFE,
+            );
+            assert_eq!(
+                result,
+                SummaryRepresentation::Native { encrypted_content_len: 100_000 }
+            );
+        }
+
+        #[test]
+        fn openai_with_oversized_blob_falls_back_to_text_with_dropped_len() {
+            let blob = "x".repeat(SAFE + 1);
+            let result = decide_summary_representation(
+                ProviderKind::OpenAIResponses,
+                Some(&blob),
+                Some("text summary"),
+                SAFE,
+            );
+            assert_eq!(
+                result,
+                SummaryRepresentation::Text { dropped_native_len: Some(SAFE + 1) }
+            );
+        }
+
+        #[test]
+        fn openai_with_oversized_blob_and_no_text_returns_none() {
+            let blob = "x".repeat(SAFE + 1);
+            let result = decide_summary_representation(
+                ProviderKind::OpenAIResponses,
+                Some(&blob),
+                None,
+                SAFE,
+            );
+            assert_eq!(result, SummaryRepresentation::None);
+        }
+
+        #[test]
+        fn openai_without_blob_uses_text() {
+            let result = decide_summary_representation(
+                ProviderKind::OpenAIResponses,
+                None,
+                Some("text summary"),
+                SAFE,
+            );
+            assert_eq!(
+                result,
+                SummaryRepresentation::Text { dropped_native_len: None }
+            );
+        }
+
+        #[test]
+        fn anthropic_with_blob_still_uses_text() {
+            let blob = "x".repeat(100);
+            let result = decide_summary_representation(
+                ProviderKind::Anthropic,
+                Some(&blob),
+                Some("text summary"),
+                SAFE,
+            );
+            assert_eq!(
+                result,
+                SummaryRepresentation::Text { dropped_native_len: None }
+            );
+        }
+
+        #[test]
+        fn anthropic_with_no_text_returns_none() {
+            let result = decide_summary_representation(
+                ProviderKind::Anthropic,
+                None,
+                None,
+                SAFE,
+            );
+            assert_eq!(result, SummaryRepresentation::None);
+        }
+
+        #[test]
+        fn whitespace_only_text_summary_is_ignored() {
+            let result = decide_summary_representation(
+                ProviderKind::Gemini,
+                None,
+                Some("   \n  "),
+                SAFE,
+            );
+            assert_eq!(result, SummaryRepresentation::None);
+        }
+
+        #[test]
+        fn provider_can_consume_blob_matches_supports_helper() {
+            for p in [
+                ProviderKind::OpenAIResponses,
+                ProviderKind::Anthropic,
+                ProviderKind::Gemini,
+                ProviderKind::OpenRouter,
+                ProviderKind::Other,
+            ] {
+                assert_eq!(provider_can_consume_blob(p), p.supports_native_encrypted_content());
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
