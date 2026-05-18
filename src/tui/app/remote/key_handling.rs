@@ -2257,20 +2257,12 @@ async fn handle_remote_key_internal(
             } else if abort_awaiting_history_with_local_cache(app, remote).await {
                 return Ok(());
             } else if app.is_processing {
-                let disabled_auto_poke = app.auto_poke_incomplete_todos
-                    || app
-                        .queued_messages
-                        .iter()
-                        .any(|message| app_mod::commands::is_poke_message(message));
-                remote.cancel().await?;
-                if disabled_auto_poke {
-                    app_mod::commands::disable_auto_poke(app);
-                    app.set_status_notice("Interrupting... Auto-poke OFF");
-                } else {
-                    app.set_status_notice("Interrupting...");
+                if input::confirm_or_arm_escape_interrupt(app) {
+                    remote.cancel().await?;
                 }
             } else {
                 app.follow_chat_bottom();
+                input::clear_escape_interrupt_arm(app);
                 input::clear_input_for_escape(app);
             }
         }

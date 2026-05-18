@@ -1557,6 +1557,22 @@ The 10-stage M47 patch series (`patch/m47-c0-deep-merge-profiles` through `patch
      - `cargo check -p jcode`.
    - Binary reinstall required: yes (M49 final active binary should include the stress-tested cancellation stack).
 
+71. Two-step Esc interrupt confirmation hotfix (M49-C8)
+   - Commit: `7835d1c2` `[m49-c8] require second esc to interrupt`.
+   - Patch branch: `patch/m49-c8-two-step-esc-interrupt`.
+   - Purpose: restore the intended accidental-interrupt guard. A single `Esc` during processing is easy to hit accidentally, so it should only arm cancellation and show a hint; the second `Esc` confirms the interrupt.
+   - Runtime changes:
+     - Added `escape_interrupt_armed_until` to TUI `App` with a 2 second confirmation window.
+     - Local processing `Esc`: first press shows `Press Esc again to interrupt`; second press sets `cancel_requested` and preserves the existing interrupt/auto-poke/overnight cleanup semantics.
+     - Remote processing `Esc`: first press only shows the hint; second press sends `remote.cancel()`.
+     - `Ctrl+C` / `Ctrl+D` keep immediate cancel semantics while processing.
+     - Esc arm state is cleared when the turn completes or an interrupted server event is received.
+   - Validation:
+     - `cargo test -p jcode --lib escape_interrupt -- --nocapture`.
+     - `cargo test -p jcode --lib remote_escape_interrupt -- --nocapture`.
+     - `cargo check -p jcode`.
+   - Binary reinstall required: yes (interactive TUI key handling changed).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.

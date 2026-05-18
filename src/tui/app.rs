@@ -666,6 +666,8 @@ pub struct App {
     rewind_undo_snapshot: Option<LocalRewindUndoSnapshot>,
     // Cancel flag for interrupting generation
     cancel_requested: bool,
+    // Esc interrupt confirmation window. First Esc arms, second Esc confirms.
+    escape_interrupt_armed_until: Option<Instant>,
     // Quit confirmation: tracks when first Ctrl+C was pressed
     quit_pending: Option<Instant>,
     // Debounce redraw storms while the terminal is being resized.

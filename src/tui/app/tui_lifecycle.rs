@@ -350,6 +350,7 @@ impl App {
             provider_session_id: None,
             rewind_undo_snapshot: None,
             cancel_requested: false,
+            escape_interrupt_armed_until: None,
             quit_pending: None,
             last_resize_redraw: None,
             mcp_server_names: Vec::new(),
@@ -718,6 +719,7 @@ impl App {
             provider_session_id: None,
             rewind_undo_snapshot: None,
             cancel_requested: false,
+            escape_interrupt_armed_until: None,
             quit_pending: None,
             last_resize_redraw: None,
             mcp_server_names: Vec::new(), // Vec<(name, tool_count)>

@@ -153,8 +153,7 @@ fn test_model_picker_bedrock_selection_prefixes_model() {
 fn test_model_picker_bedrock_arn_selection_prefixes_model() {
     let mut app = create_test_app();
     app.is_remote = true;
-    let model =
-        "arn:aws:bedrock:us-east-2:302154194530:inference-profile/us.deepseek.r1-v1:0";
+    let model = "arn:aws:bedrock:us-east-2:302154194530:inference-profile/us.deepseek.r1-v1:0";
     app.remote_available_entries = vec![model.to_string()];
     app.remote_model_options = vec![crate::provider::ModelRoute {
         model: model.to_string(),
@@ -195,8 +194,7 @@ fn test_model_picker_bedrock_arn_selection_prefixes_model() {
 fn test_remote_fallback_bedrock_arn_does_not_create_openrouter_route() {
     let mut app = create_test_app();
     app.is_remote = true;
-    let model =
-        "arn:aws:bedrock:us-east-2:302154194530:inference-profile/us.deepseek.r1-v1:0";
+    let model = "arn:aws:bedrock:us-east-2:302154194530:inference-profile/us.deepseek.r1-v1:0";
     app.remote_available_entries = vec![model.to_string()];
     app.remote_model_options.clear();
 
@@ -205,9 +203,11 @@ fn test_remote_fallback_bedrock_arn_does_not_create_openrouter_route() {
     assert!(routes.iter().any(|route| {
         route.model == model && route.api_method == "bedrock" && route.provider == "AWS Bedrock"
     }));
-    assert!(!routes
-        .iter()
-        .any(|route| route.model == model && route.api_method == "openrouter"));
+    assert!(
+        !routes
+            .iter()
+            .any(|route| route.model == model && route.api_method == "openrouter")
+    );
 }
 
 #[test]
@@ -643,7 +643,6 @@ fn test_shift_enter_inserts_newline() {
     assert_eq!(app.interleave_message.as_deref(), None);
 }
 
-
 #[test]
 fn test_alt_enter_inserts_newline() {
     let mut app = create_test_app();
@@ -742,6 +741,16 @@ fn test_escape_interrupt_disables_auto_poke_while_processing() {
 
     app.handle_key(KeyCode::Esc, KeyModifiers::empty()).unwrap();
 
+    assert!(!app.cancel_requested);
+    assert!(app.auto_poke_incomplete_todos);
+    assert!(!app.queued_messages.is_empty());
+    assert_eq!(
+        app.status_notice(),
+        Some("Press Esc again to interrupt".to_string())
+    );
+
+    app.handle_key(KeyCode::Esc, KeyModifiers::empty()).unwrap();
+
     assert!(app.cancel_requested);
     assert!(!app.auto_poke_incomplete_todos);
     assert!(app.queued_messages.is_empty());
@@ -749,6 +758,26 @@ fn test_escape_interrupt_disables_auto_poke_while_processing() {
         app.status_notice(),
         Some("Interrupting... Auto-poke OFF".to_string())
     );
+}
+
+#[test]
+fn test_escape_interrupt_first_press_only_arms_while_processing() {
+    let mut app = create_test_app();
+    app.is_processing = true;
+    app.auto_poke_incomplete_todos = false;
+
+    app.handle_key(KeyCode::Esc, KeyModifiers::empty()).unwrap();
+
+    assert!(!app.cancel_requested);
+    assert_eq!(
+        app.status_notice(),
+        Some("Press Esc again to interrupt".to_string())
+    );
+
+    app.handle_key(KeyCode::Esc, KeyModifiers::empty()).unwrap();
+
+    assert!(app.cancel_requested);
+    assert_eq!(app.status_notice(), Some("Interrupting...".to_string()));
 }
 
 #[test]
