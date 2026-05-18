@@ -1494,6 +1494,80 @@ pub async fn build_transfer_compaction_state(
     }))
 }
 
+/// M48-C7b: assemble a `CompactionDiagnostics` digest for the TUI / debug
+/// surfaces from the live `CompactionStats`, the durable sidecar
+/// (`session.compaction_turns`), the most recent prune report (if any),
+/// and the OpenAI native blob state.
+///
+/// This is the runtime glue layer for M48-C7a: every UI surface that
+/// wants to render compaction state should call this so the numbers
+/// stay consistent. The function is intentionally pure so it can be
+/// unit-tested in isolation and re-used by future export tooling.
+///
+/// Arguments:
+/// - `stats` already-computed `CompactionStats` from the manager.
+/// - `compaction_turns` slice of durable sidecar entries (M48-C1).
+/// - `last_prune` most recent `PruneReport` if any prune pass ran since
+///   session load. `None` when the prune layer has not been invoked yet.
+/// - `provider_id` the active provider's id string (`"openai"`,
+///   `"anthropic"`, etc.). Used for the native precedence decision and
+///   for human-facing labeling.
+/// - `legacy_compaction` the legacy `Session.compaction` snapshot, used
+///   to discover the current OpenAI encrypted blob length when present.
+/// - `safe_max_chars` the OpenAI Responses safe ceiling (today
+///   `jcode_provider_openai::request::OPENAI_ENCRYPTED_CONTENT_SAFE_MAX_CHARS`).
+pub fn build_compaction_diagnostics(
+    stats: &CompactionStats,
+    compaction_turns: &[crate::session::StoredCompactionTurn],
+    last_prune: Option<jcode_compaction_core::m48_prune::PruneReport>,
+    provider_id: &str,
+    legacy_compaction: Option<&crate::session::StoredCompactionState>,
+    safe_max_chars: usize,
+) -> jcode_compaction_core::m48_diagnostics::CompactionDiagnostics {
+    use jcode_compaction_core::m48_diagnostics::{
+        CompactionDiagnostics, CompactionTurnDigest, NativeStateDigest,
+    };
+    use jcode_compaction_core::m48_native::{classify_provider_id, decide_summary_representation};
+
+    let turns = compaction_turns
+        .iter()
+        .map(|t| CompactionTurnDigest {
+            turn_id: t.id.clone(),
+            marker_message_id: t.marker_message_id.clone(),
+            summary_message_id: t.summary_message_id.clone(),
+            tail_start_id: t.tail_start_id.clone(),
+            backfilled_from_legacy: t.backfilled_from_legacy,
+            overflow: t.overflow,
+            has_previous_summary: t.previous_summary_id.is_some(),
+        })
+        .collect();
+
+    let provider_kind = classify_provider_id(provider_id);
+    let encrypted_blob = legacy_compaction
+        .as_ref()
+        .and_then(|s| s.openai_encrypted_content.as_deref());
+    let text_summary = legacy_compaction.map(|s| s.summary_text.as_str());
+    let representation = decide_summary_representation(
+        provider_kind,
+        encrypted_blob,
+        text_summary,
+        safe_max_chars,
+    );
+    let native_state = Some(NativeStateDigest {
+        provider_id: provider_id.to_ascii_lowercase(),
+        representation,
+    });
+
+    CompactionDiagnostics {
+        context_usage_ratio: stats.context_usage,
+        effective_tokens: stats.effective_tokens,
+        active_messages: stats.active_messages,
+        turns,
+        last_prune,
+        native_state,
+    }
+}
+
 #[cfg(test)]
 #[path = "compaction_tests.rs"]
 mod tests;
