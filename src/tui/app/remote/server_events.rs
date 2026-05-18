@@ -354,6 +354,7 @@ pub(in crate::tui::app) fn handle_server_event(
             app.is_processing = false;
             app.status = ProcessingStatus::Idle;
             app.status_detail = None;
+            super::super::input::clear_escape_interrupt_arm(app);
             app.stream_message_ended = false;
             app.processing_started = None;
             app.current_message_id = None;

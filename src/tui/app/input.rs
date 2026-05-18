@@ -16,6 +16,49 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 const INPUT_SHELL_MAX_OUTPUT_LEN: usize = 30_000;
+const ESC_INTERRUPT_CONFIRM_WINDOW: Duration = Duration::from_secs(2);
+
+pub(super) fn clear_escape_interrupt_arm(app: &mut App) {
+    app.escape_interrupt_armed_until = None;
+}
+
+pub(super) fn confirm_or_arm_escape_interrupt(app: &mut App) -> bool {
+    let now = Instant::now();
+    let already_armed = app
+        .escape_interrupt_armed_until
+        .map(|deadline| deadline >= now)
+        .unwrap_or(false);
+
+    if already_armed {
+        app.escape_interrupt_armed_until = None;
+        app.interleave_message = None;
+        app.pending_soft_interrupts.clear();
+        app.pending_soft_interrupt_requests.clear();
+        let disabled_auto_poke = app.auto_poke_incomplete_todos
+            || app
+                .queued_messages
+                .iter()
+                .any(|message| super::commands::is_poke_message(message));
+        let cancelled_overnight = app.cancel_overnight_for_interrupt();
+        if disabled_auto_poke {
+            super::commands::disable_auto_poke(app);
+            if cancelled_overnight {
+                app.set_status_notice("Interrupting... Auto-poke OFF, overnight cancelled");
+            } else {
+                app.set_status_notice("Interrupting... Auto-poke OFF");
+            }
+        } else if cancelled_overnight {
+            app.set_status_notice("Interrupting... Overnight cancelled");
+        } else {
+            app.set_status_notice("Interrupting...");
+        }
+        true
+    } else {
+        app.escape_interrupt_armed_until = Some(now + ESC_INTERRUPT_CONFIRM_WINDOW);
+        app.set_status_notice("Press Esc again to interrupt");
+        false
+    }
+}
 
 pub(super) fn extract_input_shell_command(input: &str) -> Option<&str> {
     input.trim().strip_prefix('!').map(str::trim)
@@ -1290,6 +1333,7 @@ pub(super) fn handle_global_control_shortcuts(
     match code {
         KeyCode::Char('c') | KeyCode::Char('d') => {
             if app.is_processing {
+                clear_escape_interrupt_arm(app);
                 app.cancel_requested = true;
                 app.interleave_message = None;
                 app.pending_soft_interrupts.clear();
@@ -1409,30 +1453,12 @@ pub(super) fn handle_basic_key(app: &mut App, code: KeyCode) -> bool {
                 app.inline_view_state = None;
                 clear_input_for_escape(app);
             } else if app.is_processing {
-                let disabled_auto_poke = app.auto_poke_incomplete_todos
-                    || app
-                        .queued_messages
-                        .iter()
-                        .any(|message| super::commands::is_poke_message(message));
-                app.cancel_requested = true;
-                app.interleave_message = None;
-                app.pending_soft_interrupts.clear();
-                app.pending_soft_interrupt_requests.clear();
-                let cancelled_overnight = app.cancel_overnight_for_interrupt();
-                if disabled_auto_poke {
-                    super::commands::disable_auto_poke(app);
-                    if cancelled_overnight {
-                        app.set_status_notice("Interrupting... Auto-poke OFF, overnight cancelled");
-                    } else {
-                        app.set_status_notice("Interrupting... Auto-poke OFF");
-                    }
-                } else if cancelled_overnight {
-                    app.set_status_notice("Interrupting... Overnight cancelled");
-                } else {
-                    app.set_status_notice("Interrupting...");
+                if confirm_or_arm_escape_interrupt(app) {
+                    app.cancel_requested = true;
                 }
             } else {
                 app.follow_chat_bottom();
+                clear_escape_interrupt_arm(app);
                 clear_input_for_escape(app);
             }
             true

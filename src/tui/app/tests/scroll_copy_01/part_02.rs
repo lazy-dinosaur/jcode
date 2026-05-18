@@ -100,11 +100,25 @@ fn test_remote_escape_interrupt_disables_auto_poke_while_processing() {
             },
         ]));
 
+    let initial_request_id = remote.next_request_id_for_test();
+
+    rt.block_on(app.handle_remote_key(KeyCode::Esc, KeyModifiers::empty(), &mut remote))
+        .unwrap();
+
+    assert_eq!(remote.next_request_id_for_test(), initial_request_id);
+    assert!(app.auto_poke_incomplete_todos);
+    assert!(!app.queued_messages.is_empty());
+    assert_eq!(
+        app.status_notice(),
+        Some("Press Esc again to interrupt".to_string())
+    );
+
     rt.block_on(app.handle_remote_key(KeyCode::Esc, KeyModifiers::empty(), &mut remote))
         .unwrap();
 
     assert!(!app.auto_poke_incomplete_todos);
     assert!(app.queued_messages.is_empty());
+    assert_eq!(remote.next_request_id_for_test(), initial_request_id + 1);
     assert_eq!(
         app.status_notice(),
         Some("Interrupting... Auto-poke OFF".to_string())
