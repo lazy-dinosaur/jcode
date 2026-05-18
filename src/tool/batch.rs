@@ -5,7 +5,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 const MAX_PARALLEL: usize = 10;
 
@@ -146,6 +146,49 @@ fn normalize_batch_input(mut input: Value) -> Value {
     input
 }
 
+fn canonical_json_value(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let ordered: BTreeMap<String, Value> = map
+                .iter()
+                .map(|(key, value)| (key.clone(), canonical_json_value(value)))
+                .collect();
+            let mut canonical = serde_json::Map::new();
+            for (key, value) in ordered {
+                canonical.insert(key, value);
+            }
+            Value::Object(canonical)
+        }
+        Value::Array(items) => Value::Array(items.iter().map(canonical_json_value).collect()),
+        other => other.clone(),
+    }
+}
+
+fn duplicate_subcall_key(tool_name: &str, parameters: &Value) -> String {
+    format!(
+        "{}:{}",
+        tool_name,
+        serde_json::to_string(&canonical_json_value(parameters))
+            .unwrap_or_else(|_| parameters.to_string())
+    )
+}
+
+fn reject_duplicate_subcalls(subcalls: &[(usize, String, Value)]) -> Result<()> {
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    for (index, tool_name, parameters) in subcalls {
+        let key = duplicate_subcall_key(tool_name, parameters);
+        if let Some(first_index) = seen.insert(key, *index) {
+            return Err(anyhow::anyhow!(
+                "Duplicate batch tool call: items {} and {} both invoke '{}' with identical parameters. Run it once or change the parameters.",
+                first_index + 1,
+                index + 1,
+                tool_name,
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[async_trait]
 impl Tool for BatchTool {
     fn name(&self) -> &str {
@@ -194,6 +237,7 @@ impl Tool for BatchTool {
                 (i, tool_name, parameters)
             })
             .collect();
+        reject_duplicate_subcalls(&subcalls)?;
 
         let mut running: HashMap<usize, ToolCall> = subcalls
             .iter()
