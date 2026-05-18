@@ -1379,6 +1379,25 @@ The 10-stage M47 patch series (`patch/m47-c0-deep-merge-profiles` through `patch
      - `cargo check -p jcode`.
    - Binary reinstall required: yes (explicit MCP reload semantics changed).
 
+62. MCP retry/backoff and M50 completion (M50-C4)
+   - Commit: `92e98c7d` `[m50-c4] add mcp retry and close milestone`.
+   - Patch branch: `patch/m50-c4-mcp-retry-status`.
+   - Purpose: finish M50 by making transient MCP startup failures recover automatically after selfdev reload reconnect and by closing the milestone validation record.
+   - Runtime changes:
+     - Added bounded MCP connect retry/backoff during registration after reconnect.
+     - Added env overrides: `JCODE_MCP_CONNECT_ATTEMPTS`, `JCODE_MCP_RETRY_BACKOFF_MS`, and the C-1 `JCODE_MCP_READINESS_TIMEOUT_MS` readiness barrier.
+     - Retry logs include attempt counts/backoff and success logs include final attempt count.
+     - Stdio MCP child EOF/read-error clears pending requests, and immediate child exit before initialize is detected, so retry does not wait for the full request timeout.
+     - Marked M50 complete in `docs/lazydino/milestones/M50.md`.
+   - Validation:
+     - `cargo test -p jcode --lib tool::mcp::tests` → 11 pass.
+     - `cargo test -p jcode --lib tool::tests::mcp_registry_diagnostics_tracks_management_and_server_tools`.
+     - `cargo test -p jcode --lib tool::tests::register_mcp_tools_waits_for_delayed_server_tools_within_barrier`.
+     - `cargo test -p jcode --lib tool::tests::register_mcp_tools_retries_transient_startup_failure`.
+     - `cargo test -p jcode --lib tool::tests::reconcile_mcp_tools_restores_missing_registry_entries`.
+     - `cargo check -p jcode`.
+   - Binary reinstall required: yes (MCP retry/readiness runtime behavior changed).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
