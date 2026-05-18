@@ -36,7 +36,10 @@ pub use jcode_compaction_core::{
     compacted_summary_text_block, content_char_count, emergency_truncate_tool_results,
     estimate_compaction_tokens, mean_embedding, message_char_count, safe_compaction_cutoff,
     semantic_cache_key, semantic_goal_text, semantic_message_text, summary_payload_char_count,
+    truncate_str_boundary,
 };
+
+const DURABLE_SUMMARY_TOOL_RESULT_MAX_CHARS: usize = 2_000;
 
 /// Result from background compaction task
 struct CompactionResult {
@@ -1052,6 +1055,14 @@ impl CompactionManager {
         self.last_compaction.take()
     }
 
+    /// Inspect the most recently applied compaction event without consuming it.
+    ///
+    /// Session sync uses this to persist sidecar metadata (manual vs auto) while
+    /// preserving the existing `take_compaction_event()` flow for UI notices.
+    pub fn last_compaction_event(&self) -> Option<&CompactionEvent> {
+        self.last_compaction.as_ref()
+    }
+
     /// Get messages for API call (with summary if compacted).
     /// Takes the full message list from the caller.
     pub fn messages_for_api_with(&mut self, all_messages: &[Message]) -> Vec<Message> {
@@ -1440,7 +1451,13 @@ async fn generate_compaction_artifact(
     }
 
     let max_prompt_chars = provider.context_window().saturating_sub(4000) * CHARS_PER_TOKEN;
-    let prompt = build_compaction_prompt(&messages, existing_summary.as_ref(), max_prompt_chars);
+    let prompt = build_durable_compaction_prompt(
+        &messages,
+        existing_summary
+            .as_ref()
+            .map(|summary| summary.text.as_str()),
+        max_prompt_chars,
+    );
 
     // Generate summary using simple completion
     let summary = provider
@@ -1457,6 +1474,77 @@ async fn generate_compaction_artifact(
         duration_ms: start.elapsed().as_millis() as u64,
         summarized_messages: messages.len(),
     })
+}
+
+fn build_durable_compaction_prompt(
+    messages: &[Message],
+    previous_summary: Option<&str>,
+    max_prompt_chars: usize,
+) -> String {
+    let mut history = durable_compaction_history_text(messages);
+    let overhead = jcode_compaction_core::m48_summary::SUMMARY_TEMPLATE.len()
+        + previous_summary.map(str::len).unwrap_or(0)
+        + 512;
+    if history.len() + overhead > max_prompt_chars && max_prompt_chars > overhead {
+        let budget = max_prompt_chars - overhead;
+        history = truncate_str_boundary(&history, budget).to_string();
+        history.push_str("\n\n... [earlier conversation truncated to fit context window]\n");
+    }
+
+    let context = format!("## Conversation History\n\n{}", history.trim());
+    jcode_compaction_core::m48_summary::build_prompt(previous_summary, &[context.as_str()])
+}
+
+fn durable_compaction_history_text(messages: &[Message]) -> String {
+    let mut out = String::new();
+    for message in messages {
+        let role = match message.role {
+            Role::User => "User",
+            Role::Assistant => "Assistant",
+        };
+        out.push_str("**");
+        out.push_str(role);
+        out.push_str(":**\n");
+        for block in &message.content {
+            match block {
+                ContentBlock::Text { text, .. } => {
+                    out.push_str(text);
+                    out.push('\n');
+                }
+                ContentBlock::ToolUse { name, input, .. } => {
+                    out.push_str("[Tool call: ");
+                    out.push_str(name);
+                    out.push_str(" input=");
+                    out.push_str(&input.to_string());
+                    out.push_str("]\n");
+                }
+                ContentBlock::ToolResult { content, .. } => {
+                    let truncated = if content.len() > DURABLE_SUMMARY_TOOL_RESULT_MAX_CHARS {
+                        format!(
+                            "{}... [tool output truncated for summary prompt]",
+                            truncate_str_boundary(content, DURABLE_SUMMARY_TOOL_RESULT_MAX_CHARS)
+                        )
+                    } else {
+                        content.clone()
+                    };
+                    out.push_str("[Tool result: ");
+                    out.push_str(&truncated);
+                    out.push_str("]\n");
+                }
+                ContentBlock::Reasoning { .. } => {}
+                ContentBlock::Image { media_type, .. } => {
+                    out.push_str("[Attached ");
+                    out.push_str(media_type);
+                    out.push_str(": replaced during compaction]\n");
+                }
+                ContentBlock::OpenAICompaction { .. } => {
+                    out.push_str("[OpenAI native compaction state]\n");
+                }
+            }
+        }
+        out.push('\n');
+    }
+    out
 }
 
 pub async fn build_transfer_compaction_state(
@@ -1547,12 +1635,8 @@ pub fn build_compaction_diagnostics(
         .as_ref()
         .and_then(|s| s.openai_encrypted_content.as_deref());
     let text_summary = legacy_compaction.map(|s| s.summary_text.as_str());
-    let representation = decide_summary_representation(
-        provider_kind,
-        encrypted_blob,
-        text_summary,
-        safe_max_chars,
-    );
+    let representation =
+        decide_summary_representation(provider_kind, encrypted_blob, text_summary, safe_max_chars);
     let native_state = Some(NativeStateDigest {
         provider_id: provider_id.to_ascii_lowercase(),
         representation,

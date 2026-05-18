@@ -466,6 +466,24 @@ impl Agent {
     ) {
         let new_state = manager.persisted_state();
         if self.session.compaction != new_state {
+            let previous_state = self.session.compaction.clone();
+            if let Some(state) = new_state.as_ref() {
+                let newly_compacted = previous_state
+                    .as_ref()
+                    .map(|previous| state.compacted_count > previous.compacted_count)
+                    .unwrap_or(state.compacted_count > 0);
+                if newly_compacted {
+                    let auto = manager
+                        .last_compaction_event()
+                        .is_some_and(|event| event.trigger != "manual");
+                    self.session.record_durable_compaction_turn(
+                        previous_state.as_ref(),
+                        state,
+                        auto,
+                        false,
+                    );
+                }
+            }
             self.session.compaction = new_state;
             if let Err(err) = self.session.save() {
                 logging::error(&format!(
@@ -562,10 +580,11 @@ impl Agent {
                         }
                         manager.messages_for_api_with(all_messages)
                     };
-                    let event = manager.take_compaction_event();
-                    if event.is_some() || discarded_oversized_native {
+                    let has_event = manager.last_compaction_event().is_some();
+                    if has_event || discarded_oversized_native {
                         self.sync_session_compaction_state_from_manager(&manager);
                     }
+                    let event = manager.take_compaction_event();
                     if event.is_some() {
                         self.note_compaction_applied();
                         self.persist_session_best_effort("compaction completion");

@@ -643,10 +643,15 @@ impl App {
             let compaction = self.registry.compaction();
             let done = if let Ok(mut manager) = compaction.try_write() {
                 let provider_messages = self.materialized_provider_messages();
-                if let Some(event) = manager.poll_compaction_event_with(&provider_messages) {
+                manager.check_and_apply_compaction_with(&provider_messages);
+                if manager.last_compaction_event().is_some() {
                     self.sync_session_compaction_state_from_manager(&manager);
-                    self.handle_compaction_event(event);
-                    true
+                    if let Some(event) = manager.take_compaction_event() {
+                        self.handle_compaction_event(event);
+                        true
+                    } else {
+                        false
+                    }
                 } else {
                     false
                 }

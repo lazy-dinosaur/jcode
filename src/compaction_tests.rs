@@ -43,6 +43,47 @@ fn make_text_message(role: Role, text: &str) -> Message {
 }
 
 #[test]
+fn durable_compaction_prompt_uses_anchored_template_and_previous_summary() {
+    let prompt = build_durable_compaction_prompt(
+        &[make_text_message(Role::User, "please keep this fact")],
+        Some("## Goal\n- old goal"),
+        20_000,
+    );
+
+    assert!(prompt.contains("Update the anchored summary below"));
+    assert!(prompt.contains("<previous-summary>\n## Goal\n- old goal\n</previous-summary>"));
+    assert!(prompt.contains("## Conversation History"));
+    assert!(prompt.contains("please keep this fact"));
+    assert!(prompt.contains("## Critical Context"));
+}
+
+#[test]
+fn durable_compaction_history_rewrites_media_and_caps_tool_results() {
+    let messages = vec![Message {
+        role: Role::User,
+        content: vec![
+            ContentBlock::Image {
+                media_type: "image/png".to_string(),
+                data: "secret-image-bytes".repeat(100),
+            },
+            ContentBlock::ToolResult {
+                tool_use_id: "tool-1".to_string(),
+                content: "x".repeat(DURABLE_SUMMARY_TOOL_RESULT_MAX_CHARS + 250),
+                is_error: None,
+            },
+        ],
+        timestamp: None,
+        tool_duration_ms: None,
+    }];
+
+    let history = durable_compaction_history_text(&messages);
+    assert!(history.contains("[Attached image/png: replaced during compaction]"));
+    assert!(!history.contains("secret-image-bytes"));
+    assert!(history.contains("[tool output truncated for summary prompt]"));
+    assert!(!history.contains(&"x".repeat(DURABLE_SUMMARY_TOOL_RESULT_MAX_CHARS + 1)));
+}
+
+#[test]
 fn test_new_manager() {
     let manager = CompactionManager::new();
     assert_eq!(manager.compacted_count, 0);
@@ -915,7 +956,9 @@ fn build_compaction_diagnostics_non_openai_uses_text_representation() {
     assert_eq!(native.provider_id, "anthropic");
     assert_eq!(
         native.representation,
-        SummaryRepresentation::Text { dropped_native_len: None }
+        SummaryRepresentation::Text {
+            dropped_native_len: None
+        }
     );
     // Header label should end with "text" for anthropic + text fallback.
     assert!(diag.one_line_header().ends_with("text"));
@@ -945,18 +988,14 @@ fn build_compaction_diagnostics_openai_with_blob_reports_native() {
         original_turn_count: 1,
         compacted_count: 1,
     };
-    let diag = super::build_compaction_diagnostics(
-        &stats,
-        &[],
-        None,
-        "openai",
-        Some(&legacy),
-        9_500_000,
-    );
+    let diag =
+        super::build_compaction_diagnostics(&stats, &[], None, "openai", Some(&legacy), 9_500_000);
     let native = diag.native_state.as_ref().expect("native_state set");
     assert_eq!(
         native.representation,
-        SummaryRepresentation::Native { encrypted_content_len: 1024 }
+        SummaryRepresentation::Native {
+            encrypted_content_len: 1024
+        }
     );
     assert!(diag.one_line_header().ends_with("native"));
 }
@@ -987,14 +1026,8 @@ fn build_compaction_diagnostics_openai_oversized_blob_drops_to_text() {
         original_turn_count: 1,
         compacted_count: 1,
     };
-    let diag = super::build_compaction_diagnostics(
-        &stats,
-        &[],
-        None,
-        "OpenAI",
-        Some(&legacy),
-        safe,
-    );
+    let diag =
+        super::build_compaction_diagnostics(&stats, &[], None, "OpenAI", Some(&legacy), safe);
     let native = diag.native_state.as_ref().expect("native_state set");
     assert_eq!(
         native.representation,
