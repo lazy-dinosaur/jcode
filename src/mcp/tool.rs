@@ -110,6 +110,26 @@ impl Tool for McpTool {
                         output_parts.push(format!("[Resource: {}]", resource.uri));
                     }
                 }
+                ContentBlock::ResourceLink(resource) => {
+                    let label = resource
+                        .title
+                        .as_deref()
+                        .or(resource.name.as_deref())
+                        .unwrap_or("Resource link");
+                    let mime = resource
+                        .mime_type
+                        .as_deref()
+                        .map(|mime| format!(" ({mime})"))
+                        .unwrap_or_default();
+                    if let Some(description) = resource.description.as_deref() {
+                        output_parts.push(format!(
+                            "[{label}{mime}: {}]\n{}",
+                            resource.uri, description
+                        ));
+                    } else {
+                        output_parts.push(format!("[{label}{mime}: {}]", resource.uri));
+                    }
+                }
             }
         }
 

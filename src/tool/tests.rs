@@ -152,6 +152,9 @@ while IFS= read -r line; do
     *tools/list*)
       printf '{{"jsonrpc":"2.0","id":%s,"result":{{"tools":[{{"name":"hello","description":"Delayed hello","inputSchema":{{"type":"object","properties":{{}}}}}}]}}}}\n' "$id"
       ;;
+    *tools/call*)
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"content":[{{"type":"text","text":"hello from delayed"}}],"isError":false}}}}\n' "$id"
+      ;;
   esac
 done
 "#
@@ -382,6 +385,52 @@ async fn reconcile_mcp_tools_restores_missing_registry_entries() {
 }
 
 #[tokio::test]
+async fn execute_repairs_missing_mcp_registry_entry_after_reload() {
+    let registry = Registry::empty();
+    let (_temp_dir, config) = delayed_mcp_server_config(0.0);
+    let manager = Arc::new(RwLock::new(McpManager::with_config(config)));
+
+    registry
+        .register_mcp_tools_from_manager(None, Arc::clone(&manager))
+        .await;
+    assert_eq!(
+        registry
+            .mcp_registry_diagnostics()
+            .await
+            .mcp_server_tool_names,
+        vec!["mcp__delayed__hello"]
+    );
+
+    let removed = registry.unregister_prefix("mcp__delayed__hello").await;
+    assert_eq!(removed, vec!["mcp__delayed__hello"]);
+
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let ctx = ToolContext {
+        session_id: "test".to_string(),
+        message_id: "test".to_string(),
+        tool_call_id: "test".to_string(),
+        working_dir: Some(temp_dir.path().to_path_buf()),
+        stdin_request_tx: None,
+        graceful_shutdown_signal: None,
+        turn_cancel_signal: None,
+        execution_mode: ToolExecutionMode::Direct,
+    };
+
+    let output = registry
+        .execute("mcp__delayed__hello", serde_json::json!({}), ctx)
+        .await
+        .expect("missing MCP registry entry should be repaired before execute");
+    assert!(output.output.contains("hello from delayed"));
+    assert_eq!(
+        registry
+            .mcp_registry_diagnostics()
+            .await
+            .mcp_server_tool_names,
+        vec!["mcp__delayed__hello"]
+    );
+}
+
+#[tokio::test]
 async fn register_mcp_tools_retries_transient_startup_failure() {
     let _attempts = EnvVarGuard::set("JCODE_MCP_CONNECT_ATTEMPTS", "3");
     let _backoff = EnvVarGuard::set("JCODE_MCP_RETRY_BACKOFF_MS", "10");
@@ -436,7 +485,7 @@ async fn test_batch_resolves_oauth_names() {
         working_dir: Some(temp_dir.path().to_path_buf()),
         stdin_request_tx: None,
         graceful_shutdown_signal: None,
-            turn_cancel_signal: None,
+        turn_cancel_signal: None,
         execution_mode: ToolExecutionMode::Direct,
     };
 
@@ -604,6 +653,7 @@ async fn test_context_guard_small_output_passes_through() {
         tools: Arc::new(RwLock::new(HashMap::new())),
         skills: Arc::new(RwLock::new(crate::skill::SkillRegistry::default())),
         compaction,
+        mcp_manager: Arc::new(RwLock::new(None)),
     };
 
     let output = ToolOutput::new("small output");
@@ -618,6 +668,7 @@ async fn test_context_guard_truncates_huge_single_output() {
         tools: Arc::new(RwLock::new(HashMap::new())),
         skills: Arc::new(RwLock::new(crate::skill::SkillRegistry::default())),
         compaction,
+        mcp_manager: Arc::new(RwLock::new(None)),
     };
 
     // 30% of 1000 = 300 tokens = 1200 chars max for a single output
@@ -646,6 +697,7 @@ async fn test_context_guard_truncates_when_context_nearly_full() {
         tools: Arc::new(RwLock::new(HashMap::new())),
         skills: Arc::new(RwLock::new(crate::skill::SkillRegistry::default())),
         compaction,
+        mcp_manager: Arc::new(RwLock::new(None)),
     };
 
     // Even a modest output should get truncated when context is 95% full
@@ -664,6 +716,7 @@ async fn test_context_guard_zero_budget_passes_through() {
         tools: Arc::new(RwLock::new(HashMap::new())),
         skills: Arc::new(RwLock::new(crate::skill::SkillRegistry::default())),
         compaction,
+        mcp_manager: Arc::new(RwLock::new(None)),
     };
 
     let output = ToolOutput::new("x".repeat(100_000));

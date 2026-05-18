@@ -155,6 +155,8 @@ pub enum ContentBlock {
     },
     #[serde(rename = "resource")]
     Resource { resource: ResourceContent },
+    #[serde(rename = "resource_link")]
+    ResourceLink(ResourceLinkContent),
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -164,6 +166,19 @@ pub struct ResourceContent {
     pub mime_type: Option<String>,
     pub text: Option<String>,
     pub blob: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ResourceLinkContent {
+    pub uri: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(rename = "mimeType", default)]
+    pub mime_type: Option<String>,
 }
 
 /// MCP transport type.

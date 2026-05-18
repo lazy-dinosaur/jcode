@@ -58,6 +58,7 @@ pub struct Registry {
     tools: Arc<RwLock<HashMap<String, Arc<dyn Tool>>>>,
     skills: Arc<RwLock<SkillRegistry>>,
     compaction: Arc<RwLock<CompactionManager>>,
+    mcp_manager: Arc<RwLock<Option<Arc<RwLock<crate::mcp::McpManager>>>>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,6 +84,7 @@ impl Clone for Registry {
             // Each clone gets a fresh CompactionManager to prevent parallel
             // subagents from corrupting each other's message history
             compaction: Arc::new(RwLock::new(CompactionManager::new())),
+            mcp_manager: self.mcp_manager.clone(),
         }
     }
 }
@@ -183,6 +185,7 @@ impl Registry {
             tools: Arc::new(RwLock::new(HashMap::new())),
             skills: Arc::new(RwLock::new(SkillRegistry::default())),
             compaction: Arc::new(RwLock::new(CompactionManager::new())),
+            mcp_manager: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -305,6 +308,7 @@ impl Registry {
             tools: Arc::new(RwLock::new(HashMap::new())),
             skills: skills.clone(),
             compaction: compaction.clone(),
+            mcp_manager: Arc::new(RwLock::new(None)),
         };
         let registry_struct_ms = registry_struct_start.elapsed().as_millis();
 
@@ -423,6 +427,11 @@ impl Registry {
         }
     }
 
+    async fn reconcile_known_mcp_manager(&self) -> Option<McpRegistryReconcileReport> {
+        let manager = self.mcp_manager.read().await.clone()?;
+        Some(self.reconcile_mcp_tools_from_manager(manager).await)
+    }
+
     /// Enable test mode for memory tools (isolated storage)
     /// Called when session is marked as debug
     pub async fn enable_memory_test_mode(&self) {
@@ -477,15 +486,32 @@ impl Registry {
 
     /// Execute a tool by name
     pub async fn execute(&self, name: &str, input: Value, ctx: ToolContext) -> Result<ToolOutput> {
-        let tools = self.tools.read().await;
         let resolved_name = Self::resolve_tool_name(name);
-        let tool = tools
-            .get(resolved_name)
-            .ok_or_else(|| anyhow::anyhow!("Unknown tool: {}", name))?
-            .clone();
+        let tool = {
+            let tools = self.tools.read().await;
+            tools.get(resolved_name).cloned()
+        };
+        let tool = if let Some(tool) = tool {
+            tool
+        } else if resolved_name.starts_with("mcp__") {
+            if let Some(report) = self.reconcile_known_mcp_manager().await {
+                if !report.repaired_tool_names.is_empty() {
+                    crate::logging::warn(&format!(
+                        "MCP: repaired missing registry tool(s) while resolving '{}': {:?}",
+                        resolved_name, report.repaired_tool_names
+                    ));
+                }
+            }
+            let tools = self.tools.read().await;
+            tools
+                .get(resolved_name)
+                .ok_or_else(|| anyhow::anyhow!("Unknown tool: {}", name))?
+                .clone()
+        } else {
+            anyhow::bail!("Unknown tool: {}", name);
+        };
 
         // Drop the lock before executing
-        drop(tools);
 
         let started_at = std::time::Instant::now();
         crate::hooks::pre_tool_use(resolved_name, &input, &ctx).await?;
@@ -642,6 +668,8 @@ impl Registry {
         mcp_manager: Arc<RwLock<crate::mcp::McpManager>>,
         readiness_timeout: Duration,
     ) {
+        *self.mcp_manager.write().await = Some(Arc::clone(&mcp_manager));
+
         // Register MCP management tool immediately (with registry for dynamic tool registration)
         let mcp_tool =
             mcp::McpManagementTool::new(Arc::clone(&mcp_manager)).with_registry(self.clone());

@@ -239,6 +239,34 @@ fn test_tool_call_result_text() {
 }
 
 #[test]
+fn test_tool_call_result_resource_link() {
+    let json = r#"{
+            "content": [{
+                "type": "resource_link",
+                "uri": "figma://file/abc/node/123:456",
+                "name": "Frame 1",
+                "title": "Figma Frame",
+                "description": "A link to a Figma frame",
+                "mimeType": "application/json"
+            }],
+            "isError": false
+        }"#;
+    let result: ToolCallResult = serde_json::from_str(json).unwrap();
+    assert!(!result.is_error);
+    assert_eq!(result.content.len(), 1);
+    match &result.content[0] {
+        ContentBlock::ResourceLink(link) => {
+            assert_eq!(link.uri, "figma://file/abc/node/123:456");
+            assert_eq!(link.name.as_deref(), Some("Frame 1"));
+            assert_eq!(link.title.as_deref(), Some("Figma Frame"));
+            assert_eq!(link.description.as_deref(), Some("A link to a Figma frame"));
+            assert_eq!(link.mime_type.as_deref(), Some("application/json"));
+        }
+        other => panic!("expected resource_link content, got {other:?}"),
+    }
+}
+
+#[test]
 fn test_tool_call_result_error() {
     let json = r#"{
             "content": [{"type": "text", "text": "File not found"}],
