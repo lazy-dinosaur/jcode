@@ -389,7 +389,7 @@ impl App {
         if usage > 1.5 {
             match manager.hard_compact_with(&provider_messages) {
                 Ok(dropped) => {
-                    self.sync_session_compaction_state_from_manager(&manager);
+                    self.sync_session_compaction_state_from_manager_with_overflow(&manager, true);
                     let post_usage = manager.context_usage_with(&provider_messages);
                     if post_usage <= 1.0 {
                         return Some(format!(
@@ -441,7 +441,7 @@ impl App {
                 ));
                 match manager.hard_compact_with(&provider_messages) {
                     Ok(dropped) => {
-                        self.sync_session_compaction_state_from_manager(&manager);
+                        self.sync_session_compaction_state_from_manager_with_overflow(&manager, true);
                         Some(format!(
                             "⚡ Emergency compaction: dropped {} old messages. You can continue.",
                             dropped
@@ -474,6 +474,9 @@ impl App {
         if self.is_remote || !self.provider.supports_compaction() {
             return false;
         }
+        if !crate::config::config().compaction.auto_continue {
+            return false;
+        }
 
         self.push_display_message(DisplayMessage::system(
             "⚠️ Context limit exceeded — auto-compacting and retrying...".to_string(),
@@ -489,7 +492,9 @@ impl App {
                 if usage > 1.5 {
                     match manager.hard_compact_with(&provider_messages) {
                         Ok(dropped) => {
-                            self.sync_session_compaction_state_from_manager(&manager);
+                            self.sync_session_compaction_state_from_manager_with_overflow(
+                                &manager, true,
+                            );
                             self.push_display_message(DisplayMessage::system(
                                 format!(
                                     "⚡ Emergency compaction: dropped {} old messages (context was at {:.0}%).",
@@ -577,7 +582,9 @@ impl App {
                         Ok(()) => true,
                         Err(_) => match manager.hard_compact_with(&provider_messages) {
                             Ok(_) => {
-                                self.sync_session_compaction_state_from_manager(&manager);
+                                self.sync_session_compaction_state_from_manager_with_overflow(
+                                    &manager, true,
+                                );
                                 drop(manager);
                                 self.provider_session_id = None;
                                 self.session.provider_session_id = None;
@@ -645,7 +652,7 @@ impl App {
                 let provider_messages = self.materialized_provider_messages();
                 manager.check_and_apply_compaction_with(&provider_messages);
                 if manager.last_compaction_event().is_some() {
-                    self.sync_session_compaction_state_from_manager(&manager);
+                    self.sync_session_compaction_state_from_manager_with_overflow(&manager, true);
                     if let Some(event) = manager.take_compaction_event() {
                         self.handle_compaction_event(event);
                         true

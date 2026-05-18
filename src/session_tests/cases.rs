@@ -888,6 +888,7 @@ fn test_record_durable_compaction_turn_persists_artifacts_but_hides_from_provide
     let turn = &session.compaction_turns[0];
     assert!(turn.has_durable_messages());
     assert!(turn.auto);
+    assert!(!turn.overflow);
     assert_eq!(turn.tail_start_id.as_deref(), Some(msg3.as_str()));
     assert_eq!(turn.summary_of_message_ids, vec![msg1, msg2]);
     assert_eq!(session.messages.len(), 5);
@@ -913,6 +914,45 @@ fn test_record_durable_compaction_turn_persists_artifacts_but_hides_from_provide
             |block| matches!(block, ContentBlock::Text { text, .. } if text == "durable summary"),
         )
     }));
+    Ok(())
+}
+
+#[test]
+fn test_record_durable_compaction_turn_marks_overflow_recovery() -> Result<()> {
+    let mut session = Session::create_with_id(
+        "session_overflow_compaction_runtime_test".to_string(),
+        None,
+        Some("overflow compaction runtime test".to_string()),
+    );
+    session.add_message(
+        Role::User,
+        vec![ContentBlock::Text {
+            text: "overflowing prompt".to_string(),
+            cache_control: None,
+        }],
+    );
+    session.add_message(
+        Role::Assistant,
+        vec![ContentBlock::Text {
+            text: "large answer".to_string(),
+            cache_control: None,
+        }],
+    );
+
+    let state = StoredCompactionState {
+        summary_text: "overflow summary".to_string(),
+        openai_encrypted_content: None,
+        covers_up_to_turn: 2,
+        original_turn_count: 2,
+        compacted_count: 2,
+    };
+
+    assert!(session.record_durable_compaction_turn(None, &state, true, true));
+    assert_eq!(session.compaction_turns.len(), 1);
+    let turn = &session.compaction_turns[0];
+    assert!(turn.auto);
+    assert!(turn.overflow);
+    assert!(turn.has_durable_messages());
     Ok(())
 }
 

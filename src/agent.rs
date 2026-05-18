@@ -464,6 +464,14 @@ impl Agent {
         &mut self,
         manager: &crate::compaction::CompactionManager,
     ) {
+        self.sync_session_compaction_state_from_manager_with_overflow(manager, false);
+    }
+
+    fn sync_session_compaction_state_from_manager_with_overflow(
+        &mut self,
+        manager: &crate::compaction::CompactionManager,
+        overflow: bool,
+    ) {
         let new_state = manager.persisted_state();
         if self.session.compaction != new_state {
             let previous_state = self.session.compaction.clone();
@@ -480,7 +488,7 @@ impl Agent {
                         previous_state.as_ref(),
                         state,
                         auto,
-                        false,
+                        overflow,
                     );
                 }
             }

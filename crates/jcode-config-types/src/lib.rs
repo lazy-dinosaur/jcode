@@ -283,6 +283,16 @@ pub struct CompactionConfig {
     /// always has room to reply.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reserved_tokens: Option<usize>,
+
+    /// M48-C5b: after overflow compaction succeeds, retry/continue the turn
+    /// automatically instead of requiring the user to send another message.
+    /// Default true to match opencode's overflow recovery behavior.
+    pub auto_continue: bool,
+
+    /// M48-C5b: enable opencode-style replay planning for overflow recovery.
+    /// When false, overflow recovery only compacts and lets the existing retry
+    /// path continue with the compacted payload.
+    pub overflow_replay: bool,
 }
 
 impl Default for CompactionConfig {
@@ -304,6 +314,8 @@ impl Default for CompactionConfig {
             tail_turns: None,
             preserve_recent_tokens: None,
             reserved_tokens: None,
+            auto_continue: true,
+            overflow_replay: true,
         }
     }
 }
@@ -1148,5 +1160,33 @@ impl Default for BashToolConfig {
             // 20 minutes covers full release builds, long stress checks, etc.
             max_timeout_ms: Self::HARD_CAP_MS,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compaction_c5b_overflow_defaults_are_enabled() {
+        let cfg = CompactionConfig::default();
+        assert!(cfg.auto_continue);
+        assert!(cfg.overflow_replay);
+    }
+
+    #[test]
+    fn compaction_c5b_overflow_fields_deserialize_when_missing() {
+        let cfg: CompactionConfig = toml::from_str("mode = 'reactive'\n").unwrap();
+        assert!(cfg.auto_continue);
+        assert!(cfg.overflow_replay);
+    }
+
+    #[test]
+    fn compaction_c5b_overflow_fields_can_be_disabled() {
+        let cfg: CompactionConfig =
+            toml::from_str("mode = 'reactive'\nauto_continue = false\noverflow_replay = false\n")
+                .unwrap();
+        assert!(!cfg.auto_continue);
+        assert!(!cfg.overflow_replay);
     }
 }
