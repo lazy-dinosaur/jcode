@@ -10,9 +10,9 @@ use crate::tui::mermaid;
 #[cfg(test)]
 use layout_support::{clamp_side_panel_image_rows, estimate_side_panel_image_rows_with_font};
 use layout_support::{
-    estimate_side_panel_image_layout, estimate_side_panel_image_layout_with_font,
-    fit_image_area_with_font, plan_fit_image_render, scaled_image_rows,
-    side_panel_viewport_scroll_x,
+    estimate_side_panel_attachment_image_layout_with_font, estimate_side_panel_image_layout,
+    estimate_side_panel_image_layout_with_font, fit_image_area_with_font, plan_fit_image_render,
+    scaled_image_rows, side_panel_viewport_scroll_x,
 };
 #[cfg(test)]
 use std::cell::RefCell;
@@ -425,7 +425,7 @@ fn pinned_content_image_layout_with_font(
     has_following_content: bool,
     font_size: Option<(u16, u16)>,
 ) -> SidePanelImageLayout {
-    estimate_side_panel_image_layout_with_font(
+    estimate_side_panel_attachment_image_layout_with_font(
         width,
         height,
         inner.width,

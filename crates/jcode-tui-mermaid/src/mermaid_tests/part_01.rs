@@ -1,4 +1,5 @@
 use super::*;
+#[cfg(feature = "renderer")]
 use std::time::{Duration, Instant};
 
 fn unique_mermaid(label: &str) -> String {
@@ -41,6 +42,7 @@ fn test_mermaid_render_queue_returns_placeholder_on_cache_miss() {
 }
 
 #[test]
+#[cfg(feature = "renderer")]
 fn test_mermaid_render_queue_caches_completed_render() {
     clear_cache().ok();
     let content = unique_mermaid("cache_completion");

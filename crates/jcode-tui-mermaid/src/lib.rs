@@ -55,15 +55,107 @@ use std::cell::Cell;
 use std::collections::{HashMap, HashSet, VecDeque, hash_map::Entry};
 use std::fs;
 use std::hash::{Hash as _, Hasher};
+#[cfg(feature = "renderer")]
+use std::io::Write as _;
 use std::panic;
 use std::path::{Path, PathBuf};
+#[cfg(feature = "renderer")]
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock, mpsc};
 use std::time::Instant;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum MermaidRendererBackend {
+    #[default]
+    Rust,
+    Mmdc,
+}
+
+impl MermaidRendererBackend {
+    #[cfg(feature = "renderer")]
+    fn cache_suffix(self) -> &'static str {
+        match self {
+            Self::Rust => "",
+            Self::Mmdc => "_mmdc",
+        }
+    }
+
+    fn debug_name(self) -> &'static str {
+        match self {
+            Self::Rust => "rust",
+            Self::Mmdc => "mmdc",
+        }
+    }
+}
+
+#[cfg(feature = "renderer")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MermaidRendererPreference {
+    Auto,
+    Rust,
+    Mmdc,
+}
+
+#[cfg(feature = "renderer")]
+fn renderer_preference_from_env() -> MermaidRendererPreference {
+    match std::env::var("JCODE_MERMAID_RENDERER") {
+        Ok(value) => match value.trim().to_ascii_lowercase().as_str() {
+            "rust" | "mmdr" | "mermaid-rs" | "mermaid-rs-renderer" => {
+                MermaidRendererPreference::Rust
+            }
+            "mmdc" | "cli" | "mermaid-cli" => MermaidRendererPreference::Mmdc,
+            "auto" | "" => MermaidRendererPreference::Auto,
+            other => {
+                log_warn(&format!(
+                    "Unknown JCODE_MERMAID_RENDERER value '{other}', using auto"
+                ));
+                MermaidRendererPreference::Auto
+            }
+        },
+        Err(_) => MermaidRendererPreference::Rust,
+    }
+}
+
+#[cfg(feature = "renderer")]
+fn mmdc_binary() -> String {
+    std::env::var("JCODE_MMDC_BIN").unwrap_or_else(|_| "mmdc".to_string())
+}
+
+#[cfg(feature = "renderer")]
+fn mmdc_available() -> bool {
+    Command::new(mmdc_binary())
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+#[cfg(feature = "renderer")]
+fn selected_renderer_backend() -> MermaidRendererBackend {
+    match renderer_preference_from_env() {
+        MermaidRendererPreference::Rust => MermaidRendererBackend::Rust,
+        MermaidRendererPreference::Mmdc => MermaidRendererBackend::Mmdc,
+        MermaidRendererPreference::Auto => {
+            if mmdc_available() {
+                MermaidRendererBackend::Mmdc
+            } else {
+                MermaidRendererBackend::Rust
+            }
+        }
+    }
+}
+
+#[cfg(not(feature = "renderer"))]
+fn selected_renderer_backend() -> MermaidRendererBackend {
+    MermaidRendererBackend::Rust
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub(crate) struct RenderProfile {
     preferred_aspect_per_mille: Option<u16>,
+    backend: MermaidRendererBackend,
 }
 
 impl RenderProfile {
@@ -73,6 +165,7 @@ impl RenderProfile {
             .map(|ratio| (ratio * 1000.0).round().clamp(100.0, 10_000.0) as u16);
         Self {
             preferred_aspect_per_mille,
+            backend: selected_renderer_backend(),
         }
     }
 
@@ -83,8 +176,15 @@ impl RenderProfile {
 
     #[cfg(feature = "renderer")]
     fn cache_suffix(self) -> Option<String> {
-        self.preferred_aspect_per_mille
-            .map(|value| format!("_a{value}"))
+        let mut suffix = self.backend.cache_suffix().to_string();
+        if let Some(value) = self.preferred_aspect_per_mille {
+            suffix.push_str(&format!("_a{value}"));
+        }
+        if suffix.is_empty() {
+            None
+        } else {
+            Some(suffix)
+        }
     }
 }
 
@@ -93,7 +193,20 @@ thread_local! {
 }
 
 fn current_render_profile() -> RenderProfile {
-    RENDER_PROFILE_CONTEXT.with(|profile| profile.get())
+    RENDER_PROFILE_CONTEXT.with(|profile| {
+        let current = profile.get();
+        let selected_backend = selected_renderer_backend();
+        if current.preferred_aspect_per_mille.is_none() && current.backend != selected_backend {
+            let updated = RenderProfile {
+                preferred_aspect_per_mille: None,
+                backend: selected_backend,
+            };
+            profile.set(updated);
+            updated
+        } else {
+            current
+        }
+    })
 }
 
 pub fn current_preferred_aspect_ratio_bucket() -> Option<u16> {
@@ -730,6 +843,8 @@ pub struct MermaidDebugStats {
     pub cache_dir: Option<String>,
     pub protocol: Option<String>,
     pub render_size_backend: &'static str,
+    pub renderer_backend: &'static str,
+    pub last_renderer_backend: Option<&'static str>,
     pub last_png_width: Option<u32>,
     pub last_png_height: Option<u32>,
     pub last_measured_width: Option<u32>,

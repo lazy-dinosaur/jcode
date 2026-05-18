@@ -173,7 +173,7 @@ fn side_panel_mermaid_fit_fill_allows_wide_short_diagrams_above_200_percent() {
 }
 
 #[test]
-fn pinned_content_image_layout_uses_high_zoom_viewport_for_generated_wide_diagram() {
+fn pinned_content_image_layout_does_not_auto_upscale_generated_wide_image() {
     let layout = pinned_content_image_layout_with_font(
         1800,
         161,
@@ -183,19 +183,13 @@ fn pinned_content_image_layout_uses_high_zoom_viewport_for_generated_wide_diagra
         Some((10, 20)),
     );
 
-    match layout.render_mode {
-        SidePanelImageRenderMode::ScrollableViewport { zoom_percent } => {
-            assert!(
-                zoom_percent > 200,
-                "pinned content must not fall back to the old 200% cap, got {zoom_percent}%"
-            );
-        }
-        other => panic!("expected pinned content viewport fill, got {other:?}"),
-    }
-    assert!(
-        layout.rows >= 67,
-        "pinned content should reserve enough rows to fill the visible pane, got {}",
-        layout.rows
+    assert_eq!(
+        layout.render_mode,
+        SidePanelImageRenderMode::ScrollableViewport { zoom_percent: 100 }
+    );
+    assert_eq!(
+        layout.rows, 9,
+        "pinned images should default to native-size readability instead of overfilling the pane"
     );
 }
 
@@ -330,7 +324,24 @@ fn fit_side_panel_image_area_scales_up_small_image_to_use_available_width() {
 }
 
 #[test]
+fn pinned_attachment_image_layout_does_not_auto_upscale_by_default() {
+    let layout = estimate_side_panel_attachment_image_layout_with_font(
+        160,
+        240,
+        36,
+        30,
+        0,
+        false,
+        Some((8, 16)),
+    );
+
+    assert_eq!(layout.render_mode, SidePanelImageRenderMode::Fit);
+    assert_eq!(layout.rows, 15);
+}
+
+#[test]
 fn side_panel_mermaid_probe_reports_full_utilization_for_nearly_matching_diagram() {
+    crate::tui::mermaid::clear_cache().ok();
     let probe = debug_probe_side_panel_mermaid(
         "flowchart TD\n    A[Start] --> B[Process]\n    B --> C{Decision}\n    C -->|Yes| D[Ship]\n    C -->|No| E[Retry]\n    E --> B\n",
         36,
@@ -349,6 +360,7 @@ fn side_panel_mermaid_probe_reports_full_utilization_for_nearly_matching_diagram
 
 #[test]
 fn side_panel_mermaid_probe_reports_viewport_fill_for_underutilized_fit() {
+    crate::tui::mermaid::clear_cache().ok();
     let probe = debug_probe_side_panel_mermaid(
         "flowchart TD\n    A[Start] --> B[Get Idea]\n    B --> C[Research Topic]\n    B --> D[Talk to Team]\n    B --> E[Look at Examples]\n    C --> F[Pick Best Option]\n    D --> F\n    E --> F\n    F --> G[Create Plan]\n    G --> H[Gather Tools]\n    G --> I[Set Timeline]\n    H --> J[Start Work]\n    I --> J\n    J --> K[Build First Draft]\n    J --> L[Test Progress]\n    K --> M[Review Results]\n    L --> M\n    M --> N{Good Enough?}\n    N -->|Yes| O[Finalize]\n    N -->|No| P[Make Changes]\n    P --> Q[Improve Draft]\n    Q --> R[Test Again]\n    R --> M\n    O --> S[Finish]\n",
         36,
@@ -358,7 +370,7 @@ fn side_panel_mermaid_probe_reports_viewport_fill_for_underutilized_fit() {
     )
     .expect("probe");
 
-    assert_eq!(probe.render_mode, "scrollable-viewport@127%");
+    assert_eq!(probe.render_mode, "scrollable-viewport@181%");
     assert_eq!(probe.layout_fit.width_cells, 27);
     assert_eq!(probe.layout_fit.height_cells, 30);
     assert_eq!(probe.widget_fit.width_cells, 36);

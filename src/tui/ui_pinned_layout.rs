@@ -46,6 +46,49 @@ pub(super) fn estimate_side_panel_image_layout_with_font(
     has_following_content: bool,
     font_size: Option<(u16, u16)>,
 ) -> SidePanelImageLayout {
+    estimate_side_panel_image_layout_with_font_inner(
+        width,
+        height,
+        available_width,
+        inner_height,
+        lines_before_image,
+        has_following_content,
+        font_size,
+        true,
+    )
+}
+
+pub(super) fn estimate_side_panel_attachment_image_layout_with_font(
+    width: u32,
+    height: u32,
+    available_width: u16,
+    inner_height: u16,
+    lines_before_image: usize,
+    has_following_content: bool,
+    font_size: Option<(u16, u16)>,
+) -> SidePanelImageLayout {
+    estimate_side_panel_image_layout_with_font_inner(
+        width,
+        height,
+        available_width,
+        inner_height,
+        lines_before_image,
+        has_following_content,
+        font_size,
+        false,
+    )
+}
+
+fn estimate_side_panel_image_layout_with_font_inner(
+    width: u32,
+    height: u32,
+    available_width: u16,
+    inner_height: u16,
+    lines_before_image: usize,
+    has_following_content: bool,
+    font_size: Option<(u16, u16)>,
+    allow_auto_upscale: bool,
+) -> SidePanelImageLayout {
     if width == 0 || height == 0 || available_width == 0 {
         return SidePanelImageLayout {
             rows: clamp_side_panel_image_rows(
@@ -66,12 +109,15 @@ pub(super) fn estimate_side_panel_image_layout_with_font(
     let inner_height = inner_height.max(1);
     let fit_area = Rect::new(0, 0, available_width as u16, inner_height);
 
-    let fit_zoom = fit_zoom_percent_for_area(
+    let mut fit_zoom = fit_zoom_percent_for_area(
         fit_area,
         width,
         height,
         Some((cell_w as u16, cell_h as u16)),
     ) as u16;
+    if !allow_auto_upscale {
+        fit_zoom = fit_zoom.min(100);
+    }
     let fit_rect = fit_image_area_with_font(
         fit_area,
         width,
@@ -82,10 +128,14 @@ pub(super) fn estimate_side_panel_image_layout_with_font(
     );
     let width_fill_zoom = axis_fill_zoom_percent(available_width, width, cell_w);
     let height_fill_zoom = axis_fill_zoom_percent(inner_height as u32, height, cell_h);
-    let preferred_viewport_zoom = width_fill_zoom.max(height_fill_zoom).clamp(
-        SIDE_PANEL_INLINE_IMAGE_MIN_ZOOM_PERCENT,
-        SIDE_PANEL_INLINE_IMAGE_MAX_AUTO_FILL_ZOOM_PERCENT,
-    );
+    let max_auto_fill_zoom = if allow_auto_upscale {
+        SIDE_PANEL_INLINE_IMAGE_MAX_AUTO_FILL_ZOOM_PERCENT
+    } else {
+        100
+    };
+    let preferred_viewport_zoom = width_fill_zoom
+        .max(height_fill_zoom)
+        .clamp(SIDE_PANEL_INLINE_IMAGE_MIN_ZOOM_PERCENT, max_auto_fill_zoom);
     let fit_underutilized = rect_utilization_percent(fit_rect.width, fit_area.width)
         < SIDE_PANEL_INLINE_IMAGE_TARGET_UTILIZATION_PERCENT
         || rect_utilization_percent(fit_rect.height, fit_area.height)

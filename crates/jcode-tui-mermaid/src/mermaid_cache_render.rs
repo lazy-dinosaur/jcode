@@ -203,16 +203,28 @@ pub(super) fn parse_cache_filename(path: &Path) -> Option<(u64, u32, RenderProfi
     let stem = path.file_stem()?.to_str()?;
     let (hash_hex, width_part) = stem.split_once("_w")?;
     let hash = u64::from_str_radix(hash_hex, 16).ok()?;
-    let (width_text, profile) = if let Some((width, aspect)) = width_part.split_once("_a") {
-        let aspect = aspect.parse::<u16>().ok()?;
-        (
-            width,
-            RenderProfile {
-                preferred_aspect_per_mille: Some(aspect),
-            },
-        )
+    let (width_text, width_suffix) = width_part
+        .split_once('_')
+        .map_or((width_part, ""), |(width, suffix)| (width, suffix));
+    let backend = if width_suffix.split('_').any(|part| part == "mmdc") {
+        MermaidRendererBackend::Mmdc
     } else {
-        (width_part, RenderProfile::default())
+        MermaidRendererBackend::Rust
+    };
+    let aspect = width_suffix
+        .split('_')
+        .find_map(|part| part.strip_prefix('a'))
+        .and_then(|aspect| aspect.parse::<u16>().ok());
+    let profile = if let Some(aspect) = aspect {
+        RenderProfile {
+            preferred_aspect_per_mille: Some(aspect),
+            backend,
+        }
+    } else {
+        RenderProfile {
+            preferred_aspect_per_mille: None,
+            backend,
+        }
     };
     let width = width_text.parse::<u32>().ok()?;
     Some((hash, width, profile))
@@ -224,7 +236,14 @@ pub(super) fn get_cached_diagram(hash: u64, min_width: Option<u32>) -> Option<Ca
     if let Some(diagram) = cache.get(hash, min_width, Some(profile)) {
         return Some(diagram);
     }
-    cache.get(hash, min_width, None)
+    cache.get(
+        hash,
+        min_width,
+        Some(RenderProfile {
+            preferred_aspect_per_mille: None,
+            backend: profile.backend,
+        }),
+    )
 }
 
 fn get_cached_diagram_for_profile(
@@ -571,6 +590,166 @@ fn render_mermaid_deferred_inner(
     None
 }
 
+#[cfg(feature = "renderer")]
+fn render_with_mmdc_cli(
+    content: &str,
+    output: &Path,
+    target_width: u32,
+    target_height: u32,
+    theme: &Theme,
+) -> Result<RenderStageBreakdown, String> {
+    if let Some(parent) = output.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create cache directory: {e}"))?;
+    }
+
+    let temp_output = output.with_file_name(format!(
+        ".{}.{}.tmp.png",
+        output
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("mermaid"),
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&temp_output);
+
+    let mut child = Command::new(mmdc_binary())
+        .arg("-i")
+        .arg("-")
+        .arg("-o")
+        .arg(&temp_output)
+        .arg("-e")
+        .arg("png")
+        .arg("-w")
+        .arg(target_width.to_string())
+        .arg("-H")
+        .arg(target_height.to_string())
+        .arg("-b")
+        .arg(&theme.background)
+        .arg("-q")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to start mmdc: {e}"))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(content.as_bytes())
+            .map_err(|e| format!("Failed to write Mermaid source to mmdc: {e}"))?;
+    }
+
+    let png_start = Instant::now();
+    let output_result = child
+        .wait_with_output()
+        .map_err(|e| format!("Failed to wait for mmdc: {e}"))?;
+    let png_ms = png_start.elapsed().as_secs_f32() * 1000.0;
+
+    if !output_result.status.success() {
+        let stderr = String::from_utf8_lossy(&output_result.stderr);
+        let stdout = String::from_utf8_lossy(&output_result.stdout);
+        let _ = std::fs::remove_file(&temp_output);
+        let detail = if !stderr.trim().is_empty() {
+            stderr.trim().to_string()
+        } else if !stdout.trim().is_empty() {
+            stdout.trim().to_string()
+        } else {
+            format!("mmdc exited with status {}", output_result.status)
+        };
+        return Err(format!("mmdc render error: {detail}"));
+    }
+
+    if !temp_output.exists() {
+        return Err("mmdc completed without writing output PNG".to_string());
+    }
+    std::fs::rename(&temp_output, output)
+        .map_err(|e| format!("Failed to move mmdc output into cache: {e}"))?;
+    let (measured_width, measured_height) =
+        get_png_dimensions(output).unwrap_or((target_width.max(1), target_height.max(1)));
+
+    Ok(RenderStageBreakdown {
+        parse_ms: 0.0,
+        layout_ms: 0.0,
+        svg_ms: 0.0,
+        png_ms,
+        measured_width,
+        measured_height,
+        viewbox_width: measured_width,
+        viewbox_height: measured_height,
+    })
+}
+
+#[cfg(feature = "renderer")]
+fn render_with_rust_renderer(
+    content_owned: String,
+    output: &Path,
+    complexity: usize,
+    target_width: f64,
+    target_height: f64,
+    render_profile: RenderProfile,
+) -> Result<RenderStageBreakdown, String> {
+    let parse_start = Instant::now();
+    // Parse mermaid
+    let parsed = parse_mermaid(&content_owned).map_err(|e| format!("Parse error: {}", e))?;
+    let parse_ms = parse_start.elapsed().as_secs_f32() * 1000.0;
+
+    // Configure theme for terminal (dark background friendly)
+    let theme = terminal_theme();
+
+    // Adaptive spacing based on complexity
+    let spacing_factor = if complexity > 30 { 1.2 } else { 1.0 };
+    let layout_config = LayoutConfig {
+        node_spacing: 80.0 * spacing_factor,
+        rank_spacing: 80.0 * spacing_factor,
+        node_padding_x: 40.0,
+        node_padding_y: 20.0,
+        preferred_aspect_ratio: render_profile.preferred_aspect_ratio(),
+        ..Default::default()
+    };
+
+    let layout_start = Instant::now();
+    // Compute layout
+    let layout = compute_layout(&parsed.graph, &theme, &layout_config);
+    let layout_ms = layout_start.elapsed().as_secs_f32() * 1000.0;
+
+    let svg_start = Instant::now();
+    let output_dimensions = Some((target_width as f32, target_height as f32));
+    // Render and collect size metadata. With the mmdr size API enabled this
+    // comes directly from the renderer; the default compatibility path keeps
+    // the old SVG retargeting behavior until the dependency is updated.
+    let (svg, dimensions) = render_svg_for_png(&layout, &theme, &layout_config, output_dimensions);
+    let svg_ms = svg_start.elapsed().as_secs_f32() * 1000.0;
+
+    // Convert SVG to PNG with adaptive dimensions
+    let render_config = RenderConfig {
+        width: dimensions.width,
+        height: dimensions.height,
+        background: theme.background.clone(),
+    };
+
+    // Ensure parent directory exists
+    if let Some(parent) = output.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create cache directory: {}", e))?;
+    }
+
+    let png_start = Instant::now();
+    write_output_png_cached_fonts(&svg, output, &render_config, &theme)
+        .map_err(|e| format!("Render error: {}", e))?;
+    let png_ms = png_start.elapsed().as_secs_f32() * 1000.0;
+
+    Ok(RenderStageBreakdown {
+        parse_ms,
+        layout_ms,
+        svg_ms,
+        png_ms,
+        measured_width: svg_dimension_to_u32(dimensions.width),
+        measured_height: svg_dimension_to_u32(dimensions.height),
+        viewbox_width: svg_dimension_to_u32(dimensions.viewbox_width),
+        viewbox_height: svg_dimension_to_u32(dimensions.viewbox_height),
+    })
+}
+
 fn render_mermaid_sized_internal(
     content: &str,
     terminal_width: Option<u16>,
@@ -588,6 +767,9 @@ fn render_mermaid_sized_internal(
 
     // Calculate content hash for caching
     let hash = hash_content(content);
+    #[cfg(feature = "renderer")]
+    let mut render_profile = current_render_profile();
+    #[cfg(not(feature = "renderer"))]
     let render_profile = current_render_profile();
 
     // Estimate complexity for sizing
@@ -665,13 +847,12 @@ fn render_mermaid_sized_internal(
     #[cfg(feature = "renderer")]
     {
         // Get cache path
-        let png_path = {
+        let mut png_path = {
             let cache = RENDER_CACHE
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             cache.cache_path(hash, target_width_u32, render_profile)
         };
-        let png_path_clone = png_path.clone();
 
         let _render_guard = RENDER_WORK_LOCK
             .lock()
@@ -700,82 +881,84 @@ fn render_mermaid_sized_internal(
             };
         }
 
-        // Wrap mermaid library calls in catch_unwind for defense-in-depth
-        let content_owned = content.to_string();
-
-        let prev_hook = panic::take_hook();
-        panic::set_hook(Box::new(|_| {
-            // Silently ignore panics from mermaid renderer
-        }));
-
         let render_start = Instant::now();
-        let render_result = panic::catch_unwind(move || -> Result<RenderStageBreakdown, String> {
-            let parse_start = Instant::now();
-            // Parse mermaid
-            let parsed =
-                parse_mermaid(&content_owned).map_err(|e| format!("Parse error: {}", e))?;
-            let parse_ms = parse_start.elapsed().as_secs_f32() * 1000.0;
-
-            // Configure theme for terminal (dark background friendly)
-            let theme = terminal_theme();
-
-            // Adaptive spacing based on complexity
-            let spacing_factor = if complexity > 30 { 1.2 } else { 1.0 };
-            let layout_config = LayoutConfig {
-                node_spacing: 80.0 * spacing_factor,
-                rank_spacing: 80.0 * spacing_factor,
-                node_padding_x: 40.0,
-                node_padding_y: 20.0,
-                preferred_aspect_ratio: render_profile.preferred_aspect_ratio(),
-                ..Default::default()
-            };
-
-            let layout_start = Instant::now();
-            // Compute layout
-            let layout = compute_layout(&parsed.graph, &theme, &layout_config);
-            let layout_ms = layout_start.elapsed().as_secs_f32() * 1000.0;
-
-            let svg_start = Instant::now();
-            let output_dimensions = Some((target_width as f32, target_height as f32));
-            // Render and collect size metadata. With the mmdr size API enabled this
-            // comes directly from the renderer; the default compatibility path keeps
-            // the old SVG retargeting behavior until the dependency is updated.
-            let (svg, dimensions) =
-                render_svg_for_png(&layout, &theme, &layout_config, output_dimensions);
-            let svg_ms = svg_start.elapsed().as_secs_f32() * 1000.0;
-
-            // Convert SVG to PNG with adaptive dimensions
-            let render_config = RenderConfig {
-                width: dimensions.width,
-                height: dimensions.height,
-                background: theme.background.clone(),
-            };
-
-            // Ensure parent directory exists
-            if let Some(parent) = png_path_clone.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| format!("Failed to create cache directory: {}", e))?;
+        let render_result = if render_profile.backend == MermaidRendererBackend::Mmdc {
+            match render_with_mmdc_cli(
+                content,
+                &png_path,
+                target_width_u32,
+                target_height_u32,
+                &terminal_theme(),
+            ) {
+                Ok(stage_breakdown) => Ok(Ok(stage_breakdown)),
+                Err(mmdc_error) => {
+                    log_warn(&format!(
+                        "Mermaid mmdc renderer failed, falling back to Rust renderer: {mmdc_error}"
+                    ));
+                    render_profile.backend = MermaidRendererBackend::Rust;
+                    png_path = {
+                        let cache = RENDER_CACHE
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        cache.cache_path(hash, target_width_u32, render_profile)
+                    };
+                    if let Some(cached) =
+                        get_cached_diagram_for_profile(hash, Some(target_width_u32), render_profile)
+                    {
+                        if let Ok(mut errors) = RENDER_ERRORS.lock() {
+                            errors.remove(&hash);
+                        }
+                        if register_active {
+                            register_active_diagram(hash, cached.width, cached.height, None);
+                        }
+                        return RenderResult::Image {
+                            hash,
+                            path: cached.path,
+                            width: cached.width,
+                            height: cached.height,
+                        };
+                    }
+                    let content_owned = content.to_string();
+                    let output = png_path.clone();
+                    let prev_hook = panic::take_hook();
+                    panic::set_hook(Box::new(|_| {
+                        // Silently ignore panics from mermaid renderer
+                    }));
+                    let result = panic::catch_unwind(move || {
+                        render_with_rust_renderer(
+                            content_owned,
+                            &output,
+                            complexity,
+                            target_width,
+                            target_height,
+                            render_profile,
+                        )
+                    });
+                    panic::set_hook(prev_hook);
+                    result
+                }
             }
-
-            let png_start = Instant::now();
-            write_output_png_cached_fonts(&svg, &png_path_clone, &render_config, &theme)
-                .map_err(|e| format!("Render error: {}", e))?;
-            let png_ms = png_start.elapsed().as_secs_f32() * 1000.0;
-
-            Ok(RenderStageBreakdown {
-                parse_ms,
-                layout_ms,
-                svg_ms,
-                png_ms,
-                measured_width: svg_dimension_to_u32(dimensions.width),
-                measured_height: svg_dimension_to_u32(dimensions.height),
-                viewbox_width: svg_dimension_to_u32(dimensions.viewbox_width),
-                viewbox_height: svg_dimension_to_u32(dimensions.viewbox_height),
-            })
-        });
-
-        // Restore the original panic hook
-        panic::set_hook(prev_hook);
+        } else {
+            let content_owned = content.to_string();
+            let output = png_path.clone();
+            // Wrap mermaid library calls in catch_unwind for defense-in-depth
+            let prev_hook = panic::take_hook();
+            panic::set_hook(Box::new(|_| {
+                // Silently ignore panics from mermaid renderer
+            }));
+            let result = panic::catch_unwind(move || {
+                render_with_rust_renderer(
+                    content_owned,
+                    &output,
+                    complexity,
+                    target_width,
+                    target_height,
+                    render_profile,
+                )
+            });
+            panic::set_hook(prev_hook);
+            result
+        };
 
         // Handle the result
         let render_ms = render_start.elapsed().as_secs_f32() * 1000.0;
@@ -786,6 +969,7 @@ fn render_mermaid_sized_internal(
                 }
                 if let Ok(mut state) = MERMAID_DEBUG.lock() {
                     state.stats.render_success += 1;
+                    state.stats.last_renderer_backend = Some(render_profile.backend.debug_name());
                     state.stats.last_render_ms = Some(render_ms);
                     state.stats.last_parse_ms = Some(stage_breakdown.parse_ms);
                     state.stats.last_layout_ms = Some(stage_breakdown.layout_ms);
