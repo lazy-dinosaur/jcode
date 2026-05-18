@@ -100,6 +100,36 @@ fn test_normalize_arguments_aliases_to_parameters() {
 }
 
 #[test]
+fn test_reject_duplicate_subcalls_blocks_exact_same_work() {
+    let subcalls = vec![
+        (0, "read".to_string(), json!({"file_path": "src/lib.rs"})),
+        (1, "read".to_string(), json!({"file_path": "src/lib.rs"})),
+    ];
+
+    let err = reject_duplicate_subcalls(&subcalls).unwrap_err();
+    let message = err.to_string();
+    assert!(message.contains("Duplicate batch tool call"));
+    assert!(message.contains("items 1 and 2"));
+}
+
+#[test]
+fn test_reject_duplicate_subcalls_allows_same_tool_different_params() {
+    let subcalls = vec![
+        (0, "read".to_string(), json!({"file_path": "src/lib.rs"})),
+        (1, "read".to_string(), json!({"file_path": "src/main.rs"})),
+    ];
+
+    reject_duplicate_subcalls(&subcalls).unwrap();
+}
+
+#[test]
+fn test_duplicate_subcall_key_canonicalizes_object_order() {
+    let a = duplicate_subcall_key("bash", &json!({"command": "cargo check", "timeout": 1}));
+    let b = duplicate_subcall_key("bash", &json!({"timeout": 1, "command": "cargo check"}));
+    assert_eq!(a, b);
+}
+
+#[test]
 fn test_schema_only_requires_tool() {
     let schema = BatchTool::new(Registry {
         tools: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
