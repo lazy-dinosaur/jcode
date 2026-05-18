@@ -1285,6 +1285,23 @@ The 10-stage M47 patch series (`patch/m47-c0-deep-merge-profiles` through `patch
      - `cargo check -p jcode`.
    - Binary reinstall required: yes (provider payload construction changed).
 
+56. Durable compaction milestone finalization (M48-C7c)
+   - Commit: `0e21d44a` `[m48-c7c] mark compaction milestone complete`.
+   - Patch branch: `patch/m48-c7c-finalize`.
+   - Purpose: close M48 by reconciling milestone status, stale diagnostics notes, and final validation criteria after the follow-up runtime wiring patches landed.
+   - Changes:
+     - Marked `docs/lazydino/milestones/M48.md` complete.
+     - Updated the C-7b stale `last_prune = None` note to point at C-3b `CompactionManager::last_prune_report()` wiring.
+     - Added C-7c completion audit notes and changed the final build criterion from slow release build to the selfdev source build used by this repository workflow.
+   - Validation:
+     - `cargo test -p jcode-compaction-core --lib` → 74 pass.
+     - `cargo test -p jcode-session-types` → 6 pass + doc-tests.
+     - `cargo test -p jcode-config-types` → 3 pass + doc-tests.
+     - `cargo test -p jcode --lib compaction::tests` → 40 pass.
+     - `cargo test -p jcode --lib session::tests::cases::test_record` → 4 pass.
+     - `cargo check -p jcode`.
+   - Binary reinstall required: yes (final deploy-tip selfdev build after M48 close).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
