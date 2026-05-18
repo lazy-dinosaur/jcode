@@ -1314,6 +1314,22 @@ The 10-stage M47 patch series (`patch/m47-c0-deep-merge-profiles` through `patch
      - Add retry/backoff/status UX and final validation before returning to M49.
    - Binary reinstall required: no (planning/documentation only).
 
+58. MCP readiness diagnostics and delayed-registration fixtures (M50-C0)
+   - Commit: `f035bbb6` `[m50-c0] add mcp readiness diagnostics fixtures`.
+   - Patch branch: `patch/m50-c0-mcp-reload-fixtures`.
+   - Purpose: establish a deterministic baseline for the selfdev-reload post-reconnect problem. Server reload interruption is expected; the captured gap is that MCP management registration completes synchronously while MCP server tools arrive later from background registration.
+   - Runtime/test changes:
+     - Added `Registry::mcp_registry_diagnostics()` with total registered tool count, `mcp` management-tool presence, MCP server-tool count, and sorted MCP server-tool names.
+     - Split `register_mcp_tools_from_manager` out of `register_mcp_tools` so tests can inject deterministic MCP configs/managers without depending on user/global MCP files.
+     - Added delayed stdio MCP fixture tests proving that `mcp` is present immediately while `mcp__server__tool` entries register later.
+     - Added registry diagnostics to `mcp list` and `mcp reload` outputs when a registry is available.
+   - Validation:
+     - `cargo test -p jcode --lib tool::tests::mcp_registry_diagnostics_tracks_management_and_server_tools`.
+     - `cargo test -p jcode --lib tool::tests::register_mcp_tools_returns_before_delayed_server_tools_are_ready`.
+     - `cargo test -p jcode --lib tool::mcp::tests::test_list_includes_registry_diagnostics_when_registry_is_available`.
+     - `cargo check -p jcode`.
+   - Binary reinstall required: yes (MCP management output and registry diagnostics changed).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
