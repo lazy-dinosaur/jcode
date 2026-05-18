@@ -165,7 +165,10 @@ pub fn is_browser_command(command: &str) -> bool {
 }
 
 pub fn is_setup_complete() -> bool {
-    setup_marker_path().exists() && browser_binary_path().exists()
+    setup_marker_path().exists()
+        && browser_binary_path().exists()
+        && host_binary_path().exists()
+        && xpi_path().exists()
 }
 
 fn mark_setup_complete() -> Result<()> {
@@ -219,10 +222,19 @@ pub async fn ensure_browser_setup() -> Result<String> {
         log.push_str("Browser bridge is not installed yet. Starting setup...\n");
     }
 
-    // Step 1: Check/download browser CLI binary
-    if !browser_binary_path().exists() || (initial_status.responding && !initial_status.compatible)
-    {
-        log.push_str("[1/3] Downloading browser CLI... ");
+    // Step 1: Check/download browser CLI, native host, and extension assets.
+    // Older installs may have the CLI and XPI but be missing the host binary;
+    // repair those by re-downloading the release bundle instead of failing in
+    // the native-host manifest step below.
+    let browser_bin_missing = !browser_binary_path().exists();
+    let host_bin_missing = !host_binary_path().exists();
+    let xpi_missing = !xpi_path().exists();
+    let needs_asset_refresh = browser_bin_missing
+        || host_bin_missing
+        || xpi_missing
+        || (initial_status.responding && !initial_status.compatible);
+    if needs_asset_refresh {
+        log.push_str("[1/3] Downloading browser bridge assets... ");
         match download_browser_binary().await {
             Ok(()) => log.push_str("done\n"),
             Err(e) => {
@@ -231,7 +243,7 @@ pub async fn ensure_browser_setup() -> Result<String> {
             }
         }
     } else {
-        log.push_str("[1/3] Browser CLI... already installed\n");
+        log.push_str("[1/3] Browser bridge assets... already installed\n");
     }
 
     // Step 2: Install native messaging host manifest
