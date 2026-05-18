@@ -1465,8 +1465,31 @@ pub(super) fn handle_info_command(app: &mut App, trimmed: &str) -> bool {
                     Some(_) => "summary-text",
                     None => "none",
                 };
+                // M48-C7b: append the unified CompactionDiagnostics digest so
+                // the TUI shows the durable sidecar (compaction_turns), prune
+                // history, and native-vs-text precedence in the same place as
+                // the legacy stats. Numbers come from the shared
+                // jcode_compaction_core::m48_diagnostics renderer so the TUI
+                // and debug socket never drift apart.
+                let diag = crate::compaction::build_compaction_diagnostics(
+                    &stats,
+                    &app.session.compaction_turns,
+                    None, // prune report is materialized once M48-C3 runtime wiring lands
+                    app.provider.name(),
+                    app.session.compaction.as_ref(),
+                    jcode_provider_openai::request::OPENAI_ENCRYPTED_CONTENT_SAFE_MAX_CHARS,
+                );
+                let m48_block = format!(
+                    "- m48 header: {}\n{}",
+                    diag.one_line_header(),
+                    diag.multi_line_body()
+                        .lines()
+                        .map(|l| format!("  {}", l))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                );
                 format!(
-                    "- supported: yes\n- mode: {}\n- jcode-managed: {}\n- active summary: {} ({})\n- compacted messages: {}\n- active messages: {}\n- summary chars: {}\n- estimated tokens: {}\n- effective tokens: {}\n- observed tokens: {}\n- usage: {:.1}%\n- compacting now: {}\n- budget: {}",
+                    "- supported: yes\n- mode: {}\n- jcode-managed: {}\n- active summary: {} ({})\n- compacted messages: {}\n- active messages: {}\n- summary chars: {}\n- estimated tokens: {}\n- effective tokens: {}\n- observed tokens: {}\n- usage: {:.1}%\n- compacting now: {}\n- budget: {}\n{}",
                     mode,
                     if app.provider.uses_jcode_compaction() {
                         "yes"
@@ -1487,6 +1510,7 @@ pub(super) fn handle_info_command(app: &mut App, trimmed: &str) -> bool {
                     stats.context_usage * 100.0,
                     if stats.is_compacting { "yes" } else { "no" },
                     manager.token_budget(),
+                    m48_block,
                 )
             } else {
                 "- supported: yes\n- state: unavailable (compaction manager busy)".to_string()

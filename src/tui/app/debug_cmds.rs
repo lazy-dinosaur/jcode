@@ -583,9 +583,103 @@ impl App {
                  - bundle-start:<name> - start test bundle\n\
                  - bundle-save - save test bundle\n\
                  - script:<json> - run test script\n\
+                 - compaction-diag - M48 compaction diagnostics digest (multi-line text)\n\
+                 - compaction-diag:json - same digest as JSON for headless tooling\n\
                  - version - get version\n\
                  - help - show this help"
                 .to_string()
+        } else if cmd == "compaction-diag" || cmd == "compaction-diag:json" {
+            // M48-C7b: surface CompactionDiagnostics for headless debug
+            // clients. Both the text and JSON forms read from the same
+            // build_compaction_diagnostics() so they never drift.
+            let as_json = cmd.ends_with(":json");
+            if !self.provider.supports_compaction() {
+                if as_json {
+                    return serde_json::json!({
+                        "supported": false,
+                        "reason": "active provider does not support compaction",
+                    })
+                    .to_string();
+                }
+                return "compaction not supported by active provider".to_string();
+            }
+            let manager = self.registry.compaction();
+            let manager_guard = match manager.try_read() {
+                Ok(g) => g,
+                Err(_) => {
+                    return "compaction manager busy".to_string();
+                }
+            };
+            let provider_messages = self.materialized_provider_messages();
+            let stats = manager_guard.stats_with(&provider_messages);
+            drop(manager_guard);
+            let diag = crate::compaction::build_compaction_diagnostics(
+                &stats,
+                &self.session.compaction_turns,
+                None,
+                self.provider.name(),
+                self.session.compaction.as_ref(),
+                jcode_provider_openai::request::OPENAI_ENCRYPTED_CONTENT_SAFE_MAX_CHARS,
+            );
+            if as_json {
+                // Serialize the digest manually because CompactionDiagnostics
+                // is not Serialize today (would couple compaction-core to
+                // serde for UI use). Keep this in sync with multi_line_body()
+                // if new fields are added.
+                let turns_json: Vec<serde_json::Value> = diag
+                    .turns
+                    .iter()
+                    .map(|t| {
+                        serde_json::json!({
+                            "turn_id": t.turn_id,
+                            "marker_message_id": t.marker_message_id,
+                            "summary_message_id": t.summary_message_id,
+                            "tail_start_id": t.tail_start_id,
+                            "backfilled_from_legacy": t.backfilled_from_legacy,
+                            "overflow": t.overflow,
+                            "has_previous_summary": t.has_previous_summary,
+                        })
+                    })
+                    .collect();
+                let native = diag.native_state.as_ref().map(|n| {
+                    use jcode_compaction_core::m48_native::SummaryRepresentation;
+                    let (kind, len, dropped) = match &n.representation {
+                        SummaryRepresentation::Native { encrypted_content_len } => {
+                            ("native", Some(*encrypted_content_len), None)
+                        }
+                        SummaryRepresentation::Text { dropped_native_len } => {
+                            ("text", None, *dropped_native_len)
+                        }
+                        SummaryRepresentation::None => ("none", None, None),
+                    };
+                    serde_json::json!({
+                        "provider_id": n.provider_id,
+                        "representation": kind,
+                        "encrypted_content_len": len,
+                        "dropped_native_len": dropped,
+                    })
+                });
+                let prune = diag.last_prune.map(|p| {
+                    serde_json::json!({
+                        "blocks_pruned": p.blocks_pruned,
+                        "bytes_recovered": p.bytes_recovered,
+                        "committed": p.committed,
+                    })
+                });
+                serde_json::json!({
+                    "supported": true,
+                    "header": diag.one_line_header(),
+                    "context_usage_ratio": diag.context_usage_ratio,
+                    "effective_tokens": diag.effective_tokens,
+                    "active_messages": diag.active_messages,
+                    "turns": turns_json,
+                    "last_prune": prune,
+                    "native_state": native,
+                })
+                .to_string()
+            } else {
+                diag.multi_line_body()
+            }
         } else {
             format!("ERROR: unknown command '{}'. Use 'help' for list.", cmd)
         }

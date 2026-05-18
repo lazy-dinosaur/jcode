@@ -856,3 +856,152 @@ fn test_note_compaction_failure_saturates() {
         "streak counter must monotonically grow past the cap"
     );
 }
+
+/// M48-C7b: build_compaction_diagnostics must wrap CompactionStats + the
+/// durable sidecar slice + the legacy summary + the active provider id
+/// into a single CompactionDiagnostics digest. This test exercises the
+/// non-OpenAI branch (text-only representation, no blob).
+#[test]
+fn build_compaction_diagnostics_non_openai_uses_text_representation() {
+    use crate::session::{StoredCompactionState, StoredCompactionTurn};
+    use jcode_compaction_core::m48_native::SummaryRepresentation;
+
+    let stats = CompactionStats {
+        total_turns: 5,
+        active_messages: 12,
+        has_summary: true,
+        is_compacting: false,
+        token_estimate: 8_000,
+        effective_tokens: 6_500,
+        observed_input_tokens: Some(7_200),
+        context_usage: 0.42,
+    };
+    let turns = vec![StoredCompactionTurn {
+        id: "t1".to_string(),
+        marker_message_id: "marker-1".to_string(),
+        summary_message_id: "summary-1".to_string(),
+        auto: true,
+        overflow: false,
+        tail_start_id: Some("tail-1".to_string()),
+        previous_summary_id: None,
+        summary_of_message_ids: vec![],
+        backfilled_from_legacy: false,
+        created_at: Some(chrono::Utc::now()),
+    }];
+    let legacy = StoredCompactionState {
+        summary_text: "anchor text".to_string(),
+        openai_encrypted_content: None,
+        covers_up_to_turn: 5,
+        original_turn_count: 5,
+        compacted_count: 3,
+    };
+    let diag = super::build_compaction_diagnostics(
+        &stats,
+        &turns,
+        None,
+        "anthropic",
+        Some(&legacy),
+        9_500_000,
+    );
+    assert_eq!(diag.context_usage_ratio, 0.42);
+    assert_eq!(diag.effective_tokens, 6_500);
+    assert_eq!(diag.active_messages, 12);
+    assert_eq!(diag.turns.len(), 1);
+    assert_eq!(diag.turns[0].turn_id, "t1");
+    assert_eq!(diag.turns[0].marker_message_id, "marker-1");
+    assert_eq!(diag.turns[0].tail_start_id.as_deref(), Some("tail-1"));
+    assert!(!diag.turns[0].has_previous_summary);
+    let native = diag.native_state.as_ref().expect("native_state set");
+    assert_eq!(native.provider_id, "anthropic");
+    assert_eq!(
+        native.representation,
+        SummaryRepresentation::Text { dropped_native_len: None }
+    );
+    // Header label should end with "text" for anthropic + text fallback.
+    assert!(diag.one_line_header().ends_with("text"));
+}
+
+/// M48-C7b: when the provider IS OpenAI and a sendable blob exists, the
+/// digest must report Native representation with the blob length, not text.
+#[test]
+fn build_compaction_diagnostics_openai_with_blob_reports_native() {
+    use crate::session::StoredCompactionState;
+    use jcode_compaction_core::m48_native::SummaryRepresentation;
+
+    let stats = CompactionStats {
+        total_turns: 1,
+        active_messages: 1,
+        has_summary: true,
+        is_compacting: false,
+        token_estimate: 0,
+        effective_tokens: 0,
+        observed_input_tokens: None,
+        context_usage: 0.0,
+    };
+    let legacy = StoredCompactionState {
+        summary_text: "text fallback".to_string(),
+        openai_encrypted_content: Some("a".repeat(1024)),
+        covers_up_to_turn: 1,
+        original_turn_count: 1,
+        compacted_count: 1,
+    };
+    let diag = super::build_compaction_diagnostics(
+        &stats,
+        &[],
+        None,
+        "openai",
+        Some(&legacy),
+        9_500_000,
+    );
+    let native = diag.native_state.as_ref().expect("native_state set");
+    assert_eq!(
+        native.representation,
+        SummaryRepresentation::Native { encrypted_content_len: 1024 }
+    );
+    assert!(diag.one_line_header().ends_with("native"));
+}
+
+/// M48-C7b: when the provider is OpenAI but the blob exceeds safe_max_chars,
+/// the digest must fall back to Text and report the dropped length so the
+/// caller can log it once.
+#[test]
+fn build_compaction_diagnostics_openai_oversized_blob_drops_to_text() {
+    use crate::session::StoredCompactionState;
+    use jcode_compaction_core::m48_native::SummaryRepresentation;
+
+    let stats = CompactionStats {
+        total_turns: 1,
+        active_messages: 1,
+        has_summary: true,
+        is_compacting: false,
+        token_estimate: 0,
+        effective_tokens: 0,
+        observed_input_tokens: None,
+        context_usage: 0.0,
+    };
+    let safe = 1_000usize;
+    let legacy = StoredCompactionState {
+        summary_text: "text fallback".to_string(),
+        openai_encrypted_content: Some("x".repeat(safe + 1)),
+        covers_up_to_turn: 1,
+        original_turn_count: 1,
+        compacted_count: 1,
+    };
+    let diag = super::build_compaction_diagnostics(
+        &stats,
+        &[],
+        None,
+        "OpenAI",
+        Some(&legacy),
+        safe,
+    );
+    let native = diag.native_state.as_ref().expect("native_state set");
+    assert_eq!(
+        native.representation,
+        SummaryRepresentation::Text {
+            dropped_native_len: Some(safe + 1)
+        }
+    );
+    // Provider id is lowercased for stable display.
+    assert_eq!(native.provider_id, "openai");
+}
