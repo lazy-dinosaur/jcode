@@ -553,6 +553,7 @@ pub(super) async fn handle_debug_client(
                                             ),
                                             turn_controls: Arc::clone(&turn_controls),
                                         }),
+                                        mcp_pool.clone(),
                                     )
                                     .await
                                 }

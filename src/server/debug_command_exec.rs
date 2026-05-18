@@ -233,6 +233,7 @@ pub(super) async fn execute_debug_command(
     debug_jobs: Arc<RwLock<HashMap<String, DebugJob>>>,
     server_identity: Option<&ServerIdentity>,
     interrupt_context: Option<DebugInterruptContext>,
+    mcp_pool: Option<Arc<crate::mcp::SharedMcpPool>>,
 ) -> Result<String> {
     let trimmed = command.trim();
 
@@ -412,9 +413,30 @@ pub(super) async fn execute_debug_command(
     if trimmed == "mcp:reload" {
         let input = serde_json::json!({"action": "reload"});
         let mut agent = agent.lock().await;
-        let result = agent.execute_tool("mcp", input).await?;
-        agent.unlock_tools();
-        return Ok(result.output);
+        match agent.execute_tool("mcp", input).await {
+            Ok(result) => {
+                agent.unlock_tools();
+                return Ok(result.output);
+            }
+            Err(err) if err.to_string().contains("Unknown tool: mcp") => {
+                let session_id = agent.session_id().to_string();
+                let registry = agent.registry();
+                drop(agent);
+                registry
+                    .register_mcp_tools(None, mcp_pool, Some(session_id.clone()))
+                    .await;
+                let diagnostics = registry.mcp_registry_diagnostics().await;
+                return Ok(serde_json::to_string_pretty(&serde_json::json!({
+                    "status": "repaired",
+                    "message": "MCP management tool was missing; re-registered MCP tools directly from the shared pool.",
+                    "session_id": session_id,
+                    "mcp_server_tool_count": diagnostics.mcp_server_tool_count,
+                    "mcp_server_tool_names": diagnostics.mcp_server_tool_names,
+                }))
+                .unwrap_or_else(|_| "{}".to_string()));
+            }
+            Err(err) => return Err(err),
+        }
     }
 
     if let Some(rest) = trimmed.strip_prefix("mcp:call:") {
@@ -860,6 +882,7 @@ mod tests {
                 debug_jobs,
                 None,
                 None,
+                None,
             ),
         )
         .await
@@ -915,6 +938,7 @@ mod tests {
                     soft_interrupt_queues,
                     turn_controls,
                 }),
+                None,
             ),
         )
         .await
