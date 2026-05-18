@@ -1,6 +1,6 @@
 use super::{
-    NotifySessionContext, clone_split_session, handle_notify_session, handle_rename_session,
-    handle_set_feature,
+    NotifySessionContext, clone_split_session, handle_compact, handle_notify_session,
+    handle_rename_session, handle_set_feature,
 };
 use crate::agent::Agent;
 use crate::message::{ContentBlock, Message, Role, StreamEvent, ToolDefinition};
@@ -537,4 +537,34 @@ async fn notify_session_queues_soft_interrupt_when_live_session_is_busy() {
             .iter()
             .any(|event| matches!(event, ServerEvent::Done { id } if *id == 88))
     );
+}
+
+#[tokio::test]
+async fn compact_request_fails_fast_when_agent_is_busy() {
+    let provider: Arc<dyn Provider> = Arc::new(MockProvider);
+    let registry = Registry::new(provider.clone()).await;
+    let agent = Arc::new(Mutex::new(Agent::new(provider, registry)));
+    let (client_event_tx, mut client_event_rx) = mpsc::unbounded_channel();
+
+    let _busy_guard = agent.lock().await;
+
+    handle_compact(123, &agent, &client_event_tx);
+
+    let event = timeout(Duration::from_secs(1), client_event_rx.recv())
+        .await
+        .expect("compact request should fail promptly while agent is busy")
+        .expect("compact result should be sent");
+
+    match event {
+        ServerEvent::CompactResult {
+            id,
+            message,
+            success,
+        } => {
+            assert_eq!(id, 123);
+            assert!(!success);
+            assert!(message.contains("request is in progress"));
+        }
+        other => panic!("expected compact result, got {other:?}"),
+    }
 }

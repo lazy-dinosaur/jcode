@@ -10,10 +10,6 @@ pub(in crate::tui::app) fn handle_server_event(
 ) -> bool {
     app.last_remote_server_event_at = Some(Instant::now());
     let eager_stream_redraw = !crate::perf::tui_policy().enable_decorative_animations;
-    if app.is_processing {
-        app.last_stream_activity = Some(Instant::now());
-    }
-
     if matches!(
         &event,
         ServerEvent::TextDelta { .. }
@@ -36,6 +32,9 @@ pub(in crate::tui::app) fn handle_server_event(
             | ServerEvent::Error { .. }
     ) {
         app.remote_resume_activity = None;
+        if app.is_processing {
+            app.last_stream_activity = Some(Instant::now());
+        }
     }
 
     // M41 — server-initiated turn wake-up.

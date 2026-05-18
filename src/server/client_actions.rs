@@ -1004,7 +1004,14 @@ pub(super) fn handle_compact(
     let agent = Arc::clone(agent);
     let tx = client_event_tx.clone();
     tokio::spawn(async move {
-        let mut agent_guard = agent.lock().await;
+        let Ok(mut agent_guard) = agent.try_lock() else {
+            let _ = tx.send(ServerEvent::CompactResult {
+                id,
+                message: "⚠ Cannot compact while a request is in progress. Try again after the current turn finishes.".to_string(),
+                success: false,
+            });
+            return;
+        };
         let session_id = agent_guard.session_id().to_string();
         let (message, success) = agent_guard.request_manual_compaction();
         drop(agent_guard);

@@ -50,6 +50,25 @@ fn test_remote_bus_dictation_completion_ignores_other_session() {
 }
 
 #[test]
+fn test_remote_pong_does_not_refresh_sending_activity_timer() {
+    let mut app = create_test_app();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+    let original_activity = std::time::Instant::now() - std::time::Duration::from_secs(180);
+
+    app.is_processing = true;
+    app.status = ProcessingStatus::Sending;
+    app.current_message_id = Some(42);
+    app.last_stream_activity = Some(original_activity);
+
+    app.handle_server_event(crate::protocol::ServerEvent::Pong { id: 7 }, &mut remote);
+
+    assert_eq!(app.last_stream_activity, Some(original_activity));
+    assert!(matches!(app.status, ProcessingStatus::Sending));
+}
+
+#[test]
 fn test_handle_server_event_transcript_send_prefixes_user_message() {
     let mut app = create_test_app();
     let rt = tokio::runtime::Runtime::new().unwrap();
