@@ -926,6 +926,8 @@ fn build_compaction_diagnostics_non_openai_uses_text_representation() {
         tail_start_id: Some("tail-1".to_string()),
         previous_summary_id: None,
         summary_of_message_ids: vec![],
+        replay_message_id: None,
+        replay_kind: None,
         backfilled_from_legacy: false,
         created_at: Some(chrono::Utc::now()),
     }];

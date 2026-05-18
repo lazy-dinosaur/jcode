@@ -822,6 +822,8 @@ fn test_save_persists_compaction_turns_round_trip() -> Result<()> {
             tail_start_id: Some("msg-tail-7".to_string()),
             previous_summary_id: None,
             summary_of_message_ids: vec!["msg-1".to_string(), "msg-2".to_string()],
+            replay_message_id: None,
+            replay_kind: None,
             backfilled_from_legacy: false,
             created_at: Some(chrono::Utc::now()),
         });
@@ -957,6 +959,140 @@ fn test_record_durable_compaction_turn_marks_overflow_recovery() -> Result<()> {
 }
 
 #[test]
+fn test_record_overflow_replay_message_persists_replay_metadata_and_labels() -> Result<()> {
+    let mut session = Session::create_with_id(
+        "session_overflow_replay_message_test".to_string(),
+        None,
+        Some("overflow replay message test".to_string()),
+    );
+    session.add_message(
+        Role::User,
+        vec![ContentBlock::Text {
+            text: "earlier goal".to_string(),
+            cache_control: None,
+        }],
+    );
+    session.add_message(
+        Role::Assistant,
+        vec![ContentBlock::Text {
+            text: "earlier answer".to_string(),
+            cache_control: None,
+        }],
+    );
+    session.add_message(
+        Role::User,
+        vec![ContentBlock::Image {
+            media_type: "image/png".to_string(),
+            data: "large-image-bytes".to_string(),
+        }],
+    );
+
+    let provider_messages = session.provider_messages();
+    let (replay_blocks, _) = jcode_compaction_core::m48_overflow::plan_overflow_replay(
+        &provider_messages,
+        provider_messages.len(),
+    )
+    .expect("safe replay candidate");
+
+    let state = StoredCompactionState {
+        summary_text: "overflow summary".to_string(),
+        openai_encrypted_content: None,
+        covers_up_to_turn: 2,
+        original_turn_count: 2,
+        compacted_count: 2,
+    };
+    assert!(session.record_durable_compaction_turn(None, &state, true, true));
+
+    let replay_id = session
+        .record_overflow_replay_message(
+            replay_blocks,
+            crate::session::StoredCompactionReplayKind::Replay,
+        )
+        .expect("fresh overflow turn accepts replay message");
+
+    let turn = session.compaction_turns.last().expect("turn recorded");
+    assert_eq!(turn.replay_message_id.as_deref(), Some(replay_id.as_str()));
+    assert_eq!(
+        turn.replay_kind,
+        Some(crate::session::StoredCompactionReplayKind::Replay)
+    );
+
+    let replay_message = session
+        .messages
+        .iter()
+        .find(|message| message.id == replay_id)
+        .expect("replay message stored");
+    assert!(matches!(replay_message.role, Role::User));
+    assert!(replay_message.content.iter().any(|block| matches!(
+        block,
+        ContentBlock::Text { text, .. }
+            if text == "[Attached image/png: replaced during compaction]"
+    )));
+    assert!(!replay_message.content.iter().any(|block| matches!(
+        block,
+        ContentBlock::Image { data, .. } if data == "large-image-bytes"
+    )));
+
+    assert!(
+        session
+            .record_overflow_replay_message(
+                vec![ContentBlock::Text {
+                    text: "duplicate".to_string(),
+                    cache_control: None,
+                }],
+                crate::session::StoredCompactionReplayKind::Continue,
+            )
+            .is_none(),
+        "a second replay/continue message must not be injected for the same overflow turn"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_record_overflow_replay_message_can_persist_continue_prompt() -> Result<()> {
+    let mut session = Session::create_with_id(
+        "session_overflow_continue_message_test".to_string(),
+        None,
+        Some("overflow continue message test".to_string()),
+    );
+    session.add_message(
+        Role::User,
+        vec![ContentBlock::Text {
+            text: "only prompt".to_string(),
+            cache_control: None,
+        }],
+    );
+    let state = StoredCompactionState {
+        summary_text: "overflow summary".to_string(),
+        openai_encrypted_content: None,
+        covers_up_to_turn: 1,
+        original_turn_count: 1,
+        compacted_count: 1,
+    };
+    assert!(session.record_durable_compaction_turn(None, &state, true, true));
+
+    let continue_id = session
+        .record_overflow_replay_message(
+            vec![ContentBlock::Text {
+                text: "Continue if you have next steps.".to_string(),
+                cache_control: None,
+            }],
+            crate::session::StoredCompactionReplayKind::Continue,
+        )
+        .expect("fresh overflow turn accepts continue message");
+    let turn = session.compaction_turns.last().expect("turn recorded");
+    assert_eq!(
+        turn.replay_message_id.as_deref(),
+        Some(continue_id.as_str())
+    );
+    assert_eq!(
+        turn.replay_kind,
+        Some(crate::session::StoredCompactionReplayKind::Continue)
+    );
+    Ok(())
+}
+
+#[test]
 fn test_load_backfills_compaction_turns_from_legacy_state() -> Result<()> {
     let _env_lock = lock_env();
     let temp_home = tempfile::Builder::new()
@@ -1034,6 +1170,8 @@ fn test_load_does_not_backfill_when_compaction_turns_already_present() -> Result
             tail_start_id: None,
             previous_summary_id: None,
             summary_of_message_ids: Vec::new(),
+            replay_message_id: None,
+            replay_kind: None,
             backfilled_from_legacy: false,
             created_at: None,
         });

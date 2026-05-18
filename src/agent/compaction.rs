@@ -1,6 +1,8 @@
 use super::*;
 
 impl Agent {
+    const OVERFLOW_CONTINUE_PROMPT: &'static str = "The previous request exceeded the provider's size limit due to large media attachments. The conversation was compacted and media files were removed from context. If the user was asking about attached images or files, explain that the attachments were too large to process and suggest they try again with smaller or fewer files.\n\nContinue if you have next steps, or stop and ask for clarification if you are unsure how to proceed.";
+
     pub(super) fn note_compaction_applied(&mut self) {
         self.cache_tracker.reset();
         self.locked_tools = None;
@@ -123,6 +125,7 @@ impl Agent {
         let context_limit = self.provider.context_window() as u64;
         let compaction = self.registry.compaction();
 
+        let mut overflow_replay_blocks: Option<Vec<ContentBlock>> = None;
         let (dropped, usage_pct) = match compaction.try_write() {
             Ok(mut manager) => {
                 // M14a: per-turn `MAX_CONTEXT_LIMIT_RETRIES` does not see
@@ -146,11 +149,14 @@ impl Agent {
                             all_messages,
                             all_messages.len(),
                         ) {
-                            Some((blocks, head_len)) => logging::info(&format!(
-                                "Context-limit overflow replay candidate prepared (blocks={}, residual_head_messages={})",
-                                blocks.len(),
-                                head_len
-                            )),
+                            Some((blocks, head_len)) => {
+                                logging::info(&format!(
+                                    "Context-limit overflow replay candidate prepared (blocks={}, residual_head_messages={})",
+                                    blocks.len(),
+                                    head_len
+                                ));
+                                overflow_replay_blocks = Some(blocks);
+                            }
                             None => logging::info(
                                 "Context-limit overflow replay skipped: no safe replay candidate",
                             ),
@@ -191,6 +197,12 @@ impl Agent {
         self.provider_session_id = None;
         self.session.provider_session_id = None;
 
+        let auto_continue = crate::config::config().compaction.auto_continue;
+        let overflow_replay = crate::config::config().compaction.overflow_replay;
+        if auto_continue && overflow_replay {
+            self.record_synthetic_overflow_replay_message(overflow_replay_blocks);
+        }
+
         logging::warn(&format!(
             "Context limit exceeded; auto-compacted and retrying (dropped {} messages, usage was {:.1}%)",
             dropped, usage_pct
@@ -207,7 +219,46 @@ impl Agent {
             .force_attribution(),
         );
 
-        crate::config::config().compaction.auto_continue
+        auto_continue
+    }
+
+    fn record_synthetic_overflow_replay_message(
+        &mut self,
+        overflow_replay_blocks: Option<Vec<ContentBlock>>,
+    ) {
+        let (content, kind) = match overflow_replay_blocks.filter(|blocks| !blocks.is_empty()) {
+            Some(blocks) => (blocks, crate::session::StoredCompactionReplayKind::Replay),
+            None => (
+                vec![ContentBlock::Text {
+                    text: Self::OVERFLOW_CONTINUE_PROMPT.to_string(),
+                    cache_control: None,
+                }],
+                crate::session::StoredCompactionReplayKind::Continue,
+            ),
+        };
+
+        let Some(message_id) = self.session.record_overflow_replay_message(content, kind) else {
+            logging::info(
+                "Context-limit overflow replay message skipped: no fresh overflow compaction turn",
+            );
+            return;
+        };
+
+        if let Some(message) = self.session.messages.last() {
+            if let Ok(mut manager) = self.registry.compaction().try_write() {
+                manager.notify_message_added_blocks(&message.content);
+            }
+        }
+        if let Err(err) = self.session.save() {
+            logging::error(&format!(
+                "Failed to persist overflow replay message for session {}: {}",
+                self.session.id, err
+            ));
+        }
+        logging::info(&format!(
+            "Context-limit overflow replay message appended (id={}, kind={:?})",
+            message_id, kind
+        ));
     }
 
     fn try_recover_oversized_openai_native_compaction(&mut self) -> bool {

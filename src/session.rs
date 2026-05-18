@@ -20,9 +20,9 @@ pub use crash::{
     find_session_by_name_or_id, recover_crashed_sessions,
 };
 pub use jcode_session_types::{
-    EnvSnapshot, GitState, SessionImproveMode, SessionStatus, StoredCompactionState,
-    StoredCompactionTurn, StoredDisplayRole, StoredMemoryInjection, StoredMessage,
-    StoredTokenUsage,
+    EnvSnapshot, GitState, SessionImproveMode, SessionStatus, StoredCompactionReplayKind,
+    StoredCompactionState, StoredCompactionTurn, StoredDisplayRole, StoredMemoryInjection,
+    StoredMessage, StoredTokenUsage,
 };
 use journal::{PersistVectorMode, SessionJournalMeta, SessionPersistState};
 pub use memory_profile::SessionMemoryProfileSnapshot;
@@ -391,12 +391,44 @@ impl Session {
             tail_start_id,
             previous_summary_id,
             summary_of_message_ids,
+            replay_message_id: None,
+            replay_kind: None,
             backfilled_from_legacy: false,
             created_at: Some(now),
         });
         self.mark_memory_profile_dirty();
         self.mark_messages_full_dirty();
         true
+    }
+
+    /// Record the synthetic user message used to auto-continue after an
+    /// overflow compaction. Returns `None` when there is no fresh overflow
+    /// compaction turn to attach to, which prevents repeated replay-message
+    /// injection if the retried request overflows again.
+    pub(crate) fn record_overflow_replay_message(
+        &mut self,
+        content: Vec<ContentBlock>,
+        kind: StoredCompactionReplayKind,
+    ) -> Option<String> {
+        if content.is_empty() {
+            return None;
+        }
+
+        let turn_index = self.compaction_turns.iter().rposition(|turn| {
+            turn.overflow
+                && !turn.is_legacy_backfill()
+                && turn.replay_message_id.is_none()
+                && turn.replay_kind.is_none()
+        })?;
+
+        let message_id = self.add_message(Role::User, content);
+        if let Some(turn) = self.compaction_turns.get_mut(turn_index) {
+            turn.replay_message_id = Some(message_id.clone());
+            turn.replay_kind = Some(kind);
+        }
+        self.mark_memory_profile_dirty();
+        self.mark_messages_full_dirty();
+        Some(message_id)
     }
 
     fn session_from_startup_stub(stub: SessionStartupStub) -> Self {
@@ -682,6 +714,8 @@ impl Session {
             tail_start_id: None,
             previous_summary_id: None,
             summary_of_message_ids: Vec::new(),
+            replay_message_id: None,
+            replay_kind: None,
             backfilled_from_legacy: true,
             created_at: Some(self.updated_at),
         });
