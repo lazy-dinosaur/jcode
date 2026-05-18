@@ -121,6 +121,9 @@ impl App {
             "reload" => {
                 "`/reload`\nReload into the newest available binary if one is ready. This is fast and does not rebuild."
             }
+            "mcp" => {
+                "`/mcp reload`\nRe-register MCP tools for this session and unlock the provider tool list. Use this when MCP tools such as Figma disappear after reloads."
+            }
             "restart" => {
                 "`/restart`\nRestart jcode with the current binary. Session is preserved.\nUseful after config changes, MCP server updates, or env var changes."
             }

@@ -531,6 +531,16 @@ fn test_registered_command_suggestions_include_aliases_and_hide_secret_commands(
 }
 
 #[test]
+fn test_remote_command_suggestions_include_mcp_reload() {
+    let mut app = create_test_app();
+    app.is_remote = true;
+
+    let suggestions = app.get_suggestions_for("/mcp");
+
+    assert!(suggestions.iter().any(|(cmd, _)| cmd == "/mcp reload"));
+}
+
+#[test]
 fn test_auth_doctor_command_suggestion_is_not_shadowed_by_provider_suggestions() {
     let app = create_test_app();
     let suggestions = app.get_suggestions_for("/auth d");
