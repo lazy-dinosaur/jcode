@@ -1586,6 +1586,21 @@ The 10-stage M47 patch series (`patch/m47-c0-deep-merge-profiles` through `patch
      - `cargo check -p jcode`.
    - Binary reinstall required: yes (MCP tool runtime error handling changed).
 
+73. Skill manage duplicate name/skill alias hotfix
+   - Commit: `370d027b` `[skill] accept duplicate name and skill args`.
+   - Patch branch: `patch/skill-manage-duplicate-name-alias`.
+   - Purpose: fix intermittent `skill_manage error: duplicate field \`name\`` failures when a model/tool caller sends both `name` and the Claude-style `skill` alias.
+   - Runtime changes:
+     - Removed serde `alias = "skill"` from the `name` field.
+     - Added a separate `skill: Option<String>` input field and explicit name resolution.
+     - If both fields are present, `name` wins unless it is blank; `skill` remains accepted as the alias-only path.
+   - Validation:
+     - `cargo test -p jcode --lib tool::skill::tests::test_load_accepts_duplicate_name_and_skill_alias_without_serde_error`.
+     - `cargo test -p jcode --lib tool::skill::tests::test_load_accepts_skill_alias_and_args`.
+     - `cargo test -p jcode --lib tool::skill::tests::test_load_prefers_name_when_name_and_skill_differ`.
+     - `cargo check -p jcode`.
+   - Binary reinstall required: yes (skill_manage input parsing changed).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.

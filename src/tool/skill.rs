@@ -25,8 +25,11 @@ struct SkillInput {
     #[serde(default = "default_action")]
     action: String,
     /// Skill name (required for load, reload, read)
-    #[serde(default, alias = "skill")]
+    #[serde(default)]
     name: Option<String>,
+    /// Skill name alias accepted from Skill-style calls.
+    #[serde(default)]
+    skill: Option<String>,
     /// Optional Claude-compatible Skill wrapper argument. The skill loader only
     /// needs to load the prompt, so args are currently accepted and ignored.
     #[serde(default)]
@@ -72,15 +75,18 @@ impl Tool for SkillTool {
     async fn execute(&self, input: Value, ctx: ToolContext) -> Result<ToolOutput> {
         let params: SkillInput = serde_json::from_value(input)?;
         let action_label = params.action.clone();
-        let name_label = params.name.clone().unwrap_or_else(|| "<none>".to_string());
+        let effective_name = resolve_skill_name_alias(params.name, params.skill);
+        let name_label = effective_name
+            .clone()
+            .unwrap_or_else(|| "<none>".to_string());
         let _args = params.args.as_deref();
 
         match params.action.as_str() {
-            "load" => self.load_skill(params.name).await,
+            "load" => self.load_skill(effective_name).await,
             "list" => self.list_skills().await,
-            "reload" => self.reload_skill(params.name).await,
+            "reload" => self.reload_skill(effective_name).await,
             "reload_all" => self.reload_all_skills(ctx.working_dir.as_deref()).await,
-            "read" => self.read_skill(params.name).await,
+            "read" => self.read_skill(effective_name).await,
             _ => Ok(ToolOutput::new(format!(
                 "Unknown action: {}. Use 'load', 'list', 'reload', 'reload_all', or 'read'.",
                 params.action
@@ -93,6 +99,16 @@ impl Tool for SkillTool {
             ));
             err
         })
+    }
+}
+
+fn resolve_skill_name_alias(name: Option<String>, skill: Option<String>) -> Option<String> {
+    match (name, skill) {
+        (Some(name), Some(skill)) if name.trim().is_empty() => Some(skill),
+        (Some(name), Some(_skill)) => Some(name),
+        (Some(name), None) => Some(name),
+        (None, Some(skill)) => Some(skill),
+        (None, None) => None,
     }
 }
 
@@ -356,6 +372,36 @@ mod tests {
         let result = tool.execute(input, ctx).await.unwrap();
         assert!(result.output.contains("## Skill: optimization"));
         assert_eq!(result.title.as_deref(), Some("skill: optimization"));
+    }
+
+    #[tokio::test]
+    async fn test_load_accepts_duplicate_name_and_skill_alias_without_serde_error() {
+        let (tool, _temp_dir) = create_test_tool_with_skill("optimization");
+        let ctx = create_test_context();
+        let input = json!({
+            "action": "load",
+            "name": "optimization",
+            "skill": "optimization",
+            "args": "optimize this"
+        });
+
+        let result = tool.execute(input, ctx).await.unwrap();
+        assert!(result.output.contains("## Skill: optimization"));
+        assert_eq!(result.title.as_deref(), Some("skill: optimization"));
+    }
+
+    #[tokio::test]
+    async fn test_load_prefers_name_when_name_and_skill_differ() {
+        let (tool, _temp_dir) = create_test_tool_with_skill("optimization");
+        let ctx = create_test_context();
+        let input = json!({
+            "action": "load",
+            "name": "optimization",
+            "skill": "other-skill"
+        });
+
+        let result = tool.execute(input, ctx).await.unwrap();
+        assert!(result.output.contains("## Skill: optimization"));
     }
 
     #[tokio::test]
