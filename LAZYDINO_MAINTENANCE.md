@@ -1249,6 +1249,25 @@ The 10-stage M47 patch series (`patch/m47-c0-deep-merge-profiles` through `patch
      - `cargo check -p jcode`.
    - Binary reinstall required: yes (runtime overflow retry transcript behavior changed).
 
+54. Native compaction provider fallback runtime wiring (M48-C6b)
+   - Commit: `4ac10fed` `[m48-c6b] wire native compaction provider fallback`.
+   - Patch branch: `patch/m48-c6b-native-runtime`.
+   - Purpose: finish the C-6 native/text coexistence layer by making runtime cleanup provider-aware instead of only checking OpenAI blob size.
+   - Runtime changes:
+     - `CompactionManager::discard_oversized_openai_native_compaction` now delegates to `m48_native::decide_summary_representation` using the OpenAI safe-size ceiling.
+     - New `discard_native_compaction_for_provider(provider_id)` invalidates native OpenAI blobs when the active provider cannot consume them and preserves/synthesizes a text fallback summary.
+     - Agent and TUI provider-message rebuild paths call the provider-aware cleanup with the active provider name.
+     - `Agent::set_model` sanitizes persisted `Session.compaction.openai_encrypted_content` after provider/model switches and resets provider session state when the blob is dropped.
+     - Existing `openai_native_compaction_mode` and threshold config remain unchanged.
+   - Tests:
+     - `compaction::tests::native_compaction_blob_is_kept_for_openai_when_sendable`.
+     - `compaction::tests::native_compaction_blob_is_replaced_with_text_when_provider_cannot_consume_it`.
+     - `compaction::tests::oversized_openai_native_blob_uses_text_fallback`.
+   - Validation:
+     - `cargo test -p jcode --lib compaction::tests` → 39 pass.
+     - `cargo check -p jcode`.
+   - Binary reinstall required: yes (runtime provider-switch/native compaction behavior changed).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
