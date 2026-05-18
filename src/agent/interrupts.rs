@@ -5,7 +5,8 @@ use crate::protocol::ServerEvent;
 use crate::session::StoredDisplayRole;
 use anyhow::Result;
 use jcode_agent_runtime::{
-    InterruptSignal, SoftInterruptMessage, SoftInterruptQueue, SoftInterruptSource,
+    InterruptSignal, SoftInterruptMessage, SoftInterruptQueue, SoftInterruptSource, TurnControl,
+    TurnStopReason,
 };
 use std::sync::Arc;
 
@@ -143,6 +144,18 @@ impl Agent {
 
     pub fn graceful_shutdown_signal(&self) -> InterruptSignal {
         self.graceful_shutdown.clone()
+    }
+
+    pub fn turn_control(&self) -> TurnControl {
+        self.turn_control.clone()
+    }
+
+    pub fn turn_stop_signal(&self) -> InterruptSignal {
+        self.turn_control.stop_signal()
+    }
+
+    pub fn request_turn_stop(&self, reason: TurnStopReason) {
+        self.turn_control.request_stop(reason);
     }
 
     pub fn request_graceful_shutdown(&self) {

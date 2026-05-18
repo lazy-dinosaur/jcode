@@ -2,7 +2,8 @@ use crate::bus::FileOp;
 use crate::plan::VersionedPlan;
 use crate::protocol::ServerEvent;
 use jcode_agent_runtime::{
-    InterruptSignal, SoftInterruptMessage, SoftInterruptQueue, SoftInterruptSource,
+    InterruptSignal, SoftInterruptMessage, SoftInterruptQueue, SoftInterruptSource, TurnControl,
+    TurnStopReason,
 };
 use jcode_swarm_core::{SwarmLifecycleStatus, SwarmMemberRecord, SwarmRole};
 use serde::{Deserialize, Serialize};
@@ -302,6 +303,7 @@ pub struct SwarmEvent {
 pub(super) const MAX_EVENT_HISTORY: usize = 5000;
 
 pub(super) type SessionInterruptQueues = Arc<RwLock<HashMap<String, SoftInterruptQueue>>>;
+pub(super) type SessionTurnControls = Arc<RwLock<HashMap<String, TurnControl>>>;
 
 pub(super) async fn register_session_event_sender(
     swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,
@@ -465,7 +467,7 @@ pub struct SessionControlHandle {
     pub session_id: String,
     soft_interrupt_queue: SoftInterruptQueue,
     background_tool_signal: Option<InterruptSignal>,
-    stop_current_turn_signal: InterruptSignal,
+    turn_control: TurnControl,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -476,6 +478,7 @@ pub struct SessionControlDiagnostics {
     pub background_tool_signal_registered: bool,
     pub background_tool_signal_set: bool,
     pub stop_current_turn_signal_set: bool,
+    pub stop_reason: Option<String>,
 }
 
 impl SessionControlHandle {
@@ -483,26 +486,26 @@ impl SessionControlHandle {
         session_id: impl Into<String>,
         soft_interrupt_queue: SoftInterruptQueue,
         background_tool_signal: InterruptSignal,
-        stop_current_turn_signal: InterruptSignal,
+        turn_control: TurnControl,
     ) -> Self {
         Self {
             session_id: session_id.into(),
             soft_interrupt_queue,
             background_tool_signal: Some(background_tool_signal),
-            stop_current_turn_signal,
+            turn_control,
         }
     }
 
     pub fn cancel_only(
         session_id: impl Into<String>,
         soft_interrupt_queue: SoftInterruptQueue,
-        stop_current_turn_signal: InterruptSignal,
+        turn_control: TurnControl,
     ) -> Self {
         Self {
             session_id: session_id.into(),
             soft_interrupt_queue,
             background_tool_signal: None,
-            stop_current_turn_signal,
+            turn_control,
         }
     }
 
@@ -522,11 +525,12 @@ impl SessionControlHandle {
     }
 
     pub fn request_cancel(&self) {
-        self.stop_current_turn_signal.fire();
+        self.turn_control
+            .request_stop(TurnStopReason::UserInterrupt);
     }
 
     pub fn reset_cancel(&self) {
-        self.stop_current_turn_signal.reset();
+        self.turn_control.reset();
     }
 
     pub fn request_background_current_tool(&self) -> bool {
@@ -539,7 +543,11 @@ impl SessionControlHandle {
     }
 
     pub fn stop_current_turn_signal(&self) -> InterruptSignal {
-        self.stop_current_turn_signal.clone()
+        self.turn_control.stop_signal()
+    }
+
+    pub fn turn_control(&self) -> TurnControl {
+        self.turn_control.clone()
     }
 
     pub fn interrupt_diagnostics(&self) -> SessionControlDiagnostics {
@@ -561,7 +569,8 @@ impl SessionControlHandle {
                 .as_ref()
                 .map(|signal| signal.is_set())
                 .unwrap_or(false),
-            stop_current_turn_signal_set: self.stop_current_turn_signal.is_set(),
+            stop_current_turn_signal_set: self.turn_control.is_stopped(),
+            stop_reason: self.turn_control.reason_label().map(str::to_string),
         }
     }
 }
@@ -573,6 +582,32 @@ pub(super) async fn register_session_interrupt_queue(
 ) {
     let mut guard = queues.write().await;
     guard.insert(session_id.to_string(), queue);
+}
+
+pub(super) async fn register_session_turn_control(
+    controls: &SessionTurnControls,
+    session_id: &str,
+    control: TurnControl,
+) {
+    let mut guard = controls.write().await;
+    guard.insert(session_id.to_string(), control);
+}
+
+#[allow(dead_code)]
+pub(super) async fn rename_session_turn_control(
+    controls: &SessionTurnControls,
+    old_session_id: &str,
+    new_session_id: &str,
+) {
+    let mut guard = controls.write().await;
+    if let Some(control) = guard.remove(old_session_id) {
+        guard.insert(new_session_id.to_string(), control);
+    }
+}
+
+pub(super) async fn remove_session_turn_control(controls: &SessionTurnControls, session_id: &str) {
+    let mut guard = controls.write().await;
+    guard.remove(session_id);
 }
 
 pub(super) async fn rename_session_interrupt_queue(

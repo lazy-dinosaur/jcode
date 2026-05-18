@@ -3,8 +3,8 @@ use super::debug::{ClientConnectionInfo, ClientDebugState, handle_debug_client};
 use super::debug_jobs::DebugJob;
 use super::util::get_shared_mcp_pool;
 use super::{
-    AwaitMembersRuntime, FileAccess, ServerIdentity, SessionInterruptQueues, SharedContext,
-    SwarmEvent, SwarmMutationRuntime, SwarmState,
+    AwaitMembersRuntime, FileAccess, ServerIdentity, SessionInterruptQueues, SessionTurnControls,
+    SharedContext, SwarmEvent, SwarmMutationRuntime, SwarmState,
 };
 use crate::agent::Agent;
 use crate::ambient_runner::AmbientRunnerHandle;
@@ -50,6 +50,7 @@ pub(super) struct ServerRuntime {
     mcp_pool: Arc<OnceCell<Arc<crate::mcp::SharedMcpPool>>>,
     shutdown_signals: Arc<RwLock<HashMap<String, InterruptSignal>>>,
     soft_interrupt_queues: SessionInterruptQueues,
+    turn_controls: SessionTurnControls,
     await_members_runtime: AwaitMembersRuntime,
     swarm_mutation_runtime: SwarmMutationRuntime,
 }
@@ -83,6 +84,7 @@ impl ServerRuntime {
             mcp_pool: Arc::clone(&server.mcp_pool),
             shutdown_signals: Arc::clone(&server.shutdown_signals),
             soft_interrupt_queues: Arc::clone(&server.soft_interrupt_queues),
+            turn_controls: Arc::clone(&server.turn_controls),
             await_members_runtime: server.await_members_runtime.clone(),
             swarm_mutation_runtime: server.swarm_mutation_runtime.clone(),
         }
@@ -231,6 +233,7 @@ impl ServerRuntime {
             mcp_pool,
             Arc::clone(&self.shutdown_signals),
             Arc::clone(&self.soft_interrupt_queues),
+            Arc::clone(&self.turn_controls),
             self.await_members_runtime.clone(),
             self.swarm_mutation_runtime.clone(),
         )
@@ -278,6 +281,7 @@ impl ServerRuntime {
             mcp_pool,
             Arc::clone(&self.shutdown_signals),
             Arc::clone(&self.soft_interrupt_queues),
+            Arc::clone(&self.turn_controls),
         )
         .await
         {
