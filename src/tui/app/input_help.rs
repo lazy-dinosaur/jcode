@@ -50,10 +50,10 @@ impl App {
                 "`/git`\nShow `git status --short --branch` for the current session working directory.\n\n`/git status`\nAlias for `/git`."
             }
             "lazygit" | "lg" => {
-                "`/lazygit`\nRun `lazygit` in the current Jcode terminal at the session working directory. Jcode returns when lazygit exits. Available only while Jcode is idle, not while thinking/streaming.\n\n`/lg`\nAlias for `/lazygit`."
+                "`/lazygit`\nRun `lazygit` in the current Jcode terminal at the session working directory. Jcode returns when lazygit exits.\n\n`/lg`\nAlias for `/lazygit`."
             }
             "nvim" => {
-                "`/nvim [file-or-dir]`\nRun `nvim` in the current Jcode terminal at the session working directory. Relative paths are resolved from the session cwd. If no target is provided, opens the current cwd. Available only while Jcode is idle, not while thinking/streaming."
+                "`/nvim [file-or-dir]`\nRun `nvim` in the current Jcode terminal at the session working directory. Relative paths are resolved from the session cwd. If no target is provided, opens the current cwd. Jcode returns when nvim exits."
             }
             "catchup" => {
                 "`/catchup`\nOpen the Catch Up picker for finished sessions that need attention.\n\n`/catchup next`\nTeleport to the next session needing attention and open a Catch Up brief in the side panel.\n\n`/catchup list`\nAlias for opening the picker."
