@@ -1133,6 +1133,32 @@ The 10-stage M47 patch series (`patch/m47-c0-deep-merge-profiles` through `patch
    - Validation: 67 `jcode-compaction-core` lib tests pass (57 prior + 10 new). `cargo check -p jcode` clean. No runtime caller wired yet; M48-C6b will replace the existing `discard_oversized_openai_native_compaction` call sites and provider-switch cleanup logic in `src/compaction.rs` + `src/provider/jcode.rs` with calls to `decide_summary_representation` / `provider_can_consume_blob`.
    - Binary reinstall required: no (test-only module; production binary unchanged).
 
+49. Compaction-state diagnostics for TUI and debug overlays (M48-C7a)
+   - Commit: `f24b98f2` `[m48-c7] compaction-state diagnostics for TUI and debug overlays`.
+   - Patch branch: `patch/m48-c7-diagnostics` (parent: `deploy/m9-m27-catchup`).
+   - Purpose: every UI surface that wants to show "how compacted is this session?" today re-derives the numbers locally (`context_usage_with`, `active_messages_count`, etc.). That is exactly the drift that made the original emergency compaction hard to diagnose. This stage adds one structured `CompactionDiagnostics` digest so the TUI status bar, debug socket profile, and future export tooling all render from the same source.
+   - New module `jcode-compaction-core::m48_diagnostics`:
+     - `struct CompactionTurnDigest` — per-turn slice carrying `turn_id`, `marker_message_id` (empty for legacy backfill), `summary_message_id` (empty for legacy backfill), `tail_start_id`, `backfilled_from_legacy`, `overflow`, `has_previous_summary`. Each field is annotated with its origin (M48-C1 sidecar, M48-C2 selection, M48-C1 backfill flag) so reviewers can grep for the source.
+     - `struct NativeStateDigest { provider_id, representation }` where `representation` is the M48-C6a `SummaryRepresentation` enum so the decision and its inputs flow into the digest without losing precision.
+     - `struct CompactionDiagnostics { context_usage_ratio: f32, effective_tokens, active_messages, turns, last_prune: Option<PruneReport>, native_state: Option<NativeStateDigest> }` — the aggregate UI shape.
+   - Rendering helpers (both pure, no side effects):
+     - `one_line_header()` returns the format `"ctx N% | M msgs | K turns compacted | native|text|none|—"`. Ratio is clamped to `[0, 1]` and shown as integer percent. The trailing label distinguishes Native / Text / None / no-state.
+     - `multi_line_body()` renders the same header plus `effective tokens:`, `active messages:`, one line per turn (legacy turns show em-dash for empty marker/summary ids; flags `legacy=true/false`, `overflow=true/false`, `chained=true/false`), an optional `last prune:` line carrying `blocks` + `bytes` + `committed`, and an optional `native state (provider): ...` line. UI components may truncate but must keep this exact ordering so the numbers do not drift across surfaces.
+   - Design choices:
+     - `CompactionDiagnostics` derives `Clone + PartialEq` but not `Eq` (because `context_usage_ratio: f32` cannot be Eq). The other digest structs derive `Eq` so they remain hashable / comparable for unit-test snapshots.
+     - The render functions own only the string shape; numeric derivation stays in `src/compaction.rs::CompactionStats`. C-7b will write a thin glue in `src/compaction.rs` that materializes a `CompactionDiagnostics` from `CompactionStats` + `Session.compaction_turns` + the last `PruneReport`.
+   - Tests (7 new in `m48_diagnostics::diagnostics_tests`):
+     - `one_line_header_formats_percent_and_counts` and `one_line_header_clamps_ratio` (ratio formatting + clamp).
+     - `one_line_header_labels_native_vs_text_vs_none` (label matrix across the three `SummaryRepresentation` variants).
+     - `multi_line_body_renders_no_turns_marker` (no turns → "(none)"; no prune/native lines).
+     - `multi_line_body_renders_legacy_and_real_turns` (em-dash for legacy ids, real ids for real turns, prune line, native fallback line with `dropped_native_len`, `overflow=true`, `chained=true`).
+     - `multi_line_body_renders_native_in_use_label` (Native variant byte count).
+     - `one_line_header_with_no_turns_and_no_native_state` (smoke test for the empty-state header).
+   - Touched paths:
+     - `crates/jcode-compaction-core/src/lib.rs` (+319 lines: new `pub mod m48_diagnostics` with `CompactionTurnDigest`, `NativeStateDigest`, `CompactionDiagnostics`, render helpers, and inline tests).
+   - Validation: 74 `jcode-compaction-core` lib tests pass (67 prior + 7 new). `cargo check -p jcode` clean. No runtime caller wired yet; M48-C7b will replace the ad-hoc compaction stat formatters in `src/tui` with a `CompactionDiagnostics::multi_line_body()` call and add a `debug_socket` command that emits the same structure as JSON.
+   - Binary reinstall required: no (test-only module; production binary unchanged).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
