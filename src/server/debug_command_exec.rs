@@ -412,6 +412,7 @@ pub(super) async fn execute_debug_command(
 
     if trimmed == "mcp:reload" {
         let input = serde_json::json!({"action": "reload"});
+        let agent_arc = Arc::clone(&agent);
         let mut agent = agent.lock().await;
         match agent.execute_tool("mcp", input).await {
             Ok(result) => {
@@ -425,6 +426,9 @@ pub(super) async fn execute_debug_command(
                 registry
                     .register_mcp_tools(None, mcp_pool, Some(session_id.clone()))
                     .await;
+                if let Ok(mut agent) = agent_arc.try_lock() {
+                    agent.unlock_tools();
+                }
                 let diagnostics = registry.mcp_registry_diagnostics().await;
                 return Ok(serde_json::to_string_pretty(&serde_json::json!({
                     "status": "repaired",
