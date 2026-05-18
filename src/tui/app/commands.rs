@@ -1226,6 +1226,18 @@ fn active_or_process_working_dir(app: &App) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+fn block_external_tool_while_busy(app: &mut App, command: &str) -> bool {
+    if !app.is_processing {
+        return false;
+    }
+
+    app.push_display_message(DisplayMessage::error(format!(
+        "`{command}` is disabled while Jcode is thinking or streaming. Wait for the response to finish or interrupt it first, then run `{command}` again."
+    )));
+    app.set_status_notice(format!("{command} unavailable while processing"));
+    true
+}
+
 #[cfg(test)]
 fn external_tool_manual_command(program: &str, args: &[String], cwd: &Path) -> String {
     let command = std::iter::once(program.to_string())
@@ -1330,6 +1342,10 @@ fn handle_lazygit_command(app: &mut App, trimmed: &str) -> bool {
         return false;
     }
 
+    if block_external_tool_while_busy(app, "/lazygit") {
+        return true;
+    }
+
     let cwd = active_or_process_working_dir(app);
     run_external_tool_in_current_terminal(app, "lazygit", Vec::new(), cwd, |cwd| {
         format!("Returned from `lazygit` at `{}`.", cwd.display())
@@ -1382,6 +1398,10 @@ fn handle_nvim_command(app: &mut App, trimmed: &str) -> bool {
     };
     if !rest.is_empty() && !rest.chars().next().is_some_and(char::is_whitespace) {
         return false;
+    }
+
+    if block_external_tool_while_busy(app, "/nvim") {
+        return true;
     }
 
     let cwd = active_or_process_working_dir(app);
