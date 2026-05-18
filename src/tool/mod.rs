@@ -43,6 +43,7 @@ use jcode_message_types::ToolDefinition;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
 
 pub(crate) use jcode_tool_core::intent_schema_property;
@@ -80,6 +81,16 @@ impl Clone for Registry {
 }
 
 impl Registry {
+    const DEFAULT_MCP_READINESS_TIMEOUT_MS: u64 = 5_000;
+
+    fn mcp_readiness_timeout() -> Duration {
+        std::env::var("JCODE_MCP_READINESS_TIMEOUT_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .map(Duration::from_millis)
+            .unwrap_or_else(|| Duration::from_millis(Self::DEFAULT_MCP_READINESS_TIMEOUT_MS))
+    }
+
     fn shared_skills_registry() -> Arc<RwLock<SkillRegistry>> {
         SkillRegistry::shared_registry()
     }
@@ -527,6 +538,20 @@ impl Registry {
         event_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::protocol::ServerEvent>>,
         mcp_manager: Arc<RwLock<crate::mcp::McpManager>>,
     ) {
+        self.register_mcp_tools_from_manager_with_timeout(
+            event_tx,
+            mcp_manager,
+            Self::mcp_readiness_timeout(),
+        )
+        .await;
+    }
+
+    pub(crate) async fn register_mcp_tools_from_manager_with_timeout(
+        &self,
+        event_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::protocol::ServerEvent>>,
+        mcp_manager: Arc<RwLock<crate::mcp::McpManager>>,
+        readiness_timeout: Duration,
+    ) {
         // Register MCP management tool immediately (with registry for dynamic tool registration)
         let mcp_tool =
             mcp::McpManagementTool::new(Arc::clone(&mcp_manager)).with_registry(self.clone());
@@ -559,9 +584,12 @@ impl Registry {
                 });
             }
 
-            // Spawn connection and tool registration in background
+            // Spawn connection/tool registration, but wait briefly so
+            // subscribe/resume after selfdev reload does not report ready before
+            // MCP server tools are registered in the common case. If the timeout
+            // expires, the task is detached and continues in the background.
             let registry = self.clone();
-            tokio::spawn(async move {
+            let mut registration = tokio::spawn(async move {
                 let (successes, failures) = {
                     let manager = mcp_manager.write().await;
                     manager.connect_all().await.unwrap_or((0, Vec::new()))
@@ -598,6 +626,20 @@ impl Registry {
                     let _ = tx.send(crate::protocol::ServerEvent::McpStatus { servers });
                 }
             });
+            match tokio::time::timeout(readiness_timeout, &mut registration).await {
+                Ok(Ok(())) => crate::logging::info(&format!(
+                    "MCP: registration reached final state within {}ms",
+                    readiness_timeout.as_millis()
+                )),
+                Ok(Err(err)) => crate::logging::error(&format!(
+                    "MCP: registration task failed before readiness barrier completed: {}",
+                    err
+                )),
+                Err(_) => crate::logging::warn(&format!(
+                    "MCP: registration still pending after {}ms; continuing in background",
+                    readiness_timeout.as_millis()
+                )),
+            }
         }
     }
 
