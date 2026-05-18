@@ -438,6 +438,7 @@ pub(super) async fn execute_debug_command(
     if trimmed == "cancel" {
         let content = "[CANCELLED] Generation cancelled via debug socket".to_string();
         let mut delivered_without_agent_lock = false;
+        let mut diagnostics = None;
 
         if let Some(control) = match &interrupt_context {
             Some(ctx) => ctx.control_handle().await,
@@ -446,6 +447,7 @@ pub(super) async fn execute_debug_command(
             let _queued =
                 control.queue_soft_interrupt(content.clone(), true, SoftInterruptSource::User);
             control.request_cancel();
+            diagnostics = Some(control.interrupt_diagnostics());
             delivered_without_agent_lock = true;
         }
 
@@ -456,7 +458,8 @@ pub(super) async fn execute_debug_command(
         }
         return Ok(serde_json::json!({
             "status": "cancel_queued",
-            "message": "Cancel signal sent - running generation should stop promptly"
+            "message": "Cancel signal sent - running generation should stop promptly",
+            "control": diagnostics,
         })
         .to_string());
     }
@@ -919,6 +922,8 @@ mod tests {
         .expect("debug cancel should succeed");
 
         assert!(output.contains("cancel_queued"));
+        assert!(output.contains("\"turn_state\":\"cancelling\""));
+        assert!(output.contains("interrupting (user_interrupt)"));
         assert!(turn_control.is_stopped());
         assert_eq!(turn_control.reason_label(), Some("user_interrupt"));
         assert!(

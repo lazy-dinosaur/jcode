@@ -353,6 +353,7 @@ pub(in crate::tui::app) fn handle_server_event(
             app.push_display_message(DisplayMessage::system("Interrupted"));
             app.is_processing = false;
             app.status = ProcessingStatus::Idle;
+            app.status_detail = None;
             app.stream_message_ended = false;
             app.processing_started = None;
             app.current_message_id = None;
