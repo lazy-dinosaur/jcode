@@ -1265,14 +1265,32 @@ fn handle_lazygit_command(app: &mut App, trimmed: &str) -> bool {
 }
 
 fn handle_scratchpad_command(app: &mut App, trimmed: &str) -> bool {
-    if trimmed != "/scratchpad" && trimmed != "/sp" {
-        if trimmed.starts_with("/scratchpad ") || trimmed.starts_with("/sp ") {
-            app.push_display_message(DisplayMessage::error(
-                "Usage: `/scratchpad` or `/sp`".to_string(),
-            ));
+    let (matched, rest) = if trimmed == "/scratchpad" {
+        (true, "")
+    } else if trimmed == "/sp" {
+        (true, "")
+    } else if let Some(rest) = trimmed.strip_prefix("/scratchpad ") {
+        (true, rest.trim())
+    } else if let Some(rest) = trimmed.strip_prefix("/sp ") {
+        (true, rest.trim())
+    } else {
+        (false, "")
+    };
+    if !matched {
+        return false;
+    }
+
+    if !rest.is_empty() {
+        if let Some(mode) = crate::tui::scratchpad_terminal::ScratchpadSizeMode::parse(rest) {
+            app.set_scratchpad_size_mode(mode);
             return true;
         }
-        return false;
+
+        app.push_display_message(DisplayMessage::error(
+            "Usage: `/scratchpad [full|large|compact|panel]` or `/sp [full|large|compact|panel]`"
+                .to_string(),
+        ));
+        return true;
     }
 
     app.toggle_scratchpad_terminal();

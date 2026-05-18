@@ -1,5 +1,5 @@
 use super::*;
-use crate::tui::scratchpad_terminal::ScratchpadTerminal;
+use crate::tui::scratchpad_terminal::{ScratchpadSizeMode, ScratchpadTerminal};
 use crossterm::event::KeyEvent;
 
 impl App {
@@ -60,6 +60,32 @@ impl App {
                 "No active scratchpad. Use `/nvim` or `/lazygit` first.".to_string(),
             ));
         }
+        true
+    }
+
+    pub(super) fn set_scratchpad_size_mode(&mut self, mode: ScratchpadSizeMode) -> bool {
+        let Some(scratchpad_cell) = self.scratchpad_terminal.as_ref() else {
+            self.push_display_message(DisplayMessage::system(format!(
+                "No active scratchpad. Use `/nvim` or `/lazygit` first, then `/scratchpad {}`.",
+                mode.label()
+            )));
+            return true;
+        };
+
+        let mut scratchpad = scratchpad_cell.borrow_mut();
+        if scratchpad.is_exited() {
+            drop(scratchpad);
+            self.scratchpad_terminal = None;
+            self.push_display_message(DisplayMessage::system(
+                "No active scratchpad. Use `/nvim` or `/lazygit` first.".to_string(),
+            ));
+            return true;
+        }
+
+        scratchpad.set_size_mode(mode);
+        scratchpad.show();
+        drop(scratchpad);
+        self.set_status_notice(format!("Scratchpad size → {}", mode.label()));
         true
     }
 

@@ -17,6 +17,35 @@ const DEFAULT_ROWS: u16 = 24;
 const DEFAULT_COLS: u16 = 80;
 const SCROLLBACK_LINES: usize = 2_000;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScratchpadSizeMode {
+    Full,
+    Large,
+    Compact,
+    Panel,
+}
+
+impl ScratchpadSizeMode {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "full" | "fullscreen" | "max" | "maximize" => Some(Self::Full),
+            "large" | "big" => Some(Self::Large),
+            "compact" | "small" => Some(Self::Compact),
+            "panel" | "side" | "right" => Some(Self::Panel),
+            _ => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Large => "large",
+            Self::Compact => "compact",
+            Self::Panel => "panel",
+        }
+    }
+}
+
 #[derive(Debug)]
 enum ScratchpadEvent {
     Output(Vec<u8>),
@@ -34,6 +63,7 @@ pub struct ScratchpadTerminal {
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     rx: Receiver<ScratchpadEvent>,
     visible: bool,
+    size_mode: ScratchpadSizeMode,
     exited: bool,
     exit_message: Option<String>,
     last_size: PtySize,
@@ -98,6 +128,7 @@ impl ScratchpadTerminal {
             writer,
             rx,
             visible: true,
+            size_mode: ScratchpadSizeMode::Full,
             exited: false,
             exit_message: None,
             last_size: size,
@@ -130,6 +161,10 @@ impl ScratchpadTerminal {
         if !self.exited {
             self.visible = !self.visible;
         }
+    }
+
+    pub(crate) fn set_size_mode(&mut self, mode: ScratchpadSizeMode) {
+        self.size_mode = mode;
     }
 
     pub(crate) fn kill(&mut self) {
@@ -236,7 +271,7 @@ impl ScratchpadTerminal {
         if !self.visible {
             return;
         }
-        let outer = scratchpad_rect(area);
+        let outer = scratchpad_rect(area, self.size_mode);
         if outer.width < 8 || outer.height < 5 {
             return;
         }
@@ -253,7 +288,8 @@ impl ScratchpadTerminal {
             }
         );
         let footer = format!(
-            " cwd: {} · Ctrl+G hide · Ctrl+Q kill ",
+            " {} · cwd: {} · Ctrl+G hide · Ctrl+Q kill ",
+            self.size_mode.label(),
             compact_path(&self.cwd)
         );
         let block = Block::default()
@@ -300,9 +336,41 @@ impl Drop for ScratchpadTerminal {
     }
 }
 
-fn scratchpad_rect(area: Rect) -> Rect {
-    let width_pct = if area.width >= 140 { 78 } else { 92 };
-    let height_pct = if area.height >= 45 { 82 } else { 88 };
+fn scratchpad_rect(area: Rect, mode: ScratchpadSizeMode) -> Rect {
+    match mode {
+        ScratchpadSizeMode::Full => {
+            return Rect {
+                x: area.x.saturating_add(1),
+                y: area.y.saturating_add(1),
+                width: area.width.saturating_sub(2).max(1),
+                height: area.height.saturating_sub(2).max(1),
+            };
+        }
+        ScratchpadSizeMode::Panel => {
+            let panel_width = (area.width.saturating_mul(55) / 100)
+                .max(40)
+                .min(area.width);
+            return Rect {
+                x: area.x + area.width.saturating_sub(panel_width),
+                y: area.y.saturating_add(1),
+                width: panel_width,
+                height: area.height.saturating_sub(2).max(1),
+            };
+        }
+        ScratchpadSizeMode::Large | ScratchpadSizeMode::Compact => {}
+    }
+
+    let (width_pct, height_pct) = match mode {
+        ScratchpadSizeMode::Large => (96, 94),
+        ScratchpadSizeMode::Compact => {
+            if area.width >= 140 {
+                (78, 82)
+            } else {
+                (92, 88)
+            }
+        }
+        ScratchpadSizeMode::Full | ScratchpadSizeMode::Panel => unreachable!(),
+    };
     let vertical = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
