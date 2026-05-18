@@ -1542,6 +1542,21 @@ The 10-stage M47 patch series (`patch/m47-c0-deep-merge-profiles` through `patch
      - `cargo check -p jcode`.
    - Binary reinstall required: yes (server/TUI status diagnostics changed).
 
+70. Interrupt stress regressions and M49 completion (M49-C7)
+   - Commit: `fd245154` `[m49-c7] add interrupt stress regression`.
+   - Patch branch: `patch/m49-c7-interrupt-stress-docs`.
+   - Purpose: close M49 with an additional stress regression for concurrent tool cancellation and mark the milestone complete.
+   - Runtime/test changes:
+     - Added `CountingCancelAwareTool`, a test-only tool that counts starts and cooperative cancel observations.
+     - Added `run_turn_streaming_mpsc_parallel_tools_observe_turn_cancel_signal`, covering two concurrently dispatched tools that both receive `ToolContext::turn_cancel_signal`, observe user cancel, complete cooperatively, and allow the parent turn to continue.
+     - Marked `docs/lazydino/milestones/M49.md` complete after C-0 through C-7.
+   - Validation:
+     - `cargo test -p jcode --lib agent::tests::run_turn_streaming_mpsc_parallel_tools_observe_turn_cancel_signal`.
+     - `cargo test -p jcode --lib agent::tests::run_turn_streaming_mpsc_persists_partial_text_on_user_interrupt`.
+     - `cargo test -p jcode --lib tool::bash::tests::test_agent_turn_bash_terminates_on_user_cancel_signal`.
+     - `cargo check -p jcode`.
+   - Binary reinstall required: yes (M49 final active binary should include the stress-tested cancellation stack).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
