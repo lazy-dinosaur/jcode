@@ -1159,6 +1159,35 @@ The 10-stage M47 patch series (`patch/m47-c0-deep-merge-profiles` through `patch
    - Validation: 74 `jcode-compaction-core` lib tests pass (67 prior + 7 new). `cargo check -p jcode` clean. No runtime caller wired yet; M48-C7b will replace the ad-hoc compaction stat formatters in `src/tui` with a `CompactionDiagnostics::multi_line_body()` call and add a `debug_socket` command that emits the same structure as JSON.
    - Binary reinstall required: no (test-only module; production binary unchanged).
 
+50. CompactionDiagnostics runtime wiring: /info + debug socket (M48-C7b)
+   - Commit: `e5a54182` `[m48-c7b] wire CompactionDiagnostics into TUI /info and debug socket`.
+   - Patch branch: `patch/m48-c7b-ui-runtime` (parent: `deploy/m9-m27-catchup`).
+   - Purpose: first user-visible M48 surface. Wires the C-7a digest helpers into the live TUI `/info` block and adds a headless `compaction-diag` debug socket command (text + JSON) so the durable sidecar (`compaction_turns`), prune history, and native-vs-text precedence all render from the same source as the existing `CompactionStats`. This is the runtime layer that proves the helper crates land end-to-end before C-4b/C-5b/C-6b start mutating session state.
+   - New free function `src/compaction.rs::build_compaction_diagnostics`:
+     - Signature: `pub fn build_compaction_diagnostics(stats: &CompactionStats, compaction_turns: &[StoredCompactionTurn], last_prune: Option<PruneReport>, provider_id: &str, legacy_compaction: Option<&StoredCompactionState>, safe_max_chars: usize) -> CompactionDiagnostics`.
+     - Pure: maps each `StoredCompactionTurn` into a `CompactionTurnDigest` (turn_id, marker/summary message ids, tail_start_id, backfilled_from_legacy, overflow, derived `has_previous_summary`), classifies the provider via `m48_native::classify_provider_id`, decides the representation via `m48_native::decide_summary_representation`, and assembles the final `CompactionDiagnostics`.
+     - Provider id is forwarded raw; only the lowercased copy is stored on `NativeStateDigest` so UI labels stay stable.
+   - TUI `/info` wiring (`src/tui/app/state_ui.rs::handle_info_command`):
+     - Appended an `- m48 header: ...` line and an indented `multi_line_body()` block under the existing `compaction_summary` so the durable sidecar and native state appear directly beneath the legacy CompactionStats output.
+     - `safe_max_chars` is sourced from `jcode_provider_openai::request::OPENAI_ENCRYPTED_CONTENT_SAFE_MAX_CHARS` so the helper crate stays provider-agnostic and the call-site keeps using the existing constant.
+     - `last_prune` is `None` until M48-C3 runtime wiring lands; the layout already supports it so when prune fires the line appears automatically.
+   - Debug socket wiring (`src/tui/app/debug_cmds.rs::handle_debug_command`):
+     - New `compaction-diag` command emits the text body (`diag.multi_line_body()`).
+     - New `compaction-diag:json` command emits the same digest as JSON for headless tooling: `{ supported, header, context_usage_ratio, effective_tokens, active_messages, turns[], last_prune, native_state }`. The native_state object explicitly tags representation kind (`"native"|"text"|"none"`) and carries `encrypted_content_len` + `dropped_native_len` so consumers can diff without re-parsing the text body.
+     - When the active provider does not support compaction, both commands short-circuit with a stable `{ "supported": false, ... }` JSON or text message.
+     - `help` command lists both new commands.
+   - Tests (3 new in `src/compaction_tests.rs`):
+     - `build_compaction_diagnostics_non_openai_uses_text_representation` — anthropic + text summary yields `Text { dropped_native_len: None }`, header ends with `"text"`, every turn field copies through.
+     - `build_compaction_diagnostics_openai_with_blob_reports_native` — openai + sendable blob yields `Native { encrypted_content_len: 1024 }`, header ends with `"native"`.
+     - `build_compaction_diagnostics_openai_oversized_blob_drops_to_text` — `"OpenAI"` + oversized blob yields `Text { dropped_native_len: Some(safe+1) }` and the `provider_id` is lowercased.
+   - Touched paths:
+     - `src/compaction.rs` (+74 lines: `pub fn build_compaction_diagnostics`).
+     - `src/compaction_tests.rs` (+149 lines: 3 new regression tests).
+     - `src/tui/app/state_ui.rs` (+26 lines: `/info` block append).
+     - `src/tui/app/debug_cmds.rs` (+94 lines: text + JSON debug commands, help line update).
+   - Validation: `cargo test -p jcode --lib compaction::` → 34 pass (31 prior + 3 new). `cargo test -p jcode-compaction-core --lib` → 74 pass (no regressions). `cargo check -p jcode` clean.
+   - Binary reinstall required: yes (TUI behavior change: `/info` now shows the M48 digest; debug socket gains two new commands).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
