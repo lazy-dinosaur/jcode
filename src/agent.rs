@@ -48,7 +48,7 @@ use tokio::sync::{broadcast, mpsc};
 use interrupts::{NoToolCallOutcome, PostToolInterruptOutcome};
 pub use jcode_agent_runtime::{
     BackgroundToolSignal, GracefulShutdownSignal, InterruptSignal, SoftInterruptMessage,
-    SoftInterruptQueue, SoftInterruptSource, StreamError,
+    SoftInterruptQueue, SoftInterruptSource, StreamError, TurnControl, TurnStopReason,
 };
 
 const JCODE_NATIVE_TOOLS: &[&str] = &["selfdev", "communicate"];
@@ -174,7 +174,11 @@ pub struct Agent {
     soft_interrupt_queue: SoftInterruptQueue,
     /// Signal from client to move the currently executing tool to background
     background_tool_signal: InterruptSignal,
-    /// Signal to gracefully stop generation (checkpoint partial response and exit)
+    /// Typed per-turn stop control for user/client/superseded cancellation.
+    /// This is intentionally separate from `graceful_shutdown`, which is kept
+    /// for reload/selfdev shutdown and long-tool handoff semantics.
+    turn_control: TurnControl,
+    /// Signal to gracefully stop generation for server reload/selfdev handoff
     graceful_shutdown: InterruptSignal,
     /// Client-side cache tracking for detecting append-only violations
     cache_tracker: CacheTracker,
@@ -238,6 +242,7 @@ impl Agent {
             tool_output_scan_index: 0,
             soft_interrupt_queue: Arc::new(std::sync::Mutex::new(Vec::new())),
             background_tool_signal: InterruptSignal::new(),
+            turn_control: TurnControl::new(),
             graceful_shutdown: InterruptSignal::new(),
             cache_tracker: CacheTracker::new(),
             last_usage: TokenUsage::default(),
@@ -454,6 +459,7 @@ impl Agent {
             queue.clear();
         }
         self.background_tool_signal.reset();
+        self.turn_control.reset();
         self.graceful_shutdown.reset();
         self.cache_tracker.reset();
         self.last_usage = TokenUsage::default();

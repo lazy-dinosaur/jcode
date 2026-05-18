@@ -2,7 +2,8 @@ use super::{
     ClientConnectionInfo, ClientDebugState, FileAccess, SessionInterruptQueues, SwarmEvent,
     SwarmEventType, SwarmMember, VersionedPlan, record_swarm_event,
     remove_session_channel_subscriptions, remove_session_file_touches, remove_session_from_swarm,
-    remove_session_interrupt_queue, unregister_session_event_sender, update_member_status,
+    remove_session_interrupt_queue, remove_session_turn_control, unregister_session_event_sender,
+    update_member_status,
 };
 use crate::agent::Agent;
 use anyhow::Result;
@@ -143,6 +144,7 @@ pub(super) async fn cleanup_client_connection(
     client_connection_id: &str,
     shutdown_signals: &Arc<RwLock<HashMap<String, InterruptSignal>>>,
     soft_interrupt_queues: &SessionInterruptQueues,
+    turn_controls: &super::SessionTurnControls,
     event_history: &Arc<RwLock<std::collections::VecDeque<SwarmEvent>>>,
     event_counter: &Arc<std::sync::atomic::AtomicU64>,
     swarm_event_tx: &broadcast::Sender<SwarmEvent>,
@@ -344,6 +346,7 @@ pub(super) async fn cleanup_client_connection(
         signals.remove(client_session_id);
     }
     remove_session_interrupt_queue(soft_interrupt_queues, client_session_id).await;
+    remove_session_turn_control(turn_controls, client_session_id).await;
 
     if let Some(handle) = processing_task.take() {
         handle.abort();

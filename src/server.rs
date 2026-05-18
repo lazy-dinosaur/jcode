@@ -320,10 +320,11 @@ pub use self::state::{
     SwarmState,
 };
 use self::state::{
-    SessionInterruptQueues, fanout_live_client_event, fanout_session_event,
+    SessionInterruptQueues, SessionTurnControls, fanout_live_client_event, fanout_session_event,
     fanout_session_event_except, queue_soft_interrupt_for_session, register_session_event_sender,
-    register_session_interrupt_queue, remove_session_interrupt_queue,
-    rename_session_interrupt_queue, session_event_fanout_sender, unregister_session_event_sender,
+    register_session_interrupt_queue, register_session_turn_control,
+    remove_session_interrupt_queue, remove_session_turn_control, rename_session_interrupt_queue,
+    session_event_fanout_sender, unregister_session_event_sender,
 };
 pub use crate::plan::{SwarmTaskProgress, VersionedPlan};
 
@@ -436,6 +437,8 @@ pub struct Server {
     /// Soft interrupt queues by session_id (stored outside agent mutex so swarm/debug
     /// notifications can be enqueued while an agent is actively processing)
     soft_interrupt_queues: SessionInterruptQueues,
+    /// Typed turn stop controls by session_id for user/client cancellation.
+    turn_controls: SessionTurnControls,
     /// Persisted communicate await_members wait registry.
     await_members_runtime: AwaitMembersRuntime,
     /// Persisted dedupe registry for mutating swarm coordinator operations.
@@ -510,6 +513,7 @@ impl Server {
             mcp_pool: Arc::new(OnceCell::new()),
             shutdown_signals: Arc::new(RwLock::new(HashMap::new())),
             soft_interrupt_queues: Arc::new(RwLock::new(HashMap::new())),
+            turn_controls: Arc::new(RwLock::new(HashMap::new())),
             await_members_runtime: AwaitMembersRuntime::default(),
             swarm_mutation_runtime: SwarmMutationRuntime::default(),
         }

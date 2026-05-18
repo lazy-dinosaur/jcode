@@ -36,9 +36,10 @@ use super::provider_control::{
 };
 use super::{
     AwaitMembersRuntime, ClientConnectionInfo, ClientDebugState, FileAccess, SessionControlHandle,
-    SessionInterruptQueues, SharedContext, SwarmEvent, SwarmMember, SwarmMutationRuntime,
-    VersionedPlan, fanout_session_event_except, format_structured_completion_report,
-    register_session_interrupt_queue, truncate_detail, update_member_status,
+    SessionInterruptQueues, SessionTurnControls, SharedContext, SwarmEvent, SwarmMember,
+    SwarmMutationRuntime, VersionedPlan, fanout_session_event_except,
+    format_structured_completion_report, register_session_interrupt_queue,
+    register_session_turn_control, truncate_detail, update_member_status,
     update_member_status_with_report,
 };
 use crate::agent::Agent;
@@ -769,7 +770,7 @@ async fn refresh_session_control_handle(
         session_id,
         agent_guard.soft_interrupt_queue(),
         agent_guard.background_tool_signal(),
-        agent_guard.graceful_shutdown_signal(),
+        agent_guard.turn_control(),
     )
 }
 
@@ -805,6 +806,7 @@ pub(super) async fn handle_client(
     mcp_pool: Arc<crate::mcp::SharedMcpPool>,
     shutdown_signals: Arc<RwLock<HashMap<String, InterruptSignal>>>,
     soft_interrupt_queues: SessionInterruptQueues,
+    turn_controls: SessionTurnControls,
     await_members_runtime: AwaitMembersRuntime,
     swarm_mutation_runtime: SwarmMutationRuntime,
 ) -> Result<()> {
@@ -946,7 +948,7 @@ pub(super) async fn handle_client(
         client_session_id.clone(),
         new_agent.soft_interrupt_queue(),
         new_agent.background_tool_signal(),
-        new_agent.graceful_shutdown_signal(),
+        new_agent.turn_control(),
     );
 
     // Register the shutdown signal in the server-level map so
@@ -955,7 +957,7 @@ pub(super) async fn handle_client(
         let mut signals = shutdown_signals.write().await;
         signals.insert(
             client_session_id.clone(),
-            session_control.stop_current_turn_signal(),
+            new_agent.graceful_shutdown_signal(),
         );
     }
     register_session_interrupt_queue(
@@ -964,7 +966,8 @@ pub(super) async fn handle_client(
         new_agent.soft_interrupt_queue(),
     )
     .await;
-
+    register_session_turn_control(&turn_controls, &client_session_id, new_agent.turn_control())
+        .await;
     let mut agent = Arc::new(Mutex::new(new_agent));
     {
         let mut sessions_guard = sessions.write().await;
@@ -2823,6 +2826,7 @@ pub(super) async fn handle_client(
         &client_connection_id,
         &shutdown_signals,
         &soft_interrupt_queues,
+        &turn_controls,
         &event_history,
         &event_counter,
         &swarm_event_tx,

@@ -74,6 +74,85 @@ impl Default for InterruptSignal {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TurnStopReason {
+    UserInterrupt,
+    ClientDisconnect,
+    ServerReload,
+    BackgroundCurrentTool,
+    Superseded,
+}
+
+impl TurnStopReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::UserInterrupt => "user_interrupt",
+            Self::ClientDisconnect => "client_disconnect",
+            Self::ServerReload => "server_reload",
+            Self::BackgroundCurrentTool => "background_current_tool",
+            Self::Superseded => "superseded",
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct TurnControl {
+    stop: InterruptSignal,
+    reason: Arc<std::sync::RwLock<Option<TurnStopReason>>>,
+}
+
+impl TurnControl {
+    pub fn new() -> Self {
+        Self {
+            stop: InterruptSignal::new(),
+            reason: Arc::new(std::sync::RwLock::new(None)),
+        }
+    }
+
+    pub fn from_stop_signal(stop: InterruptSignal) -> Self {
+        Self {
+            stop,
+            reason: Arc::new(std::sync::RwLock::new(None)),
+        }
+    }
+
+    pub fn request_stop(&self, reason: TurnStopReason) {
+        if let Ok(mut guard) = self.reason.write() {
+            *guard = Some(reason);
+        }
+        self.stop.fire();
+    }
+
+    pub fn reset(&self) {
+        if let Ok(mut guard) = self.reason.write() {
+            *guard = None;
+        }
+        self.stop.reset();
+    }
+
+    pub fn stop_signal(&self) -> InterruptSignal {
+        self.stop.clone()
+    }
+
+    pub fn is_stopped(&self) -> bool {
+        self.stop.is_set()
+    }
+
+    pub fn reason(&self) -> Option<TurnStopReason> {
+        self.reason.read().ok().and_then(|guard| *guard)
+    }
+
+    pub fn reason_label(&self) -> Option<&'static str> {
+        self.reason().map(TurnStopReason::as_str)
+    }
+}
+
+impl Default for TurnControl {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::InterruptSignal;

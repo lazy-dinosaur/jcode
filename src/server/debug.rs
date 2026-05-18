@@ -273,6 +273,7 @@ pub(super) async fn handle_debug_client(
     mcp_pool: Option<Arc<crate::mcp::SharedMcpPool>>,
     shutdown_signals: Arc<RwLock<HashMap<String, InterruptSignal>>>,
     soft_interrupt_queues: super::SessionInterruptQueues,
+    turn_controls: super::SessionTurnControls,
 ) -> Result<()> {
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
@@ -550,6 +551,7 @@ pub(super) async fn handle_debug_client(
                                             soft_interrupt_queues: Arc::clone(
                                                 &soft_interrupt_queues,
                                             ),
+                                            turn_controls: Arc::clone(&turn_controls),
                                         }),
                                     )
                                     .await

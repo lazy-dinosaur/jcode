@@ -2,6 +2,7 @@ use super::*;
 use crate::message::{Message, ToolDefinition};
 use crate::provider::{EventStream, Provider};
 use async_trait::async_trait;
+use jcode_agent_runtime::TurnControl;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -20,12 +21,13 @@ async fn session_control_handle_does_not_wait_for_busy_agent_lock() {
 
     let queue = Arc::new(std::sync::Mutex::new(Vec::new()));
     let background_signal = InterruptSignal::new();
-    let stop_signal = InterruptSignal::new();
+    let turn_control = TurnControl::new();
+    let stop_signal = turn_control.stop_signal();
     let control = SessionControlHandle::new(
         "session_control_test",
         Arc::clone(&queue),
         background_signal.clone(),
-        stop_signal.clone(),
+        turn_control,
     );
 
     let _busy_agent_lock = agent.lock().await;
@@ -52,12 +54,12 @@ async fn session_control_handle_does_not_wait_for_busy_agent_lock() {
 async fn session_control_interrupt_diagnostics_report_signal_state() {
     let queue = Arc::new(std::sync::Mutex::new(Vec::new()));
     let background_signal = InterruptSignal::new();
-    let stop_signal = InterruptSignal::new();
+    let turn_control = TurnControl::new();
     let control = SessionControlHandle::new(
         "session_interrupt_diag",
         Arc::clone(&queue),
         background_signal.clone(),
-        stop_signal.clone(),
+        turn_control,
     );
 
     let initial = control.interrupt_diagnostics();
@@ -68,11 +70,9 @@ async fn session_control_interrupt_diagnostics_report_signal_state() {
     assert!(!initial.background_tool_signal_set);
     assert!(!initial.stop_current_turn_signal_set);
 
-    assert!(control.queue_soft_interrupt(
-        "soft stop".to_string(),
-        true,
-        SoftInterruptSource::User,
-    ));
+    assert!(
+        control.queue_soft_interrupt("soft stop".to_string(), true, SoftInterruptSource::User,)
+    );
     assert!(control.request_background_current_tool());
     control.request_cancel();
 
@@ -84,6 +84,39 @@ async fn session_control_interrupt_diagnostics_report_signal_state() {
 
     control.reset_cancel();
     assert!(!control.interrupt_diagnostics().stop_current_turn_signal_set);
+}
+
+#[tokio::test]
+async fn user_cancel_turn_control_does_not_set_graceful_reload_signal() {
+    let provider: Arc<dyn Provider> = Arc::new(PanicOnForkProvider {
+        forked: Arc::new(AtomicBool::new(false)),
+    });
+    let registry = Registry::new(Arc::clone(&provider)).await;
+    let agent = Agent::new(provider, registry);
+    let reload_signal = agent.graceful_shutdown_signal();
+    let control = SessionControlHandle::new(
+        agent.session_id().to_string(),
+        agent.soft_interrupt_queue(),
+        agent.background_tool_signal(),
+        agent.turn_control(),
+    );
+
+    control.request_cancel();
+
+    let diagnostics = control.interrupt_diagnostics();
+    assert!(diagnostics.stop_current_turn_signal_set);
+    assert_eq!(diagnostics.stop_reason.as_deref(), Some("user_interrupt"));
+    assert!(control.stop_current_turn_signal().is_set());
+    assert!(
+        !reload_signal.is_set(),
+        "user cancel must not reuse graceful reload shutdown signal"
+    );
+
+    agent.request_graceful_shutdown();
+    assert!(
+        reload_signal.is_set(),
+        "reload signal remains independently usable"
+    );
 }
 
 #[tokio::test]
@@ -116,12 +149,13 @@ async fn processing_interrupt_snapshot_tracks_active_task_without_agent_lock() {
 async fn cancel_processing_message_baseline_hard_aborts_stubborn_task() {
     let queue = Arc::new(std::sync::Mutex::new(Vec::new()));
     let background_signal = InterruptSignal::new();
-    let stop_signal = InterruptSignal::new();
+    let turn_control = TurnControl::new();
+    let stop_signal = turn_control.stop_signal();
     let control = SessionControlHandle::new(
         "session_cancel_baseline",
         Arc::clone(&queue),
         background_signal,
-        stop_signal.clone(),
+        turn_control,
     );
 
     let (client_event_tx, mut client_event_rx) = mpsc::unbounded_channel::<ServerEvent>();
@@ -169,8 +203,14 @@ async fn cancel_processing_message_baseline_hard_aborts_stubborn_task() {
     assert!(processing_message_id.is_none());
     assert!(processing_session_id.is_none());
     assert!(processing_task.is_none());
-    assert!(!stop_signal.is_set(), "current baseline resets cancel immediately after abort fallback");
-    assert!(matches!(client_event_rx.recv().await, Some(ServerEvent::Interrupted)));
+    assert!(
+        !stop_signal.is_set(),
+        "current baseline resets cancel immediately after abort fallback"
+    );
+    assert!(matches!(
+        client_event_rx.recv().await,
+        Some(ServerEvent::Interrupted)
+    ));
     assert!(matches!(
         client_event_rx.recv().await,
         Some(ServerEvent::Done { id: 4242 })
@@ -511,6 +551,7 @@ async fn lightweight_comm_request_skips_full_session_initialization() {
         mcp_pool,
         shutdown_signals,
         soft_interrupt_queues,
+        Arc::new(RwLock::new(HashMap::new())),
         AwaitMembersRuntime::default(),
         SwarmMutationRuntime::default(),
     ));

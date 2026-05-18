@@ -124,6 +124,7 @@ pub(super) struct DebugInterruptContext {
     pub session_id: String,
     pub shutdown_signals: Arc<RwLock<HashMap<String, InterruptSignal>>>,
     pub soft_interrupt_queues: SessionInterruptQueues,
+    pub turn_controls: super::SessionTurnControls,
 }
 
 impl DebugInterruptContext {
@@ -134,16 +135,23 @@ impl DebugInterruptContext {
             .await
             .get(&self.session_id)
             .cloned()?;
-        let signal = self
-            .shutdown_signals
+        let turn_control = self
+            .turn_controls
             .read()
             .await
             .get(&self.session_id)
-            .cloned()?;
+            .cloned()
+            .or_else(|| {
+                self.shutdown_signals
+                    .try_read()
+                    .ok()
+                    .and_then(|signals| signals.get(&self.session_id).cloned())
+                    .map(jcode_agent_runtime::TurnControl::from_stop_signal)
+            })?;
         Some(SessionControlHandle::cancel_only(
             self.session_id.clone(),
             queue,
-            signal,
+            turn_control,
         ))
     }
 }
@@ -884,6 +892,11 @@ mod tests {
             session_id.clone(),
             queue.clone(),
         )])));
+        let turn_control = agent.lock().await.turn_control();
+        let turn_controls = Arc::new(RwLock::new(HashMap::from([(
+            session_id.clone(),
+            turn_control.clone(),
+        )])));
 
         let _busy_agent_lock = agent.lock().await;
         let output = tokio::time::timeout(
@@ -897,6 +910,7 @@ mod tests {
                     session_id,
                     shutdown_signals,
                     soft_interrupt_queues,
+                    turn_controls,
                 }),
             ),
         )
@@ -905,7 +919,12 @@ mod tests {
         .expect("debug cancel should succeed");
 
         assert!(output.contains("cancel_queued"));
-        assert!(signal.is_set());
+        assert!(turn_control.is_stopped());
+        assert_eq!(turn_control.reason_label(), Some("user_interrupt"));
+        assert!(
+            !signal.is_set(),
+            "debug cancel must not set reload shutdown signal"
+        );
         let pending = queue.lock().expect("queue lock should not be poisoned");
         assert_eq!(pending.len(), 1);
         assert!(pending[0].urgent);
