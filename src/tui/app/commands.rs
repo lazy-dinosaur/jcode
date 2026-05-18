@@ -1330,13 +1330,6 @@ fn handle_lazygit_command(app: &mut App, trimmed: &str) -> bool {
         return false;
     }
 
-    if app.is_remote {
-        app.push_display_message(DisplayMessage::error(
-            "`/lazygit` is only available in local TUI sessions.".to_string(),
-        ));
-        return true;
-    }
-
     let cwd = active_or_process_working_dir(app);
     run_external_tool_in_current_terminal(app, "lazygit", Vec::new(), cwd, |cwd| {
         format!("Returned from `lazygit` at `{}`.", cwd.display())
@@ -1389,13 +1382,6 @@ fn handle_nvim_command(app: &mut App, trimmed: &str) -> bool {
     };
     if !rest.is_empty() && !rest.chars().next().is_some_and(char::is_whitespace) {
         return false;
-    }
-
-    if app.is_remote {
-        app.push_display_message(DisplayMessage::error(
-            "`/nvim` is only available in local TUI sessions.".to_string(),
-        ));
-        return true;
     }
 
     let cwd = active_or_process_working_dir(app);
