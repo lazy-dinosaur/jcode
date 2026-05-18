@@ -69,6 +69,8 @@ async fn session_control_interrupt_diagnostics_report_signal_state() {
     assert!(initial.background_tool_signal_registered);
     assert!(!initial.background_tool_signal_set);
     assert!(!initial.stop_current_turn_signal_set);
+    assert_eq!(initial.turn_state, "idle");
+    assert_eq!(initial.status_detail, None);
 
     assert!(
         control.queue_soft_interrupt("soft stop".to_string(), true, SoftInterruptSource::User,)
@@ -81,6 +83,12 @@ async fn session_control_interrupt_diagnostics_report_signal_state() {
     assert_eq!(after.urgent_soft_interrupt_count, 1);
     assert!(after.background_tool_signal_set);
     assert!(after.stop_current_turn_signal_set);
+    assert_eq!(after.stop_reason.as_deref(), Some("user_interrupt"));
+    assert_eq!(after.turn_state, "cancelling");
+    assert_eq!(
+        after.status_detail.as_deref(),
+        Some("interrupting (user_interrupt)")
+    );
 
     control.reset_cancel();
     assert!(!control.interrupt_diagnostics().stop_current_turn_signal_set);
@@ -213,11 +221,19 @@ async fn cancel_processing_message_uses_cooperative_grace_then_abort_fallback() 
     );
     assert!(matches!(
         client_event_rx.recv().await,
+        Some(ServerEvent::StatusDetail { detail }) if detail == "interrupting (user_interrupt)"
+    ));
+    assert!(matches!(
+        client_event_rx.recv().await,
         Some(ServerEvent::Interrupted)
     ));
     assert!(matches!(
         client_event_rx.recv().await,
         Some(ServerEvent::Done { id: 4242 })
+    ));
+    assert!(matches!(
+        client_event_rx.recv().await,
+        Some(ServerEvent::StatusDetail { detail }) if detail.is_empty()
     ));
 }
 
@@ -346,11 +362,19 @@ async fn cancel_processing_message_waits_for_cooperative_completion_before_abort
     assert!(!stop_signal.is_set());
     assert!(matches!(
         client_event_rx.recv().await,
+        Some(ServerEvent::StatusDetail { detail }) if detail == "interrupting (user_interrupt)"
+    ));
+    assert!(matches!(
+        client_event_rx.recv().await,
         Some(ServerEvent::Interrupted)
     ));
     assert!(matches!(
         client_event_rx.recv().await,
         Some(ServerEvent::Done { id: 5150 })
+    ));
+    assert!(matches!(
+        client_event_rx.recv().await,
+        Some(ServerEvent::StatusDetail { detail }) if detail.is_empty()
     ));
 }
 

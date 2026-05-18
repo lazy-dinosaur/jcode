@@ -3054,6 +3054,10 @@ async fn cancel_processing_message(
         }
         *state.cancel_state = ProcessingCancelState::Cancelling;
         session_control.request_cancel();
+        let diagnostics = session_control.interrupt_diagnostics();
+        if let Some(detail) = diagnostics.status_detail {
+            let _ = client_event_tx.send(ServerEvent::StatusDetail { detail });
+        }
         match tokio::time::timeout(PROCESSING_CANCEL_GRACE, &mut handle).await {
             Ok(_) => {
                 crate::logging::info("Processing task completed during cooperative cancel grace");
@@ -3092,6 +3096,9 @@ async fn cancel_processing_message(
         if let Some(message_id) = state.message_id.take() {
             let _ = client_event_tx.send(ServerEvent::Interrupted);
             let _ = client_event_tx.send(ServerEvent::Done { id: message_id });
+            let _ = client_event_tx.send(ServerEvent::StatusDetail {
+                detail: String::new(),
+            });
         }
     }
 }

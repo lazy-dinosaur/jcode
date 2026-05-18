@@ -479,6 +479,8 @@ pub struct SessionControlDiagnostics {
     pub background_tool_signal_set: bool,
     pub stop_current_turn_signal_set: bool,
     pub stop_reason: Option<String>,
+    pub turn_state: String,
+    pub status_detail: Option<String>,
 }
 
 impl SessionControlHandle {
@@ -559,6 +561,27 @@ impl SessionControlHandle {
                 (queue.len(), urgent)
             })
             .unwrap_or((0, 0));
+        let stop_reason = self.turn_control.reason_label().map(str::to_string);
+        let turn_state = if self.turn_control.is_stopped() {
+            "cancelling"
+        } else if self
+            .background_tool_signal
+            .as_ref()
+            .map(|signal| signal.is_set())
+            .unwrap_or(false)
+        {
+            "moving_tool_to_background"
+        } else {
+            "idle"
+        };
+        let status_detail = match turn_state {
+            "cancelling" => Some(format!(
+                "interrupting ({})",
+                stop_reason.as_deref().unwrap_or("unknown")
+            )),
+            "moving_tool_to_background" => Some("moving tool to background".to_string()),
+            _ => None,
+        };
         SessionControlDiagnostics {
             session_id: self.session_id.clone(),
             soft_interrupt_count,
@@ -570,7 +593,9 @@ impl SessionControlHandle {
                 .map(|signal| signal.is_set())
                 .unwrap_or(false),
             stop_current_turn_signal_set: self.turn_control.is_stopped(),
-            stop_reason: self.turn_control.reason_label().map(str::to_string),
+            stop_reason,
+            turn_state: turn_state.to_string(),
+            status_detail,
         }
     }
 }
