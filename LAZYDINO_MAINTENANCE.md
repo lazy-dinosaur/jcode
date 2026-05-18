@@ -1521,6 +1521,27 @@ The 10-stage M47 patch series (`patch/m47-c0-deep-merge-profiles` through `patch
      - `cargo check -p jcode`.
    - Binary reinstall required: yes (server cancel lifecycle behavior changed).
 
+69. Interrupt UX and diagnostics status detail (M49-C6)
+   - Commit: `a48b00ee` `[m49-c6] expose interrupt status diagnostics`.
+   - Patch branch: `patch/m49-c6-interrupt-ux`.
+   - Purpose: make the cooperative interrupt lifecycle visible to debug tooling and the remote TUI instead of silently waiting during the C5 grace period.
+   - Runtime changes:
+     - Extended `SessionControlDiagnostics` with `turn_state` and `status_detail`.
+     - Debug `cancel` responses now include post-cancel diagnostics, matching `interrupt:info` fields.
+     - Server cancel emits `StatusDetail("interrupting (user_interrupt)")` before cooperative wait and clears it with an empty `StatusDetail` after terminal interrupted/done events.
+     - Remote TUI clears stale `status_detail` when `Interrupted` is received.
+   - Tests:
+     - Diagnostics test now asserts idle/cancelling `turn_state` and human-readable status detail.
+     - Server cancel tests assert the status detail event before `Interrupted` / `Done` and the clear event afterwards.
+     - Debug cancel test asserts the response JSON contains `turn_state=cancelling` and the interrupting status detail.
+   - Validation:
+     - `cargo test -p jcode --lib server::client_lifecycle::tests::session_control_interrupt_diagnostics_report_signal_state`.
+     - `cargo test -p jcode --lib server::client_lifecycle::tests::cancel_processing_message_waits_for_cooperative_completion_before_abort`.
+     - `cargo test -p jcode --lib server::client_lifecycle::tests::cancel_processing_message_uses_cooperative_grace_then_abort_fallback`.
+     - `cargo test -p jcode --lib server::debug_command_exec::tests::debug_cancel_does_not_wait_for_busy_agent_lock`.
+     - `cargo check -p jcode`.
+   - Binary reinstall required: yes (server/TUI status diagnostics changed).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
