@@ -1455,6 +1455,29 @@ The 10-stage M47 patch series (`patch/m47-c0-deep-merge-profiles` through `patch
      - `cargo check -p jcode`.
    - Binary reinstall required: yes (provider call surface and agent streaming runtime behavior changed).
 
+66. Tool cancellation propagation (M49-C3)
+   - Commit: `e13fe10d` `[m49-c3] propagate turn cancel to tools`.
+   - Patch branch: `patch/m49-c3-tool-cancel-propagation`.
+   - Purpose: bridge the M49 turn cancellation signal into tool execution so tools can exit cooperatively instead of relying only on outer task abort/select behavior. This is the tool-side counterpart to the C2 provider cancellation surface.
+   - Runtime changes:
+     - Added `ToolContext::turn_cancel_signal: Option<InterruptSignal>` plus `turn_cancel_signal()` and `is_turn_cancelled()` helpers in `jcode-tool-core`.
+     - Preserved `ToolContext::for_subcall()` propagation so batch/subcall tools carry the same cancellation signal.
+     - Wired agent native-tool, single-tool, spawn-tool, and parallel-tool contexts to pass `Agent::turn_stop_signal()` during agent turns.
+     - Kept direct/non-agent tool contexts on `None` for backward-compatible direct execution semantics.
+     - Updated reload-persistable foreground bash execution so user turn cancel kills the process group with SIGTERM/SIGKILL and returns a user-cancel error, while server reload still adopts the process into background.
+   - Tests:
+     - Added `CancelAwareTool` and `run_turn_streaming_mpsc_passes_turn_cancel_signal_to_tool_context` to prove a tool receives and observes the turn cancel signal cooperatively.
+     - Added `test_agent_turn_bash_terminates_on_user_cancel_signal` to prove a sleeping bash command terminates promptly on user cancel.
+     - Re-ran reload persistence to ensure server reload still backgrounds the long bash task.
+   - Validation:
+     - `cargo test -p jcode --lib tool::bash::tests::test_reload_persistable_bash_continues_in_background`.
+     - `cargo test -p jcode --lib tool::bash::tests::test_agent_turn_bash_terminates_on_user_cancel_signal`.
+     - `cargo test -p jcode --lib agent::tests::run_turn_streaming_mpsc_passes_turn_cancel_signal_to_tool_context`.
+     - `cargo test -p jcode --lib agent::tests::run_turn_streaming_mpsc_passes_turn_cancel_signal_to_provider`.
+     - `cargo test -p jcode --lib server::client_lifecycle::tests::user_cancel_turn_control_does_not_set_graceful_reload_signal`.
+     - `cargo check -p jcode`.
+   - Binary reinstall required: yes (tool context ABI and bash runtime cancellation behavior changed).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
