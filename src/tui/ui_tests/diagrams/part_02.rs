@@ -241,7 +241,8 @@ fn test_current_mermaid_side_pane_auto_width_uses_most_available_space() {
         pane_width.saturating_sub(2),
         terminal_height.saturating_sub(2),
     );
-    let render_area = vcenter_fitted_image_with_font(inner, diagram.width, diagram.height, TEST_FONT);
+    let render_area =
+        vcenter_fitted_image_with_font(inner, diagram.width, diagram.height, TEST_FONT);
 
     assert!(chat_width >= min_chat_width);
     assert!(
@@ -284,10 +285,9 @@ fn test_pinned_diagram_probe_reports_fit_utilization() {
 }
 
 #[test]
-fn test_pinned_diagram_probe_reports_high_zoom_fit_fill_for_wide_short_diagram() {
-    // Regression for a Mermaid LR flowchart in the side pane: normal contain fit
-    // used only a small strip at the top of the pane. The auto plan should now
-    // request a high-zoom centered viewport and report full inner utilization.
+fn test_pinned_diagram_probe_reports_fit_for_wide_short_diagram() {
+    // Default pinned view should show the whole diagram. Users can focus and
+    // zoom/pan manually when they want a cropped readability view.
     let area = Rect::new(74, 0, 120, 72);
     let inner = Rect::new(75, 1, 118, 70);
     let diagram = info_widget::DiagramInfo {
@@ -308,25 +308,11 @@ fn test_pinned_diagram_probe_reports_high_zoom_fit_fill_for_wide_short_diagram()
         Some((8, 16)),
     );
 
-    assert!(
-        probe.render_mode.starts_with("fit-fill@"),
-        "wide short diagram should auto fit-fill, got {}",
-        probe.render_mode
-    );
-    let zoom_text = probe.render_mode.trim_start_matches("fit-fill@");
-    let zoom_text = zoom_text.trim_end_matches('%');
-    let zoom = zoom_text
-        .parse::<u16>()
-        .expect("fit-fill mode should include a numeric zoom");
-    assert!(
-        (700..=1000).contains(&zoom),
-        "wide short diagram should use high but capped auto zoom, got {zoom}%"
-    );
+    assert_eq!(probe.render_mode, "fit");
     assert_eq!(probe.inner_utilization.width_cells, inner.width);
-    assert_eq!(probe.inner_utilization.height_cells, inner.height);
+    assert!(probe.inner_utilization.height_cells < inner.height);
     assert_eq!(probe.inner_utilization.width_utilization_percent, 100.0);
-    assert_eq!(probe.inner_utilization.height_utilization_percent, 100.0);
-    assert_eq!(probe.inner_utilization.area_utilization_percent, 100.0);
+    assert!(probe.inner_utilization.area_utilization_percent < 100.0);
 }
 
 #[test]

@@ -129,14 +129,12 @@ fn estimate_side_panel_image_layout_with_font_inner(
     let width_fill_zoom = axis_fill_zoom_percent(available_width, width, cell_w);
     let height_fill_zoom = axis_fill_zoom_percent(inner_height as u32, height, cell_h);
     if !allow_auto_upscale {
-        let display_is_wide = width.saturating_mul(cell_h) >= height.saturating_mul(cell_w);
-        let orientation_fit_zoom = if display_is_wide {
-            width_fill_zoom
-        } else {
-            height_fill_zoom
-        }
-        .clamp(1, 100);
-        let needed = scaled_image_rows(image_h_cells, orientation_fit_zoom);
+        // For pinned/read image artifacts, default to seeing the whole image.
+        // Use the limiting axis: wide images are width-limited, tall images are
+        // height-limited, and mixed cases pick whichever zoom is smaller. This
+        // may leave unused space, but avoids surprising default cropping.
+        let whole_image_zoom = width_fill_zoom.min(height_fill_zoom).clamp(1, 100);
+        let needed = scaled_image_rows(image_h_cells, whole_image_zoom);
         return SidePanelImageLayout {
             rows: clamp_side_panel_image_rows(
                 needed
@@ -147,7 +145,7 @@ fn estimate_side_panel_image_layout_with_font_inner(
                 has_following_content,
             ),
             render_mode: SidePanelImageRenderMode::ScrollableViewport {
-                zoom_percent: orientation_fit_zoom,
+                zoom_percent: whole_image_zoom,
             },
         };
     }
