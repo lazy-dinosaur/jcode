@@ -49,6 +49,12 @@ impl App {
             "git" => {
                 "`/git`\nShow `git status --short --branch` for the current session working directory.\n\n`/git status`\nAlias for `/git`."
             }
+            "lazygit" | "lg" => {
+                "`/lazygit`\nOpen `lazygit` in a new terminal at the current session working directory.\n\n`/lg`\nAlias for `/lazygit`."
+            }
+            "nvim" => {
+                "`/nvim [file-or-dir]`\nOpen `nvim` in a new terminal at the current session working directory. Relative paths are resolved from the session cwd. If no target is provided, opens the current cwd."
+            }
             "catchup" => {
                 "`/catchup`\nOpen the Catch Up picker for finished sessions that need attention.\n\n`/catchup next`\nTeleport to the next session needing attention and open a Catch Up brief in the side panel.\n\n`/catchup list`\nAlias for opening the picker."
             }

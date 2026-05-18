@@ -23,7 +23,7 @@ use super::{App, DisplayMessage, LocalRewindUndoSnapshot, ProcessingStatus};
 use crate::bus::{Bus, BusEvent, GitStatusCompleted, ManualToolCompleted, ToolEvent, ToolStatus};
 use crate::id;
 use crate::message::{ContentBlock, Message, Role};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
 
@@ -1220,6 +1220,171 @@ fn handle_git_command(app: &mut App, trimmed: &str) -> bool {
     true
 }
 
+fn active_or_process_working_dir(app: &App) -> PathBuf {
+    active_working_dir(app)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn external_tool_manual_command(program: &str, args: &[String], cwd: &Path) -> String {
+    let command = std::iter::once(program.to_string())
+        .chain(args.iter().cloned())
+        .collect::<Vec<_>>();
+
+    #[cfg(unix)]
+    {
+        format!(
+            "cd {} && {}",
+            crate::terminal_launch::sh_escape(&cwd.display().to_string()),
+            crate::terminal_launch::shell_command(&command)
+        )
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = cwd;
+        crate::terminal_launch::shell_command(&command)
+    }
+}
+
+fn spawn_external_tool_in_terminal(
+    app: &mut App,
+    program: &str,
+    args: Vec<String>,
+    title: &str,
+    cwd: PathBuf,
+    opened_notice: impl FnOnce(&Path) -> String,
+) {
+    let command = crate::terminal_launch::TerminalCommand::new(program, args.clone())
+        .title(title.to_string())
+        .fresh_spawn();
+
+    match crate::terminal_launch::spawn_command_in_new_terminal(&command, &cwd) {
+        Ok(true) => {
+            app.push_display_message(DisplayMessage::system(opened_notice(&cwd)));
+            app.set_status_notice(format!("Opened {program}"));
+        }
+        Ok(false) => {
+            app.push_display_message(DisplayMessage::system(format!(
+                "No supported terminal was found for `{program}`. Run manually:\n\n```text\n{}\n```",
+                external_tool_manual_command(program, &args, &cwd)
+            )));
+            app.set_status_notice("No supported terminal found");
+        }
+        Err(error) => {
+            app.push_display_message(DisplayMessage::error(format!(
+                "Failed to launch `{program}` in a new terminal: {error}"
+            )));
+        }
+    }
+}
+
+fn handle_lazygit_command(app: &mut App, trimmed: &str) -> bool {
+    if trimmed != "/lazygit" && trimmed != "/lg" {
+        if trimmed.starts_with("/lazygit ") || trimmed.starts_with("/lg ") {
+            app.push_display_message(DisplayMessage::error(
+                "Usage: `/lazygit` or `/lg`".to_string(),
+            ));
+            return true;
+        }
+        return false;
+    }
+
+    if app.is_remote {
+        app.push_display_message(DisplayMessage::error(
+            "`/lazygit` is only available in local TUI sessions.".to_string(),
+        ));
+        return true;
+    }
+
+    let cwd = active_or_process_working_dir(app);
+    spawn_external_tool_in_terminal(app, "lazygit", Vec::new(), "jcode lazygit", cwd, |cwd| {
+        format!("Opened `lazygit` in a new terminal at `{}`.", cwd.display())
+    });
+    true
+}
+
+fn expand_home_path(raw: &str) -> Result<PathBuf, String> {
+    if raw == "~" {
+        return std::env::var("HOME")
+            .map(PathBuf::from)
+            .map_err(|_| "HOME is not set".to_string());
+    }
+    if let Some(rest) = raw.strip_prefix("~/") {
+        let home = std::env::var("HOME").map_err(|_| "HOME is not set".to_string())?;
+        return Ok(PathBuf::from(home).join(rest));
+    }
+    Ok(PathBuf::from(raw))
+}
+
+fn resolve_nvim_target(base: &Path, raw: &str) -> Result<PathBuf, String> {
+    let expanded = expand_home_path(raw)?;
+    let target = if expanded.is_absolute() {
+        expanded
+    } else {
+        base.join(expanded)
+    };
+
+    if target.exists() {
+        return target
+            .canonicalize()
+            .map_err(|error| format!("failed to canonicalize `{}`: {error}", target.display()));
+    }
+
+    if let Some(parent) = target.parent()
+        && !parent.exists()
+    {
+        return Err(format!(
+            "parent directory does not exist: {}",
+            parent.display()
+        ));
+    }
+
+    Ok(target)
+}
+
+fn handle_nvim_command(app: &mut App, trimmed: &str) -> bool {
+    let Some(rest) = trimmed.strip_prefix("/nvim") else {
+        return false;
+    };
+    if !rest.is_empty() && !rest.chars().next().is_some_and(char::is_whitespace) {
+        return false;
+    }
+
+    if app.is_remote {
+        app.push_display_message(DisplayMessage::error(
+            "`/nvim` is only available in local TUI sessions.".to_string(),
+        ));
+        return true;
+    }
+
+    let cwd = active_or_process_working_dir(app);
+    let target = if rest.trim().is_empty() {
+        cwd.clone()
+    } else {
+        match resolve_nvim_target(&cwd, rest.trim()) {
+            Ok(path) => path,
+            Err(error) => {
+                app.push_display_message(DisplayMessage::error(format!(
+                    "Failed to resolve nvim target: {error}"
+                )));
+                return true;
+            }
+        }
+    };
+
+    let args = vec![target.display().to_string()];
+    let target_for_notice = target.clone();
+    spawn_external_tool_in_terminal(app, "nvim", args, "jcode nvim", cwd, move |cwd| {
+        format!(
+            "Opened `{}` with `nvim` in a new terminal at `{}`.",
+            target_for_notice.display(),
+            cwd.display()
+        )
+    });
+    true
+}
+
 fn transcript_opened_message(path: &std::path::Path) -> String {
     format!(
         "Opened transcript file:\n\n```text\n{}\n```",
@@ -1304,6 +1469,8 @@ pub(super) fn handle_session_command(app: &mut App, trimmed: &str) -> bool {
         || handle_swarm_now_command(app, trimmed)
         || handle_transcript_command(app, trimmed)
         || handle_git_command(app, trimmed)
+        || handle_lazygit_command(app, trimmed)
+        || handle_nvim_command(app, trimmed)
         || handle_cwd_command(app, trimmed)
         || handle_catchup_command(app, trimmed)
         || handle_back_command(app, trimmed)
@@ -1698,6 +1865,13 @@ pub(super) fn handle_session_command(app: &mut App, trimmed: &str) -> bool {
 }
 
 fn set_session_working_dir(app: &mut App, dir: std::path::PathBuf) -> Result<(), String> {
+    std::env::set_current_dir(&dir).map_err(|error| {
+        format!(
+            "failed to switch terminal cwd to `{}`: {}",
+            dir.display(),
+            error
+        )
+    })?;
     app.session.working_dir = Some(dir.display().to_string());
     app.session.refresh_initial_session_context_message();
     app.session.updated_at = chrono::Utc::now();
@@ -1749,7 +1923,7 @@ fn handle_cwd_command(app: &mut App, trimmed: &str) -> bool {
                 Ok(dir) => match set_session_working_dir(app, dir.clone()) {
                     Ok(()) => {
                         app.push_display_message(DisplayMessage::system(format!(
-                            "✓ Session cwd switched to `{}`. Conversation context was preserved.",
+                            "✓ Session and terminal cwd switched to `{}`. Conversation context was preserved.",
                             dir.display()
                         )));
                         app.set_status_notice("Cwd switched");
