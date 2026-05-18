@@ -1188,6 +1188,30 @@ The 10-stage M47 patch series (`patch/m47-c0-deep-merge-profiles` through `patch
    - Validation: `cargo test -p jcode --lib compaction::` → 34 pass (31 prior + 3 new). `cargo test -p jcode-compaction-core --lib` → 74 pass (no regressions). `cargo check -p jcode` clean.
    - Binary reinstall required: yes (TUI behavior change: `/info` now shows the M48 digest; debug socket gains two new commands).
 
+51. Durable compaction agent execution path (M48-C4b)
+   - Commit: `5f777318` `[m48-c4b] durable compaction agent execution path`.
+   - Patch branch: `patch/m48-c4b-compaction-agent-execution` (merged into `deploy/m9-m27-catchup` as `27e6daf0`).
+   - Purpose: wire the C-4a anchored summary template into the real text-summary compaction path and persist C-1 durable marker/summary artifacts when compaction completes, while preserving the existing legacy `Session.compaction` provider payload path for compatibility.
+   - Runtime changes:
+     - `src/compaction.rs::generate_compaction_artifact` now builds text-summary prompts with `jcode_compaction_core::m48_summary::build_prompt`, wrapping the prior summary as the `<previous-summary>` anchor and appending a normalized conversation-history context block.
+     - `durable_compaction_history_text` converts media blocks into text labels (`[Attached {media_type}: replaced during compaction]`) and caps each `ToolResult` block at `DURABLE_SUMMARY_TOOL_RESULT_MAX_CHARS = 2000` before it enters the summary prompt.
+     - `Session::record_durable_compaction_turn` appends a marker user message plus assistant summary message, stores the relationship in `Session.compaction_turns`, records `tail_start_id`, `previous_summary_id`, `summary_of_message_ids`, `auto`, `overflow`, and `created_at`, then marks provider-message caches dirty.
+     - Cached and uncached provider message builders filter durable marker/summary artifacts so providers see one active legacy summary plus recent tail, not duplicate sidecar transcript entries.
+     - Agent and TUI compaction completion paths sync durable sidecar metadata before consuming the `CompactionEvent`; sidecars are only created when `compacted_count` increases, avoiding bogus turns for OpenAI native discard-only state changes.
+   - Documentation:
+     - `docs/lazydino/milestones/M48.md` marks C-4b done with validation notes.
+     - `docs/lazydino/milestones/M49.md` records the user-reported screenshot/image rendering bug as a next-milestone follow-up before M49 implementation begins.
+   - Tests:
+     - `compaction::tests::durable_compaction_prompt_uses_anchored_template_and_previous_summary`.
+     - `compaction::tests::durable_compaction_history_rewrites_media_and_caps_tool_results`.
+     - `session::tests::cases::test_record_durable_compaction_turn_persists_artifacts_but_hides_from_provider` verifies artifact persistence plus cached/uncached provider-payload filtering.
+   - Validation:
+     - `cargo test -p jcode --lib compaction::tests` → 36 pass.
+     - `cargo test -p jcode --lib session::tests::cases::test_record_durable_compaction_turn_persists_artifacts_but_hides_from_provider` → 1 pass.
+     - `cargo test -p jcode --lib session::tests::cases::test_` → 32 pass.
+     - `cargo check -p jcode` clean.
+   - Binary reinstall required: yes (runtime compaction prompt and session persistence behavior changed).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
