@@ -136,6 +136,85 @@ pub(super) fn parse_svg_explicit_size(tag: &str) -> Option<(f32, f32)> {
     Some((width, height))
 }
 
+#[cfg(all(
+    feature = "renderer",
+    not(all(feature = "mmdr-size-api", mmdr_size_api_available))
+))]
+fn format_svg_length(value: f32) -> String {
+    let mut out = format!("{:.3}", value.max(1.0));
+    while out.ends_with('0') {
+        out.pop();
+    }
+    if out.ends_with('.') {
+        out.pop();
+    }
+    out
+}
+
+#[cfg(all(
+    feature = "renderer",
+    not(all(feature = "mmdr-size-api", mmdr_size_api_available))
+))]
+pub(super) fn set_xml_attribute(tag: &str, attr: &str, value: &str) -> String {
+    let pattern = format!(" {attr}=\"");
+    if let Some(start) = tag.find(&pattern) {
+        let value_start = start + pattern.len();
+        if let Some(end_rel) = tag[value_start..].find('"') {
+            let value_end = value_start + end_rel;
+            let mut updated = String::with_capacity(tag.len() + value.len());
+            updated.push_str(&tag[..value_start]);
+            updated.push_str(value);
+            updated.push_str(&tag[value_end..]);
+            return updated;
+        }
+    }
+
+    let insert_pos = tag.rfind('>').unwrap_or(tag.len());
+    let mut updated = String::with_capacity(tag.len() + attr.len() + value.len() + 4);
+    updated.push_str(&tag[..insert_pos]);
+    updated.push_str(&format!(" {attr}=\"{value}\""));
+    updated.push_str(&tag[insert_pos..]);
+    updated
+}
+
+#[cfg(all(
+    feature = "renderer",
+    not(all(feature = "mmdr-size-api", mmdr_size_api_available))
+))]
+pub(super) fn retarget_svg_for_png(svg: &str, target_width: f64, target_height: f64) -> String {
+    let Some(start) = svg.find("<svg") else {
+        return svg.to_string();
+    };
+    let Some(end_rel) = svg[start..].find('>') else {
+        return svg.to_string();
+    };
+    let end = start + end_rel;
+    let root_tag = &svg[start..=end];
+
+    let (resolved_width, resolved_height) = parse_svg_viewbox_size(root_tag)
+        .or_else(|| parse_svg_explicit_size(root_tag))
+        .map(|(width, height)| {
+            let target_width = target_width.max(1.0) as f32;
+            let target_height = target_height.max(1.0) as f32;
+            let width_scale = target_width / width.max(1.0);
+            let height_scale = target_height / height.max(1.0);
+            let scale = width_scale.min(height_scale).max(0.0001);
+            let output_width = (width * scale).max(1.0);
+            let output_height = (height * scale).max(1.0);
+            (output_width, output_height)
+        })
+        .unwrap_or_else(|| (target_width.max(1.0) as f32, target_height.max(1.0) as f32));
+
+    let root_tag = set_xml_attribute(root_tag, "width", &format_svg_length(resolved_width));
+    let root_tag = set_xml_attribute(&root_tag, "height", &format_svg_length(resolved_height));
+
+    let mut updated = String::with_capacity(svg.len() - (end + 1 - start) + root_tag.len());
+    updated.push_str(&svg[..start]);
+    updated.push_str(&root_tag);
+    updated.push_str(&svg[end + 1..]);
+    updated
+}
+
 #[cfg(feature = "renderer")]
 fn primary_font_family(fonts: &str) -> String {
     fonts

@@ -315,17 +315,16 @@ fn render_svg_for_png(
     layout: &Layout,
     theme: &Theme,
     layout_config: &LayoutConfig,
-    _output_dimensions: Option<(f32, f32)>,
+    output_dimensions: Option<(f32, f32)>,
 ) -> (String, MeasuredSvgDimensions) {
     let svg_source = render_svg(layout, theme, layout_config);
-    // The compatibility renderer does not have mmdr's native size API. Previous
-    // code retargeted only the root <svg> width/height after Mermaid laid out the
-    // graph. For flowcharts this can desynchronize edge paths from node layers
-    // because nested transforms/markers retain the original coordinate system.
-    // Rasterize the SVG exactly as Mermaid produced it; terminal-side fitting can
-    // scale the resulting PNG uniformly without corrupting geometry.
-    let dimensions = measure_svg_dimensions_from_svg(&svg_source, None);
-    (svg_source, dimensions)
+    let dimensions = measure_svg_dimensions_from_svg(&svg_source, output_dimensions);
+    let svg = if let Some((target_width, target_height)) = output_dimensions {
+        svg::retarget_svg_for_png(&svg_source, target_width as f64, target_height as f64)
+    } else {
+        svg_source
+    };
+    (svg, dimensions)
 }
 
 #[cfg(all(
