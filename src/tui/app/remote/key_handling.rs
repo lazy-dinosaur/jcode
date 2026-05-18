@@ -780,6 +780,32 @@ async fn handle_remote_key_internal(
                     return Ok(());
                 }
 
+                if trimmed == "/mcp reload" {
+                    match remote.mcp_reload().await {
+                        Ok(_) => {
+                            app.push_display_message(DisplayMessage::system(
+                                "Reloading MCP tools for this session...".to_string(),
+                            ));
+                            app.set_status_notice("MCP reload requested");
+                        }
+                        Err(error) => {
+                            app.push_display_message(DisplayMessage::error(format!(
+                                "Failed to request MCP reload: {}",
+                                error
+                            )));
+                            app.set_status_notice("MCP reload failed");
+                        }
+                    }
+                    return Ok(());
+                }
+
+                if trimmed == "/mcp" || trimmed.starts_with("/mcp ") {
+                    app.push_display_message(DisplayMessage::error(
+                        "Usage: `/mcp reload` — re-register MCP tools for this session and unlock the provider tool list.".to_string(),
+                    ));
+                    return Ok(());
+                }
+
                 if trimmed == "/rebuild" {
                     let session_id = app
                         .remote_session_id

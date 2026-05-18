@@ -263,6 +263,10 @@ pub enum Request {
     #[serde(rename = "reload")]
     Reload { id: u64 },
 
+    /// Re-register MCP tools for the current live session and refresh the provider tool list.
+    #[serde(rename = "mcp_reload")]
+    McpReload { id: u64 },
+
     /// Resume a specific session by ID
     #[serde(rename = "resume_session")]
     ResumeSession {
@@ -1389,6 +1393,15 @@ pub enum ServerEvent {
         success: bool,
     },
 
+    /// Response to MCP reload request — MCP registry/tool schema refresh status.
+    #[serde(rename = "mcp_reload_result")]
+    McpReloadResult {
+        id: u64,
+        message: String,
+        success: bool,
+        mcp_server_tool_count: usize,
+    },
+
     /// A running command is waiting for stdin input from the user
     #[serde(rename = "stdin_request")]
     StdinRequest {
@@ -2138,6 +2151,7 @@ impl Request {
             Request::GetHistory { id } => *id,
             Request::GetCompactedHistory { id, .. } => *id,
             Request::Reload { id } => *id,
+            Request::McpReload { id } => *id,
             Request::ResumeSession { id, .. } => *id,
             Request::NotifySession { id, .. } => *id,
             Request::Transcript { id, .. } => *id,

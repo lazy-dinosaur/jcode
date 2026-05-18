@@ -440,6 +440,15 @@ impl RemoteConnection {
         self.send_request(request).await
     }
 
+    /// Re-register MCP tools for the current session and refresh the server-side tool list.
+    pub async fn mcp_reload(&mut self) -> Result<u64> {
+        let id = self.next_request_id;
+        let request = Request::McpReload { id };
+        self.next_request_id += 1;
+        self.send_request(request).await?;
+        Ok(id)
+    }
+
     /// Resume a specific session by ID
     pub async fn resume_session(&mut self, session_id: &str) -> Result<()> {
         let request = Request::ResumeSession {

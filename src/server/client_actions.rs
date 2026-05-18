@@ -1036,6 +1036,44 @@ pub(super) fn handle_compact(
     });
 }
 
+pub(super) async fn handle_mcp_reload(
+    id: u64,
+    agent: &Arc<Mutex<Agent>>,
+    mcp_pool: &Arc<crate::mcp::SharedMcpPool>,
+    client_event_tx: &mpsc::UnboundedSender<ServerEvent>,
+) {
+    let Ok(mut agent_guard) = agent.try_lock() else {
+        let _ = client_event_tx.send(ServerEvent::McpReloadResult {
+            id,
+            message: "⚠ Cannot reload MCP while a request is in progress. Try again after the current turn finishes.".to_string(),
+            success: false,
+            mcp_server_tool_count: 0,
+        });
+        return;
+    };
+
+    let session_id = agent_guard.session_id().to_string();
+    let registry = agent_guard.registry();
+    agent_guard.unlock_tools();
+    drop(agent_guard);
+
+    registry
+        .register_mcp_tools(None, Some(Arc::clone(mcp_pool)), Some(session_id))
+        .await;
+    let diagnostics = registry.mcp_registry_diagnostics().await;
+    let count = diagnostics.mcp_server_tool_count;
+    let _ = client_event_tx.send(ServerEvent::McpReloadResult {
+        id,
+        message: format!(
+            "✓ MCP tools reloaded. {} MCP server tool{} registered and provider tool list unlocked.",
+            count,
+            if count == 1 { "" } else { "s" }
+        ),
+        success: true,
+        mcp_server_tool_count: count,
+    });
+}
+
 pub(super) async fn handle_stdin_response(
     id: u64,
     request_id: String,

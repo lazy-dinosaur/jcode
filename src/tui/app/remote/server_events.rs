@@ -1527,6 +1527,21 @@ pub(in crate::tui::app) fn handle_server_event(
             }
             false
         }
+        ServerEvent::McpReloadResult {
+            message,
+            success,
+            mcp_server_tool_count,
+            ..
+        } => {
+            if success {
+                app.push_display_message(DisplayMessage::system(message));
+                app.set_status_notice(format!("MCP reloaded: {} tools", mcp_server_tool_count));
+            } else {
+                app.push_display_message(DisplayMessage::error(message));
+                app.set_status_notice("MCP reload failed");
+            }
+            false
+        }
         ServerEvent::StdinRequest { .. } => {
             app.set_status_notice("⌨ Interactive terminal detected (command will timeout)");
             false
