@@ -1302,6 +1302,18 @@ The 10-stage M47 patch series (`patch/m47-c0-deep-merge-profiles` through `patch
      - `cargo check -p jcode`.
    - Binary reinstall required: yes (final deploy-tip selfdev build after M48 close).
 
+57. Selfdev reload post-reconnect tool readiness plan (M50-C0 plan)
+   - Commit: `c0286c89` `[m50-c0] plan selfdev reload tool readiness`.
+   - Patch branch: `patch/m50-c0-mcp-reload-plan`.
+   - Purpose: record M50 as the next blocking milestone before M49. Server reload interruption itself is normal; the target is the flaky post-`selfdev reload` session/tool readiness state, especially MCP-backed tools after reconnect.
+   - Scope:
+     - Reproduce and diagnose delayed/missing MCP tool registration after selfdev reload reconnect.
+     - Add bounded readiness barrier for subscribe/resume after reconnect.
+     - Add registry reconciliation/auto-heal so valid MCP tools do not require manual `mcp reload`.
+     - Make explicit `mcp reload` atomic enough to avoid dropping old usable tools on failed reconnect.
+     - Add retry/backoff/status UX and final validation before returning to M49.
+   - Binary reinstall required: no (planning/documentation only).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
