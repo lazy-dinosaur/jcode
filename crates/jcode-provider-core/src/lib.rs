@@ -33,6 +33,7 @@ pub use selection::{
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::Stream;
+use jcode_agent_runtime::InterruptSignal;
 use jcode_message_types::{
     ContentBlock, Message, Role, StreamEvent, ToolDefinition, messages_with_dynamic_system_context,
 };
@@ -43,6 +44,37 @@ use std::time::Duration;
 
 /// Stream of events from a provider.
 pub type EventStream = Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>;
+
+/// Optional controls for one provider completion request.
+///
+/// This is intentionally additive: existing providers can keep implementing
+/// `complete` / `complete_split`, while cancellation-aware adapters override
+/// the `*_with_options` methods and observe `cancel_signal` cooperatively.
+#[derive(Clone, Default)]
+pub struct CompletionOptions {
+    /// Per-turn cancellation signal fired by user/client/superseded control.
+    /// Reload/selfdev shutdown keeps using provider-specific handoff paths.
+    pub cancel_signal: Option<InterruptSignal>,
+}
+
+impl CompletionOptions {
+    pub fn with_cancel_signal(cancel_signal: InterruptSignal) -> Self {
+        Self {
+            cancel_signal: Some(cancel_signal),
+        }
+    }
+
+    pub fn cancel_signal(&self) -> Option<InterruptSignal> {
+        self.cancel_signal.clone()
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancel_signal
+            .as_ref()
+            .map(|signal| signal.is_set())
+            .unwrap_or(false)
+    }
+}
 
 /// Provider trait for LLM backends.
 #[async_trait]
@@ -57,6 +89,23 @@ pub trait Provider: Send + Sync {
         resume_session_id: Option<&str>,
     ) -> Result<EventStream>;
 
+    /// Completion entry point with additive per-turn controls.
+    ///
+    /// Default implementation preserves backward compatibility by delegating
+    /// to `complete`. Providers that can cancel transport should override this
+    /// method rather than changing the legacy signature.
+    async fn complete_with_options(
+        &self,
+        messages: &[Message],
+        tools: &[ToolDefinition],
+        system: &str,
+        resume_session_id: Option<&str>,
+        _options: CompletionOptions,
+    ) -> Result<EventStream> {
+        self.complete(messages, tools, system, resume_session_id)
+            .await
+    }
+
     /// Send messages with split system prompt for better caching.
     async fn complete_split(
         &self,
@@ -69,6 +118,27 @@ pub trait Provider: Send + Sync {
         let dynamic_messages = messages_with_dynamic_system_context(messages, system_dynamic);
         self.complete(&dynamic_messages, tools, system_static, resume_session_id)
             .await
+    }
+
+    /// Split system prompt completion with additive per-turn controls.
+    async fn complete_split_with_options(
+        &self,
+        messages: &[Message],
+        tools: &[ToolDefinition],
+        system_static: &str,
+        system_dynamic: &str,
+        resume_session_id: Option<&str>,
+        options: CompletionOptions,
+    ) -> Result<EventStream> {
+        let dynamic_messages = messages_with_dynamic_system_context(messages, system_dynamic);
+        self.complete_with_options(
+            &dynamic_messages,
+            tools,
+            system_static,
+            resume_session_id,
+            options,
+        )
+        .await
     }
 
     /// Get the provider name.

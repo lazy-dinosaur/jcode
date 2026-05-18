@@ -1,4 +1,7 @@
-use super::{EventStream, ModelRoute, MultiProvider, NativeToolResultSender, Provider, copilot};
+use super::{
+    CompletionOptions, EventStream, ModelRoute, MultiProvider, NativeToolResultSender, Provider,
+    copilot,
+};
 use crate::message::{Message, ToolDefinition};
 use crate::provider::models::{
     ensure_model_allowed_for_subscription, filtered_display_models, filtered_model_routes,
@@ -61,6 +64,20 @@ impl Provider for JcodeProvider {
             .await
     }
 
+    async fn complete_with_options(
+        &self,
+        messages: &[Message],
+        tools: &[ToolDefinition],
+        system: &str,
+        resume_session_id: Option<&str>,
+        options: CompletionOptions,
+    ) -> Result<EventStream> {
+        self.ensure_runtime_mode();
+        self.inner
+            .complete_with_options(messages, tools, system, resume_session_id, options)
+            .await
+    }
+
     async fn complete_split(
         &self,
         messages: &[Message],
@@ -77,6 +94,28 @@ impl Provider for JcodeProvider {
                 system_static,
                 system_dynamic,
                 resume_session_id,
+            )
+            .await
+    }
+
+    async fn complete_split_with_options(
+        &self,
+        messages: &[Message],
+        tools: &[ToolDefinition],
+        system_static: &str,
+        system_dynamic: &str,
+        resume_session_id: Option<&str>,
+        options: CompletionOptions,
+    ) -> Result<EventStream> {
+        self.ensure_runtime_mode();
+        self.inner
+            .complete_split_with_options(
+                messages,
+                tools,
+                system_static,
+                system_dynamic,
+                resume_session_id,
+                options,
             )
             .await
     }

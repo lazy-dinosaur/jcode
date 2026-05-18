@@ -39,12 +39,13 @@ use std::sync::{Arc, RwLock};
 
 pub use jcode_provider_core::{
     ALL_CLAUDE_MODELS, ALL_OPENAI_MODELS, CHEAPNESS_REFERENCE_INPUT_TOKENS,
-    CHEAPNESS_REFERENCE_OUTPUT_TOKENS, DEFAULT_CONTEXT_LIMIT, EventStream, JCODE_USER_AGENT,
-    ModelCapabilities, ModelCatalogRefreshSummary, ModelRoute, NativeCompactionResult,
-    NativeToolResult, NativeToolResultSender, PremiumMode, Provider, RouteBillingKind,
-    RouteCheapnessEstimate, RouteCostConfidence, RouteCostSource, dedupe_model_routes,
-    explicit_model_provider_prefix, model_name_for_provider, normalize_copilot_model_name,
-    provider_from_model_key, shared_http_client, summarize_model_catalog_refresh,
+    CHEAPNESS_REFERENCE_OUTPUT_TOKENS, CompletionOptions, DEFAULT_CONTEXT_LIMIT, EventStream,
+    JCODE_USER_AGENT, ModelCapabilities, ModelCatalogRefreshSummary, ModelRoute,
+    NativeCompactionResult, NativeToolResult, NativeToolResultSender, PremiumMode, Provider,
+    RouteBillingKind, RouteCheapnessEstimate, RouteCostConfidence, RouteCostSource,
+    dedupe_model_routes, explicit_model_provider_prefix, model_name_for_provider,
+    normalize_copilot_model_name, provider_from_model_key, shared_http_client,
+    summarize_model_catalog_refresh,
 };
 pub(crate) use jcode_provider_core::{ProviderFailoverPrompt, parse_failover_prompt_message};
 pub use route_builders::{
@@ -151,6 +152,7 @@ impl MultiProvider {
         tools: &[ToolDefinition],
         mode: CompletionMode<'_>,
         resume_session_id: Option<&str>,
+        options: CompletionOptions,
     ) -> Result<EventStream> {
         self.spawn_anthropic_catalog_refresh_if_needed();
         self.spawn_openai_catalog_refresh_if_needed();
@@ -238,8 +240,15 @@ impl MultiProvider {
 
             let attempt = match mode {
                 CompletionMode::Unified { system } => {
-                    self.complete_on_provider(candidate, messages, tools, system, resume_session_id)
-                        .await
+                    self.complete_on_provider(
+                        candidate,
+                        messages,
+                        tools,
+                        system,
+                        resume_session_id,
+                        options.clone(),
+                    )
+                    .await
                 }
                 CompletionMode::Split {
                     system_static,
@@ -252,6 +261,7 @@ impl MultiProvider {
                         system_static,
                         system_dynamic,
                         resume_session_id,
+                        options.clone(),
                     )
                     .await
                 }
@@ -300,7 +310,13 @@ impl MultiProvider {
                         if candidate == active
                             && let Some(stream) = self
                                 .try_same_provider_account_failover(
-                                    candidate, messages, tools, mode, &summary, &mut notes,
+                                    candidate,
+                                    messages,
+                                    tools,
+                                    mode,
+                                    &summary,
+                                    &mut notes,
+                                    options.clone(),
                                 )
                                 .await?
                         {
@@ -739,6 +755,25 @@ impl Provider for MultiProvider {
             tools,
             CompletionMode::Unified { system },
             resume_session_id,
+            CompletionOptions::default(),
+        )
+        .await
+    }
+
+    async fn complete_with_options(
+        &self,
+        messages: &[Message],
+        tools: &[ToolDefinition],
+        system: &str,
+        resume_session_id: Option<&str>,
+        options: CompletionOptions,
+    ) -> Result<EventStream> {
+        self.complete_with_failover(
+            messages,
+            tools,
+            CompletionMode::Unified { system },
+            resume_session_id,
+            options,
         )
         .await
     }
@@ -760,6 +795,29 @@ impl Provider for MultiProvider {
                 system_dynamic,
             },
             resume_session_id,
+            CompletionOptions::default(),
+        )
+        .await
+    }
+
+    async fn complete_split_with_options(
+        &self,
+        messages: &[Message],
+        tools: &[ToolDefinition],
+        system_static: &str,
+        system_dynamic: &str,
+        resume_session_id: Option<&str>,
+        options: CompletionOptions,
+    ) -> Result<EventStream> {
+        self.complete_with_failover(
+            messages,
+            tools,
+            CompletionMode::Split {
+                system_static,
+                system_dynamic,
+            },
+            resume_session_id,
+            options,
         )
         .await
     }
@@ -1614,9 +1672,9 @@ impl Provider for MultiProvider {
                 .and_then(|a| a.thinking_enabled())
                 .or_else(|| self.claude_provider().and_then(|c| c.thinking_enabled())),
             ActiveProvider::Gemini => self.gemini_provider().and_then(|g| g.thinking_enabled()),
-            ActiveProvider::OpenRouter => {
-                self.openrouter_provider().and_then(|o| o.thinking_enabled())
-            }
+            ActiveProvider::OpenRouter => self
+                .openrouter_provider()
+                .and_then(|o| o.thinking_enabled()),
             _ => None,
         }
     }

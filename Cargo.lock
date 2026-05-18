@@ -3612,6 +3612,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "futures",
+ "jcode-agent-runtime",
  "jcode-message-types",
  "reqwest",
  "serde",
