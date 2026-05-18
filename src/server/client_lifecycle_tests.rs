@@ -133,6 +133,7 @@ async fn processing_interrupt_snapshot_tracks_active_task_without_agent_lock() {
         message_id: &mut processing_message_id,
         session_id: &mut processing_session_id,
         task: &mut processing_task,
+        cancel_state: &mut ProcessingCancelState::Idle,
     });
 
     assert!(snapshot.client_is_processing);
@@ -146,13 +147,13 @@ async fn processing_interrupt_snapshot_tracks_active_task_without_agent_lock() {
 }
 
 #[tokio::test]
-async fn cancel_processing_message_baseline_hard_aborts_stubborn_task() {
+async fn cancel_processing_message_uses_cooperative_grace_then_abort_fallback() {
     let queue = Arc::new(std::sync::Mutex::new(Vec::new()));
     let background_signal = InterruptSignal::new();
     let turn_control = TurnControl::new();
     let stop_signal = turn_control.stop_signal();
     let control = SessionControlHandle::new(
-        "session_cancel_baseline",
+        "session_cancel_cooperative",
         Arc::clone(&queue),
         background_signal,
         turn_control,
@@ -161,7 +162,8 @@ async fn cancel_processing_message_baseline_hard_aborts_stubborn_task() {
     let (client_event_tx, mut client_event_rx) = mpsc::unbounded_channel::<ServerEvent>();
     let mut client_is_processing = true;
     let mut processing_message_id = Some(4242);
-    let mut processing_session_id = Some("session_cancel_baseline".to_string());
+    let mut processing_session_id = Some("session_cancel_cooperative".to_string());
+    let mut processing_cancel_state = ProcessingCancelState::Idle;
     let stubborn_started = Arc::new(AtomicBool::new(false));
     let stubborn_started_task = Arc::clone(&stubborn_started);
     let mut processing_task = Some(tokio::spawn(async move {
@@ -186,6 +188,7 @@ async fn cancel_processing_message_baseline_hard_aborts_stubborn_task() {
             message_id: &mut processing_message_id,
             session_id: &mut processing_session_id,
             task: &mut processing_task,
+            cancel_state: &mut processing_cancel_state,
         },
         &control,
         &client_event_tx,
@@ -203,9 +206,10 @@ async fn cancel_processing_message_baseline_hard_aborts_stubborn_task() {
     assert!(processing_message_id.is_none());
     assert!(processing_session_id.is_none());
     assert!(processing_task.is_none());
+    assert_eq!(processing_cancel_state, ProcessingCancelState::Idle);
     assert!(
         !stop_signal.is_set(),
-        "current baseline resets cancel immediately after abort fallback"
+        "cancel state resets after abort fallback"
     );
     assert!(matches!(
         client_event_rx.recv().await,
@@ -214,6 +218,139 @@ async fn cancel_processing_message_baseline_hard_aborts_stubborn_task() {
     assert!(matches!(
         client_event_rx.recv().await,
         Some(ServerEvent::Done { id: 4242 })
+    ));
+}
+
+#[tokio::test]
+async fn cancel_processing_message_ignores_repeated_cancel_while_cancelling() {
+    let queue = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let background_signal = InterruptSignal::new();
+    let turn_control = TurnControl::new();
+    let stop_signal = turn_control.stop_signal();
+    let control = SessionControlHandle::new(
+        "session_cancel_idempotent",
+        Arc::clone(&queue),
+        background_signal,
+        turn_control,
+    );
+
+    let (client_event_tx, mut client_event_rx) = mpsc::unbounded_channel::<ServerEvent>();
+    let mut client_is_processing = true;
+    let mut processing_message_id = Some(9001);
+    let mut processing_session_id = Some("session_cancel_idempotent".to_string());
+    let mut processing_cancel_state = ProcessingCancelState::Cancelling;
+    let mut processing_task = Some(tokio::spawn(async {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+    }));
+
+    let swarm_members = Arc::new(RwLock::new(HashMap::new()));
+    let swarms_by_id = Arc::new(RwLock::new(HashMap::new()));
+    let event_history = Arc::new(RwLock::new(std::collections::VecDeque::new()));
+    let event_counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let (swarm_event_tx, _) = broadcast::channel(8);
+
+    cancel_processing_message(
+        &mut ProcessingState {
+            client_is_processing: &mut client_is_processing,
+            message_id: &mut processing_message_id,
+            session_id: &mut processing_session_id,
+            task: &mut processing_task,
+            cancel_state: &mut processing_cancel_state,
+        },
+        &control,
+        &client_event_tx,
+        &SwarmStatusRefs {
+            members: &swarm_members,
+            swarms_by_id: &swarms_by_id,
+            event_history: &event_history,
+            event_counter: &event_counter,
+            event_tx: &swarm_event_tx,
+        },
+    )
+    .await;
+
+    assert!(client_is_processing);
+    assert_eq!(processing_message_id, Some(9001));
+    assert_eq!(
+        processing_session_id.as_deref(),
+        Some("session_cancel_idempotent")
+    );
+    assert_eq!(processing_cancel_state, ProcessingCancelState::Cancelling);
+    assert!(processing_task.is_some());
+    assert!(!stop_signal.is_set());
+    assert!(client_event_rx.try_recv().is_err());
+
+    processing_task.take().unwrap().abort();
+}
+
+#[tokio::test]
+async fn cancel_processing_message_waits_for_cooperative_completion_before_abort() {
+    let queue = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let background_signal = InterruptSignal::new();
+    let turn_control = TurnControl::new();
+    let stop_signal = turn_control.stop_signal();
+    let control = SessionControlHandle::new(
+        "session_cancel_grace",
+        Arc::clone(&queue),
+        background_signal,
+        turn_control,
+    );
+
+    let (client_event_tx, mut client_event_rx) = mpsc::unbounded_channel::<ServerEvent>();
+    let mut client_is_processing = true;
+    let mut processing_message_id = Some(5150);
+    let mut processing_session_id = Some("session_cancel_grace".to_string());
+    let mut processing_cancel_state = ProcessingCancelState::Idle;
+    let observed_cancel = Arc::new(AtomicBool::new(false));
+    let observed_cancel_task = Arc::clone(&observed_cancel);
+    let stop_signal_for_task = stop_signal.clone();
+    let mut processing_task = Some(tokio::spawn(async move {
+        stop_signal_for_task.notified().await;
+        observed_cancel_task.store(true, Ordering::SeqCst);
+    }));
+
+    let swarm_members = Arc::new(RwLock::new(HashMap::new()));
+    let swarms_by_id = Arc::new(RwLock::new(HashMap::new()));
+    let event_history = Arc::new(RwLock::new(std::collections::VecDeque::new()));
+    let event_counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let (swarm_event_tx, _) = broadcast::channel(8);
+
+    let started = Instant::now();
+    cancel_processing_message(
+        &mut ProcessingState {
+            client_is_processing: &mut client_is_processing,
+            message_id: &mut processing_message_id,
+            session_id: &mut processing_session_id,
+            task: &mut processing_task,
+            cancel_state: &mut processing_cancel_state,
+        },
+        &control,
+        &client_event_tx,
+        &SwarmStatusRefs {
+            members: &swarm_members,
+            swarms_by_id: &swarms_by_id,
+            event_history: &event_history,
+            event_counter: &event_counter,
+            event_tx: &swarm_event_tx,
+        },
+    )
+    .await;
+
+    assert!(observed_cancel.load(Ordering::SeqCst));
+    assert!(started.elapsed() < Duration::from_millis(1000));
+    assert!(!client_is_processing);
+    assert!(processing_message_id.is_none());
+    assert!(processing_session_id.is_none());
+    assert!(processing_task.is_none());
+    assert_eq!(processing_cancel_state, ProcessingCancelState::Idle);
+    assert!(!stop_signal.is_set());
+    assert!(matches!(
+        client_event_rx.recv().await,
+        Some(ServerEvent::Interrupted)
+    ));
+    assert!(matches!(
+        client_event_rx.recv().await,
+        Some(ServerEvent::Done { id: 5150 })
     ));
 }
 
@@ -327,6 +464,7 @@ fn reload_starting_rejects_new_turn_without_spawning_processing_task() {
         let mut processing_message_id = None;
         let mut processing_session_id = None;
         let mut processing_task = None;
+        let mut processing_cancel_state = ProcessingCancelState::Idle;
         let swarm_members = Arc::new(RwLock::new(HashMap::new()));
         let swarms_by_id = Arc::new(RwLock::new(HashMap::new()));
         let event_history = Arc::new(RwLock::new(std::collections::VecDeque::new()));
@@ -347,6 +485,7 @@ fn reload_starting_rejects_new_turn_without_spawning_processing_task() {
                 message_id: &mut processing_message_id,
                 session_id: &mut processing_session_id,
                 task: &mut processing_task,
+                cancel_state: &mut processing_cancel_state,
             },
             &agent,
             &client_event_tx,
@@ -427,6 +566,7 @@ fn reload_starting_rejects_new_turns_for_multiple_sessions() {
             let mut processing_message_id = None;
             let mut processing_session_id = None;
             let mut processing_task = None;
+            let mut processing_cancel_state = ProcessingCancelState::Idle;
 
             start_processing_message(
                 ProcessingMessage {
@@ -442,6 +582,7 @@ fn reload_starting_rejects_new_turns_for_multiple_sessions() {
                     message_id: &mut processing_message_id,
                     session_id: &mut processing_session_id,
                     task: &mut processing_task,
+                    cancel_state: &mut processing_cancel_state,
                 },
                 &agent,
                 &client_event_tx,
