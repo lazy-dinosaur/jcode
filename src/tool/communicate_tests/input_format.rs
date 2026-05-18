@@ -378,6 +378,7 @@ fn format_members_includes_status_and_detail() {
         working_dir: None,
         stdin_request_tx: None,
         graceful_shutdown_signal: None,
+            turn_cancel_signal: None,
         execution_mode: ToolExecutionMode::Direct,
     };
 

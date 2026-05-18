@@ -12,18 +12,27 @@ fn make_ctx(stdin_tx: Option<mpsc::UnboundedSender<StdinInputRequest>>) -> ToolC
         working_dir: Some(std::path::PathBuf::from("/tmp")),
         stdin_request_tx: stdin_tx,
         graceful_shutdown_signal: None,
+        turn_cancel_signal: None,
         execution_mode: crate::tool::ToolExecutionMode::Direct,
     }
 }
 
 fn make_agent_ctx(signal: jcode_agent_runtime::InterruptSignal) -> ToolContext {
+    make_agent_ctx_with_turn(signal, None)
+}
+
+fn make_agent_ctx_with_turn(
+    reload_signal: jcode_agent_runtime::InterruptSignal,
+    turn_signal: Option<jcode_agent_runtime::InterruptSignal>,
+) -> ToolContext {
     ToolContext {
         session_id: "test-session".to_string(),
         message_id: "test-msg".to_string(),
         tool_call_id: "test-call-agent".to_string(),
         working_dir: Some(std::path::PathBuf::from("/tmp")),
         stdin_request_tx: None,
-        graceful_shutdown_signal: Some(signal),
+        graceful_shutdown_signal: Some(reload_signal),
+        turn_cancel_signal: turn_signal,
         execution_mode: crate::tool::ToolExecutionMode::AgentTurn,
     }
 }
@@ -230,6 +239,37 @@ async fn test_reload_persistable_bash_continues_in_background() {
 
     let _ = tokio::fs::remove_file(output_file).await;
     let _ = tokio::fs::remove_file(status_file).await;
+}
+
+#[tokio::test]
+async fn test_agent_turn_bash_terminates_on_user_cancel_signal() {
+    let tool = BashTool::new();
+    let reload_signal = jcode_agent_runtime::InterruptSignal::new();
+    let turn_signal = jcode_agent_runtime::InterruptSignal::new();
+    let ctx = make_agent_ctx_with_turn(reload_signal, Some(turn_signal.clone()));
+
+    let signal_task = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        turn_signal.fire();
+    });
+
+    let started = std::time::Instant::now();
+    let result = tool
+        .execute(json!({"command": "sleep 10", "timeout": 10000}), ctx)
+        .await;
+    signal_task.await.expect("signal task should complete");
+
+    let err_msg = result
+        .expect_err("cancelled bash command should fail")
+        .to_string();
+    assert!(
+        err_msg.contains("cancelled by user interrupt"),
+        "error should mention user cancel: {err_msg}"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(3),
+        "bash cancellation should not wait for sleep timeout"
+    );
 }
 
 #[tokio::test]

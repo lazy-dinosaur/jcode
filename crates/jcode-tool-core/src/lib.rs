@@ -34,6 +34,7 @@ pub struct ToolContext {
     pub working_dir: Option<PathBuf>,
     pub stdin_request_tx: Option<tokio::sync::mpsc::UnboundedSender<StdinInputRequest>>,
     pub graceful_shutdown_signal: Option<InterruptSignal>,
+    pub turn_cancel_signal: Option<InterruptSignal>,
     pub execution_mode: ToolExecutionMode,
 }
 
@@ -52,8 +53,20 @@ impl ToolContext {
             working_dir: self.working_dir.clone(),
             stdin_request_tx: self.stdin_request_tx.clone(),
             graceful_shutdown_signal: self.graceful_shutdown_signal.clone(),
+            turn_cancel_signal: self.turn_cancel_signal.clone(),
             execution_mode: self.execution_mode,
         }
+    }
+
+    pub fn turn_cancel_signal(&self) -> Option<InterruptSignal> {
+        self.turn_cancel_signal.clone()
+    }
+
+    pub fn is_turn_cancelled(&self) -> bool {
+        self.turn_cancel_signal
+            .as_ref()
+            .map(|signal| signal.is_set())
+            .unwrap_or(false)
     }
 
     pub fn resolve_path(&self, path: &Path) -> PathBuf {

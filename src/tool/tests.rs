@@ -436,6 +436,7 @@ async fn test_batch_resolves_oauth_names() {
         working_dir: Some(temp_dir.path().to_path_buf()),
         stdin_request_tx: None,
         graceful_shutdown_signal: None,
+            turn_cancel_signal: None,
         execution_mode: ToolExecutionMode::Direct,
     };
 

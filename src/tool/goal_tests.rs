@@ -18,6 +18,7 @@ async fn goal_tool_create_and_resume_round_trip() {
         working_dir: Some(project.clone()),
         stdin_request_tx: None,
         graceful_shutdown_signal: None,
+            turn_cancel_signal: None,
         execution_mode: crate::tool::ToolExecutionMode::AgentTurn,
     };
 
@@ -98,6 +99,7 @@ async fn goal_tool_list_opens_goals_overview_by_default() {
         working_dir: Some(project.clone()),
         stdin_request_tx: None,
         graceful_shutdown_signal: None,
+            turn_cancel_signal: None,
         execution_mode: crate::tool::ToolExecutionMode::AgentTurn,
     };
 
@@ -146,6 +148,7 @@ async fn goal_tool_update_refreshes_open_overview_without_stealing_focus() {
         working_dir: Some(project.clone()),
         stdin_request_tx: None,
         graceful_shutdown_signal: None,
+            turn_cancel_signal: None,
         execution_mode: crate::tool::ToolExecutionMode::AgentTurn,
     };
 

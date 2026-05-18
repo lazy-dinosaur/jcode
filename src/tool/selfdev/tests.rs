@@ -47,6 +47,7 @@ fn create_test_context(session_id: &str, working_dir: Option<std::path::PathBuf>
         working_dir,
         stdin_request_tx: None,
         graceful_shutdown_signal: None,
+            turn_cancel_signal: None,
         execution_mode: crate::tool::ToolExecutionMode::Direct,
     }
 }
