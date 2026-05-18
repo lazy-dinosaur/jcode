@@ -1573,6 +1573,19 @@ The 10-stage M47 patch series (`patch/m47-c0-deep-merge-profiles` through `patch
      - `cargo check -p jcode`.
    - Binary reinstall required: yes (interactive TUI key handling changed).
 
+72. MCP UnknownTool retry/soft-fail hotfix
+   - Commit: `4232e524` `[mcp] retry unknown tool after refresh`.
+   - Patch branch: `patch/mcp-unknown-tool-retry-refresh`.
+   - Purpose: avoid a stale MCP tool list or server-side `UnknownTool` response breaking the turn/connection. This was reported after MCP tools disconnected with unknown-tool errors.
+   - Runtime changes:
+     - Added `McpManager::refresh_server_tools(...)` for both shared-pool handles and owned clients.
+     - `McpTool::execute(...)` now detects common `UnknownTool` / `unknown tool` errors, refreshes `tools/list`, and retries the call once.
+     - If the retry still reports `UnknownTool`, jcode returns a normal tool output explaining that the MCP tool is no longer available instead of propagating a hard tool execution error.
+   - Validation:
+     - `cargo test -p jcode --lib mcp::tool::tests::detects_common_unknown_tool_errors`.
+     - `cargo check -p jcode`.
+   - Binary reinstall required: yes (MCP tool runtime error handling changed).
+
 ## Upstream PR triage notes
 
 Last reviewed: 2026-05-10.
