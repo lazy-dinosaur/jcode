@@ -273,6 +273,46 @@ async fn register_mcp_tools_times_out_but_continues_background_registration() {
     );
 }
 
+#[tokio::test]
+async fn reconcile_mcp_tools_restores_missing_registry_entries() {
+    let registry = Registry::empty();
+    let (_temp_dir, config) = delayed_mcp_server_config(0.0);
+    let manager = Arc::new(RwLock::new(McpManager::with_config(config)));
+
+    registry
+        .register_mcp_tools_from_manager(None, Arc::clone(&manager))
+        .await;
+    assert_eq!(
+        registry
+            .mcp_registry_diagnostics()
+            .await
+            .mcp_server_tool_count,
+        1
+    );
+
+    let removed = registry.unregister_prefix("mcp__delayed__hello").await;
+    assert_eq!(removed, vec!["mcp__delayed__hello"]);
+    assert_eq!(
+        registry
+            .mcp_registry_diagnostics()
+            .await
+            .mcp_server_tool_count,
+        0
+    );
+
+    let report = registry.reconcile_mcp_tools_from_manager(manager).await;
+    assert_eq!(report.expected_mcp_server_tool_count, 1);
+    assert_eq!(report.already_registered_count, 0);
+    assert_eq!(report.repaired_tool_names, vec!["mcp__delayed__hello"]);
+    assert_eq!(
+        registry
+            .mcp_registry_diagnostics()
+            .await
+            .mcp_server_tool_names,
+        vec!["mcp__delayed__hello"]
+    );
+}
+
 #[test]
 fn test_resolve_tool_name_oauth_aliases() {
     assert_eq!(Registry::resolve_tool_name("file_grep"), "grep");

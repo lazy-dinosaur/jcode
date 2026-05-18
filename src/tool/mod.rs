@@ -68,6 +68,13 @@ pub struct McpRegistryDiagnostics {
     pub mcp_server_tool_names: Vec<String>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct McpRegistryReconcileReport {
+    pub expected_mcp_server_tool_count: usize,
+    pub already_registered_count: usize,
+    pub repaired_tool_names: Vec<String>,
+}
+
 impl Clone for Registry {
     fn clone(&self) -> Self {
         Self {
@@ -330,6 +337,35 @@ impl Registry {
             mcp_management_registered: tools.contains_key("mcp"),
             mcp_server_tool_count: mcp_server_tool_names.len(),
             mcp_server_tool_names,
+        }
+    }
+
+    pub async fn reconcile_mcp_tools_from_manager(
+        &self,
+        mcp_manager: Arc<RwLock<crate::mcp::McpManager>>,
+    ) -> McpRegistryReconcileReport {
+        let mcp_tools = crate::mcp::create_mcp_tools(Arc::clone(&mcp_manager)).await;
+        let expected_mcp_server_tool_count = mcp_tools.len();
+        let existing_names: HashSet<String> = {
+            let tools = self.tools.read().await;
+            tools.keys().cloned().collect()
+        };
+
+        let mut already_registered_count = 0;
+        let mut repaired_tool_names = Vec::new();
+        for (name, tool) in mcp_tools {
+            if existing_names.contains(&name) {
+                already_registered_count += 1;
+                continue;
+            }
+            self.register(name.clone(), tool).await;
+            repaired_tool_names.push(name);
+        }
+        repaired_tool_names.sort();
+        McpRegistryReconcileReport {
+            expected_mcp_server_tool_count,
+            already_registered_count,
+            repaired_tool_names,
         }
     }
 
@@ -604,7 +640,7 @@ impl Registry {
                     }
                 }
 
-                // Register MCP server tools and collect server info
+                // Register/reconcile MCP server tools and collect server info.
                 let tools = crate::mcp::create_mcp_tools(Arc::clone(&mcp_manager)).await;
                 let mut server_counts: std::collections::BTreeMap<String, usize> =
                     std::collections::BTreeMap::new();
