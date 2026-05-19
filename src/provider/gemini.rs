@@ -959,6 +959,12 @@ fn gemini_compatible_schema(schema: &Value) -> Value {
         Value::Object(map) => {
             let mut out = serde_json::Map::new();
             for (key, value) in map {
+                if matches!(
+                    key.as_str(),
+                    "$schema" | "$id" | "examples" | "default" | "title" | "additionalProperties"
+                ) {
+                    continue;
+                }
                 if key == "const" {
                     out.insert(
                         "enum".to_string(),

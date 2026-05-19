@@ -8,8 +8,7 @@ fn parse_fetch_available_models_response_discovers_metadata_and_priority_order()
         "defaultAgentModelId": "gemini-3.1-pro-high",
         "commandModelIds": [
             "gemini-3-flash",
-            "gemini-3.5-flash-high",
-            "gemini-3.5-flash-medium",
+            "gemini-3-flash-agent",
             "gemini-3.5-flash-low"
         ],
         "models": {
@@ -27,12 +26,8 @@ fn parse_fetch_available_models_response_discovers_metadata_and_priority_order()
                 "displayName": "Gemini 3 Flash",
                 "quotaInfo": { "remainingFraction": 0, "resetTime": "2026-04-24T21:53:26Z" }
             },
-            "gemini-3.5-flash-high": {
+            "gemini-3-flash-agent": {
                 "displayName": "Gemini 3.5 Flash (High)",
-                "quotaInfo": { "remainingFraction": 1 }
-            },
-            "gemini-3.5-flash-medium": {
-                "displayName": "Gemini 3.5 Flash (Medium)",
                 "quotaInfo": { "remainingFraction": 1 }
             },
             "gemini-3.5-flash-low": {
@@ -63,8 +58,8 @@ fn parse_fetch_available_models_response_discovers_metadata_and_priority_order()
     assert!(!flash.available);
     assert_eq!(flash.remaining_fraction_milli, Some(0));
     for (id, display_name) in [
-        ("gemini-3.5-flash-high", "Gemini 3.5 Flash (High)"),
-        ("gemini-3.5-flash-medium", "Gemini 3.5 Flash (Medium)"),
+        ("gemini-3-flash-agent", "Gemini 3.5 Flash (High)"),
+        ("gemini-3.5-flash-low", "Gemini 3.5 Flash (Low)"),
     ] {
         let flash_35 = parsed
             .iter()
@@ -73,35 +68,29 @@ fn parse_fetch_available_models_response_discovers_metadata_and_priority_order()
         assert!(flash_35.available);
         assert_eq!(flash_35.display_name.as_deref(), Some(display_name));
     }
-    assert!(
-        !parsed
-            .iter()
-            .any(|model| model.id == "gemini-3.5-flash-low")
-    );
 }
 
 #[test]
-fn static_catalog_includes_antigravity_gemini_3_5_flash_high_and_medium() {
-    for model in ["gemini-3.5-flash-high", "gemini-3.5-flash-medium"] {
+fn static_catalog_includes_backend_discovered_antigravity_gemini_3_5_flash_ids() {
+    for model in ["gemini-3-flash-agent", "gemini-3.5-flash-low"] {
         assert!(AVAILABLE_MODELS.contains(&model));
         assert!(is_known_model(model));
     }
-    assert!(!AVAILABLE_MODELS.contains(&"gemini-3.5-flash-low"));
-    assert!(!is_known_model("gemini-3.5-flash-low"));
+    assert!(!AVAILABLE_MODELS.contains(&"gemini-3.5-flash-high"));
+    assert!(!AVAILABLE_MODELS.contains(&"gemini-3.5-flash-medium"));
 }
 
 #[test]
-fn antigravity_hidden_models_are_not_listed_from_dynamic_catalog() {
+fn antigravity_dynamic_catalog_preserves_backend_model_ids() {
     let models = merge_antigravity_model_ids([
         "gemini-3.5-flash-low".to_string(),
-        "gemini-3.5-flash-high".to_string(),
-        "gemini-3.5-flash-medium".to_string(),
+        "gemini-3-flash-agent".to_string(),
     ]);
     assert_eq!(
         models,
         vec![
-            "gemini-3.5-flash-high".to_string(),
-            "gemini-3.5-flash-medium".to_string(),
+            "gemini-3.5-flash-low".to_string(),
+            "gemini-3-flash-agent".to_string(),
         ]
     );
 }

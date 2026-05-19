@@ -116,6 +116,7 @@ async fn stream_response(
         .await?,
         &api_base,
         Some(&model),
+        &auth,
     );
 
     if send_openrouter_headers {

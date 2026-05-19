@@ -117,6 +117,46 @@ fn extract_gemini_model_ids_discovers_nested_models() {
 }
 
 #[test]
+fn gemini_compatible_schema_removes_vertex_unsupported_json_schema_fields() {
+    let schema = json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "tool-schema",
+        "title": "Tool input",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "mode": {
+                "const": "fast",
+                "default": "fast",
+                "examples": ["fast"]
+            },
+            "nested": {
+                "type": "object",
+                "$schema": "nested",
+                "properties": {
+                    "value": { "type": "string", "examples": ["x"] }
+                }
+            }
+        }
+    });
+
+    let sanitized = gemini_compatible_schema(&schema);
+    assert_eq!(sanitized["type"], "object");
+    assert!(sanitized.get("$schema").is_none());
+    assert!(sanitized.get("$id").is_none());
+    assert!(sanitized.get("title").is_none());
+    assert!(sanitized.get("additionalProperties").is_none());
+    assert_eq!(sanitized["properties"]["mode"]["enum"], json!(["fast"]));
+    assert!(sanitized["properties"]["mode"].get("examples").is_none());
+    assert!(sanitized["properties"]["nested"].get("$schema").is_none());
+    assert!(
+        sanitized["properties"]["nested"]["properties"]["value"]
+            .get("examples")
+            .is_none()
+    );
+}
+
+#[test]
 fn available_models_display_prefers_discovered_models_and_current_model() {
     let provider = GeminiProvider::new();
     provider.set_model("gemini-4-pro-preview").unwrap();

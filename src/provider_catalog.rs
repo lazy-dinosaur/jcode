@@ -680,6 +680,10 @@ pub fn openai_compatible_profile_is_configured(profile: OpenAiCompatibleProfile)
         return true;
     }
 
+    if profile.id == "kimi" && crate::auth::kimi::has_cached_auth() {
+        return true;
+    }
+
     if resolved.requires_api_key {
         return false;
     }

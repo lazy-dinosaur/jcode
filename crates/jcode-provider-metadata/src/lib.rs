@@ -657,9 +657,9 @@ pub const ZAI_LOGIN_PROVIDER: LoginProviderDescriptor = LoginProviderDescriptor 
 pub const KIMI_LOGIN_PROVIDER: LoginProviderDescriptor = LoginProviderDescriptor {
     id: "kimi",
     display_name: "Kimi Code",
-    auth_kind: LoginProviderAuthKind::ApiKey,
+    auth_kind: LoginProviderAuthKind::DeviceCode,
     auth_state_key: LoginProviderAuthStateKey::OpenRouterLike,
-    auth_status_method: "API key",
+    auth_status_method: "device OAuth / API key",
     aliases: &[
         "kimi-code",
         "kimi-coding",
@@ -667,7 +667,7 @@ pub const KIMI_LOGIN_PROVIDER: LoginProviderDescriptor = LoginProviderDescriptor
         "kimi-for-coding",
         "moonshot-coding",
     ],
-    menu_detail: "API key, dedicated Kimi coding endpoint",
+    menu_detail: "device OAuth, dedicated Kimi coding endpoint",
     recommended: false,
     target: LoginProviderTarget::OpenAiCompatible(KIMI_PROFILE),
     order: LoginProviderSurfaceOrder::new(Some(36), Some(36), Some(36), Some(36), Some(36)),

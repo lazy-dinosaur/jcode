@@ -289,8 +289,12 @@ pub async fn run_login_provider(
             }
             LoginProviderTarget::Azure => login_azure_flow().map(|_| LoginFlowOutcome::Completed),
             LoginProviderTarget::OpenAiCompatible(profile) => {
-                login_openai_compatible_flow(&profile, &options)
-                    .map(|_| LoginFlowOutcome::Completed)
+                if profile.id == "kimi" && options.openai_compatible_api_key.is_none() {
+                    login_kimi_flow().await
+                } else {
+                    login_openai_compatible_flow(&profile, &options)
+                }
+                .map(|_| LoginFlowOutcome::Completed)
             }
             LoginProviderTarget::Cursor => login_cursor_flow().map(|_| LoginFlowOutcome::Completed),
             LoginProviderTarget::Copilot => {
@@ -604,6 +608,28 @@ fn login_openrouter_flow() -> Result<()> {
             .display()
     );
     crate::telemetry::record_auth_success("openrouter", "api_key");
+    Ok(())
+}
+
+async fn login_kimi_flow() -> Result<()> {
+    eprintln!("Logging in to Kimi Code using device OAuth...");
+    let device = auth::kimi::start_device_auth().await?;
+    let url = device
+        .verification_uri_complete
+        .as_deref()
+        .unwrap_or(&device.verification_uri);
+    eprintln!("\nOpen this URL in your browser:\n");
+    eprintln!("{}\n", url);
+    eprintln!("User code: {}\n", device.user_code);
+    eprintln!(
+        "Approve the code in your browser. jcode will poll Kimi every {}s until approval or expiry.",
+        std::cmp::max(1, device.interval)
+    );
+    let tokens = auth::kimi::poll_device_token(&device).await?;
+    auth::kimi::save_tokens(&tokens)?;
+    eprintln!("\nSuccessfully saved Kimi OAuth tokens!");
+    eprintln!("Stored at {}", auth::kimi::tokens_path()?.display());
+    crate::telemetry::record_auth_success("kimi", "device_oauth");
     Ok(())
 }
 

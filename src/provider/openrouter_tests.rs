@@ -1128,6 +1128,9 @@ fn test_openrouter_kimi_chat_request_includes_compat_user_agent() {
         Client::new().post("https://openrouter.ai/api/v1/chat/completions"),
         "https://openrouter.ai/api/v1",
         Some("moonshotai/kimi-k2.5"),
+        &ProviderAuth::None {
+            label: "test".to_string(),
+        },
     )
     .build()
     .expect("build request");
@@ -1139,6 +1142,21 @@ fn test_openrouter_kimi_chat_request_includes_compat_user_agent() {
             == Some(KIMI_CODING_USER_AGENT),
         "Kimi OpenRouter chat request should include compatibility User-Agent"
     );
+}
+
+#[test]
+fn test_kimi_oauth_skips_legacy_compat_user_agent() {
+    let request = apply_kimi_coding_agent_headers(
+        Client::new().post("https://api.kimi.com/coding/v1/chat/completions"),
+        "https://api.kimi.com/coding/v1",
+        Some("kimi-for-coding"),
+        &ProviderAuth::KimiOAuth {
+            label: "Kimi OAuth".to_string(),
+        },
+    )
+    .build()
+    .expect("build request");
+    assert!(request.headers().get("User-Agent").is_none());
 }
 
 #[test]

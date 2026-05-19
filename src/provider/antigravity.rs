@@ -24,14 +24,13 @@ const AVAILABLE_MODELS: &[&str] = &[
     "gemini-3-pro-high",
     "gemini-3-pro-low",
     "gemini-3-flash",
-    "gemini-3.5-flash-high",
-    "gemini-3.5-flash-medium",
+    "gemini-3.5-flash-low",
     "gemini-3.1-pro-high",
     "gemini-3.1-pro-low",
     "gemini-3-flash-agent",
     "gpt-oss-120b-medium",
 ];
-const HIDDEN_MODELS: &[&str] = &["gemini-3.5-flash-low"];
+const HIDDEN_MODELS: &[&str] = &[];
 const FETCH_MODELS_API_URL: &str =
     "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels";
 const GENERATE_CONTENT_API_URL: &str =

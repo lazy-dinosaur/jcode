@@ -328,7 +328,11 @@ fn apply_kimi_coding_agent_headers(
     req: reqwest::RequestBuilder,
     api_base: &str,
     model: Option<&str>,
+    auth: &ProviderAuth,
 ) -> reqwest::RequestBuilder {
+    if auth.uses_kimi_oauth_headers() {
+        return req;
+    }
     if should_send_kimi_coding_agent_headers(api_base, model) {
         req.header("User-Agent", KIMI_CODING_USER_AGENT)
             .header("x-app", KIMI_CODING_X_APP)
@@ -351,6 +355,9 @@ enum ProviderAuth {
     AzureEntra {
         label: String,
     },
+    KimiOAuth {
+        label: String,
+    },
     None {
         label: String,
     },
@@ -367,6 +374,10 @@ impl ProviderAuth {
                 let token = crate::auth::azure::get_bearer_token().await?;
                 Ok(req.bearer_auth(token))
             }
+            Self::KimiOAuth { .. } => {
+                let token = crate::auth::kimi::bearer_token().await?;
+                Ok(crate::auth::kimi::apply_kimi_headers(req)?.bearer_auth(token))
+            }
             Self::None { .. } => Ok(req),
         }
     }
@@ -376,8 +387,13 @@ impl ProviderAuth {
             Self::AuthorizationBearer { label, .. } => label,
             Self::HeaderValue { label, .. } => label,
             Self::AzureEntra { label } => label,
+            Self::KimiOAuth { label } => label,
             Self::None { label } => label,
         }
+    }
+
+    fn uses_kimi_oauth_headers(&self) -> bool {
+        matches!(self, Self::KimiOAuth { .. })
     }
 }
 
@@ -419,17 +435,19 @@ async fn fetch_models_from_api(
     models_cache: Arc<RwLock<ModelsCache>>,
 ) -> Result<Vec<ModelInfo>> {
     let url = format!("{}/models", api_base);
-    let response =
-        apply_kimi_coding_agent_headers(auth.apply(client.get(&url)).await?, &api_base, None)
-            .send()
-            .await
-            .with_context(|| {
-                format!(
-                    "Failed to send OpenAI-compatible model catalog request\n  endpoint: {}\n  auth: {}\nHint: check network connectivity, DNS/TLS, and that the base URL includes the API version (usually /v1).",
-                    url,
-                    auth.label()
-                )
-            })?;
+    let request = apply_kimi_coding_agent_headers(
+        auth.apply(client.get(&url)).await?,
+        &api_base,
+        None,
+        &auth,
+    );
+    let response = request.send().await.with_context(|| {
+        format!(
+            "Failed to send OpenAI-compatible model catalog request\n  endpoint: {}\n  auth: {}\nHint: check network connectivity, DNS/TLS, and that the base URL includes the API version (usually /v1).",
+            url,
+            auth.label()
+        )
+    })?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -1552,6 +1570,17 @@ impl OpenRouterProvider {
             }
             return Ok(ProviderAuth::None {
                 label: "local endpoint (no auth)".to_string(),
+            });
+        }
+
+        if autodetected_openai_compatible_profile()
+            .as_ref()
+            .map(|profile| profile.id.as_str())
+            == Some("kimi")
+            && crate::auth::kimi::has_cached_auth()
+        {
+            return Ok(ProviderAuth::KimiOAuth {
+                label: "Kimi OAuth".to_string(),
             });
         }
 

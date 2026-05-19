@@ -11,6 +11,7 @@ pub mod external;
 pub mod gemini;
 pub mod google;
 pub mod integration;
+pub mod kimi;
 pub mod lifecycle;
 #[cfg(test)]
 pub(crate) mod lifecycle_driver;
@@ -388,7 +389,9 @@ impl AuthStatus {
             crate::provider_catalog::LoginProviderTarget::OpenAiCompatible(profile) => {
                 let resolved = crate::provider_catalog::resolve_openai_compatible_profile(profile);
                 if self.state_for_provider(provider) == AuthState::Available {
-                    if resolved.requires_api_key {
+                    if profile.id == "kimi" && crate::auth::kimi::has_cached_auth() {
+                        "Kimi device OAuth".to_string()
+                    } else if resolved.requires_api_key {
                         format!("API key (`{}`)", resolved.api_key_env)
                     } else if crate::provider_catalog::load_api_key_from_env_or_config(
                         &resolved.api_key_env,
