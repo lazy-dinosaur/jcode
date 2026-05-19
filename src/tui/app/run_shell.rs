@@ -3,7 +3,7 @@ use std::io::Write as _;
 use std::process::Command;
 
 impl App {
-    fn run_borrowed_terminal_command(
+    pub(super) fn run_borrowed_terminal_command(
         &mut self,
         terminal: &mut DefaultTerminal,
         command: BorrowedTerminalCommand,

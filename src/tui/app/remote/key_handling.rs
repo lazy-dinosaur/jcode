@@ -724,6 +724,11 @@ async fn handle_remote_key_internal(
                     return Ok(());
                 }
 
+                if app_mod::commands::is_external_tui_command(trimmed) {
+                    let _ = app_mod::commands::handle_session_command(app, trimmed);
+                    return Ok(());
+                }
+
                 if handle_remote_rewind_command(app, remote, trimmed).await? {
                     return Ok(());
                 }

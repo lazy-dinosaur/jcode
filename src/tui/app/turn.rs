@@ -388,6 +388,12 @@ impl App {
                                         break;
                                     }
 
+                                    if let Some(command) = self.take_pending_terminal_borrow() {
+                                        self.run_borrowed_terminal_command(terminal, command)?;
+                                        self.redraw_now(terminal)?;
+                                        continue;
+                                    }
+
                                     if !scroll_only {
                                         self.redraw_now(terminal)?;
                                     }

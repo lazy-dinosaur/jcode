@@ -1272,6 +1272,15 @@ fn handle_lazygit_command(app: &mut App, trimmed: &str) -> bool {
     true
 }
 
+pub(super) fn is_external_tui_command(trimmed: &str) -> bool {
+    trimmed == "/lazygit"
+        || trimmed == "/lg"
+        || trimmed.starts_with("/lazygit ")
+        || trimmed.starts_with("/lg ")
+        || trimmed == "/nvim"
+        || trimmed.starts_with("/nvim ")
+}
+
 fn handle_scratchpad_command(app: &mut App, trimmed: &str) -> bool {
     let (matched, rest) = if trimmed == "/scratchpad" {
         (true, "")
