@@ -24,11 +24,14 @@ const AVAILABLE_MODELS: &[&str] = &[
     "gemini-3-pro-high",
     "gemini-3-pro-low",
     "gemini-3-flash",
+    "gemini-3.5-flash-high",
+    "gemini-3.5-flash-medium",
     "gemini-3.1-pro-high",
     "gemini-3.1-pro-low",
     "gemini-3-flash-agent",
     "gpt-oss-120b-medium",
 ];
+const HIDDEN_MODELS: &[&str] = &["gemini-3.5-flash-low"];
 const FETCH_MODELS_API_URL: &str =
     "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels";
 const GENERATE_CONTENT_API_URL: &str =
@@ -153,6 +156,7 @@ fn merge_antigravity_model_ids(models: impl IntoIterator<Item = String>) -> Vec<
         .into_iter()
         .map(|model| model.trim().to_string())
         .filter(|model| !model.is_empty())
+        .filter(|model| !HIDDEN_MODELS.contains(&model.as_str()))
         .collect();
 
     let mut seen = HashSet::new();
@@ -778,6 +782,7 @@ impl Provider for AntigravityProvider {
             catalog
                 .into_iter()
                 .map(|model| model.id)
+                .chain(AVAILABLE_MODELS.iter().copied().map(str::to_string))
                 .chain(std::iter::once(self.model())),
         )
     }
@@ -789,17 +794,39 @@ impl Provider for AntigravityProvider {
     fn model_routes(&self) -> Vec<super::ModelRoute> {
         let catalog = self.fetched_catalog();
         if !catalog.is_empty() {
-            return catalog
+            let mut seen = HashSet::new();
+            let mut routes: Vec<_> = catalog
                 .into_iter()
-                .map(|model| super::ModelRoute {
-                    model: model.id.clone(),
-                    provider: "Antigravity".to_string(),
-                    api_method: "https".to_string(),
-                    available: model.available,
-                    detail: catalog_model_detail(&model),
-                    cheapness: None,
+                .map(|model| {
+                    seen.insert(model.id.clone());
+                    super::ModelRoute {
+                        model: model.id.clone(),
+                        provider: "Antigravity".to_string(),
+                        api_method: "https".to_string(),
+                        available: model.available,
+                        detail: catalog_model_detail(&model),
+                        cheapness: None,
+                    }
                 })
                 .collect();
+            for model in AVAILABLE_MODELS
+                .iter()
+                .copied()
+                .map(str::to_string)
+                .chain(std::iter::once(self.model()))
+            {
+                if seen.insert(model.clone()) {
+                    routes.push(super::ModelRoute {
+                        model,
+                        provider: "Antigravity".to_string(),
+                        api_method: "https".to_string(),
+                        available: true,
+                        detail: "fallback catalog".to_string(),
+                        cheapness: None,
+                    });
+                }
+            }
+            return routes;
         }
 
         self.available_models_display()
