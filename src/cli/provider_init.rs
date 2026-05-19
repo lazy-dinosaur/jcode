@@ -1365,7 +1365,9 @@ async fn init_provider_with_options(
                 named
             } else {
                 let resolved = resolve_openai_compatible_profile(profile);
-                if resolved.requires_api_key {
+                if resolved.requires_api_key
+                    && !(resolved.id == "kimi" && crate::auth::kimi::has_cached_auth())
+                {
                     ensure_external_api_key_auth_allowed_for_explicit_choice(
                         &resolved.api_key_env,
                     )?;

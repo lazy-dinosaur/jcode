@@ -436,6 +436,44 @@ fn test_multi_provider_antigravity_routes_do_not_include_legacy_duplicate_entrie
 }
 
 #[test]
+fn test_multi_provider_antigravity_routes_show_when_tokens_exist_before_provider_init() {
+    with_clean_provider_test_env(|| {
+        crate::auth::antigravity::save_tokens(&crate::auth::antigravity::AntigravityTokens {
+            access_token: "test-access-token".to_string(),
+            refresh_token: "test-refresh-token".to_string(),
+            expires_at: i64::MAX,
+            email: Some("test@example.com".to_string()),
+            project_id: Some("test-project".to_string()),
+        })
+        .expect("save test Antigravity auth");
+
+        let provider = MultiProvider {
+            claude: RwLock::new(None),
+            anthropic: RwLock::new(None),
+            openai: RwLock::new(None),
+            copilot_api: RwLock::new(None),
+            antigravity: RwLock::new(None),
+            gemini: RwLock::new(None),
+            cursor: RwLock::new(None),
+            bedrock: RwLock::new(None),
+            openrouter: RwLock::new(None),
+            active: RwLock::new(ActiveProvider::Claude),
+            use_claude_cli: false,
+            startup_notices: RwLock::new(Vec::new()),
+            forced_provider: None,
+        };
+
+        let routes = provider.model_routes();
+        assert!(routes.iter().any(|route| {
+            route.provider == "Antigravity"
+                && route.api_method == "https"
+                && route.available
+                && route.model == "gemini-3-flash-agent"
+        }));
+    });
+}
+
+#[test]
 fn test_summarize_model_catalog_refresh_ignores_display_only_age_suffix_changes() {
     let summary = summarize_model_catalog_refresh(
         vec!["anthropic/claude-sonnet-4".to_string()],

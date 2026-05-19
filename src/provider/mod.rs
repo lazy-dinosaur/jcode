@@ -1233,6 +1233,16 @@ impl Provider for MultiProvider {
         {
             if let Some(antigravity) = self.antigravity_provider() {
                 routes.extend(antigravity.model_routes());
+            } else if auth::antigravity::load_tokens().is_ok() {
+                let antigravity = antigravity::AntigravityProvider::new();
+                routes.extend(antigravity.model_routes().into_iter().map(|mut route| {
+                    if route.detail.trim().is_empty() {
+                        route.detail =
+                            "credentials configured; provider will initialize on selection"
+                                .to_string();
+                    }
+                    route
+                }));
             }
         }
 

@@ -125,6 +125,19 @@ fn autodetected_openai_compatible_profile()
     }
 }
 
+fn configured_profile_id() -> Option<String> {
+    std::env::var("JCODE_OPENROUTER_CACHE_NAMESPACE")
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .filter(|id| openai_compatible_profile_by_id(id).is_some())
+        .or_else(|| autodetected_openai_compatible_profile().map(|profile| profile.id))
+        .or_else(|| {
+            openai_compatible_profile_id_for_api_base(&configured_api_base())
+                .map(ToString::to_string)
+        })
+}
+
 fn configured_api_base() -> String {
     let raw = std::env::var("JCODE_OPENROUTER_API_BASE")
         .ok()
@@ -1529,6 +1542,11 @@ impl OpenRouterProvider {
         if configured_allow_no_auth() {
             return true;
         }
+        if configured_profile_id().as_deref() == Some("kimi")
+            && crate::auth::kimi::has_cached_auth()
+        {
+            return true;
+        }
         Self::get_api_key().is_some()
     }
 
@@ -1573,10 +1591,7 @@ impl OpenRouterProvider {
             });
         }
 
-        if autodetected_openai_compatible_profile()
-            .as_ref()
-            .map(|profile| profile.id.as_str())
-            == Some("kimi")
+        if configured_profile_id().as_deref() == Some("kimi")
             && crate::auth::kimi::has_cached_auth()
         {
             return Ok(ProviderAuth::KimiOAuth {

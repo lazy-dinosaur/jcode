@@ -265,6 +265,26 @@ impl App {
             });
         }
 
+        for route in self.provider.model_routes() {
+            let is_kimi_oauth_route = route.api_method == "openai-compatible:kimi"
+                && route.provider == "Kimi Code"
+                && crate::auth::kimi::has_cached_auth();
+            let is_antigravity_route = route.provider == "Antigravity"
+                && route.api_method == "https"
+                && crate::auth::antigravity::load_tokens().is_ok();
+            if !(is_kimi_oauth_route || is_antigravity_route) {
+                continue;
+            }
+            if routes.iter().any(|existing| {
+                existing.model == route.model
+                    && existing.provider == route.provider
+                    && existing.api_method == route.api_method
+            }) {
+                continue;
+            }
+            routes.push(route);
+        }
+
         if routes.is_empty() && !current_model.is_empty() && current_model != "unknown" {
             routes.push(crate::provider::ModelRoute {
                 model: current_model.to_string(),

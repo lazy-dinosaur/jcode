@@ -54,6 +54,7 @@ fn pad_center_display(text: &str, width: usize) -> String {
 fn api_method_display(raw: &str) -> &str {
     match raw {
         "claude-oauth" | "openai-oauth" | "code-assist-oauth" => "oauth",
+        "openai-compatible:kimi" if crate::auth::kimi::has_cached_auth() => "device oauth",
         "api-key" | "openai-api-key" => "api key",
         method if method.starts_with("openai-compatible") => "api key",
         method => method

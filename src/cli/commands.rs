@@ -1271,6 +1271,7 @@ pub async fn run_model_command(
 fn cli_api_method_display(raw: &str) -> &str {
     match raw {
         "claude-oauth" | "openai-oauth" | "code-assist-oauth" => "oauth",
+        "openai-compatible:kimi" if crate::auth::kimi::has_cached_auth() => "device oauth",
         "api-key" | "openai-api-key" => "api key",
         method if method.starts_with("openai-compatible") => "api key",
         method => method
