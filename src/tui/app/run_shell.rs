@@ -1,6 +1,56 @@
 use super::*;
+use std::io::Write as _;
+use std::process::Command;
 
 impl App {
+    fn run_borrowed_terminal_command(
+        &mut self,
+        terminal: &mut DefaultTerminal,
+        command: BorrowedTerminalCommand,
+    ) -> Result<()> {
+        let started = std::time::Instant::now();
+        let display_command = std::iter::once(command.program.clone())
+            .chain(command.args.iter().cloned())
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        suspend_jcode_terminal_for_borrow();
+        eprintln!(
+            "\x1b[2m[jcode] borrowed terminal for {} — exit to return to jcode\x1b[0m",
+            command.title
+        );
+        let _ = std::io::stderr().flush();
+
+        let status_result = Command::new(&command.program)
+            .args(&command.args)
+            .current_dir(&command.cwd)
+            .status();
+
+        resume_jcode_terminal_after_borrow(terminal)?;
+        self.force_full_redraw = true;
+        self.request_full_redraw();
+
+        match status_result {
+            Ok(status) => {
+                let elapsed = started.elapsed().as_secs_f32();
+                self.push_display_message(DisplayMessage::system(format!(
+                    "Returned from `{}` with {} after {:.1}s.",
+                    display_command, status, elapsed
+                )));
+                self.set_status_notice(format!("{} exited", command.title));
+            }
+            Err(error) => {
+                self.push_display_message(DisplayMessage::error(format!(
+                    "Failed to run `{}` in borrowed terminal: {}",
+                    display_command, error
+                )));
+                self.set_status_notice(format!("{} failed", command.title));
+            }
+        }
+
+        Ok(())
+    }
+
     /// Run the TUI application
     /// Returns Some(session_id) if hot-reload was requested
     pub async fn run(mut self, mut terminal: DefaultTerminal) -> Result<RunResult> {
@@ -34,6 +84,12 @@ impl App {
 
             if self.should_quit {
                 break;
+            }
+
+            if let Some(command) = self.take_pending_terminal_borrow() {
+                self.run_borrowed_terminal_command(&mut terminal, command)?;
+                needs_redraw = true;
+                continue;
             }
 
             // Process pending turn OR wait for input/redraw
@@ -172,6 +228,12 @@ impl App {
 
                 if self.should_quit {
                     break 'outer;
+                }
+
+                if let Some(command) = self.take_pending_terminal_borrow() {
+                    self.run_borrowed_terminal_command(&mut terminal, command)?;
+                    needs_redraw = true;
+                    continue;
                 }
 
                 if self.pending_queued_dispatch {
@@ -341,4 +403,33 @@ impl App {
 
         Ok(frames)
     }
+}
+
+fn suspend_jcode_terminal_for_borrow() {
+    let mut stdout = std::io::stdout();
+    let _ = crossterm::execute!(stdout, crossterm::event::DisableBracketedPaste);
+    let _ = crossterm::execute!(stdout, crossterm::event::DisableFocusChange);
+    let _ = crossterm::execute!(stdout, crossterm::event::DisableMouseCapture);
+    crate::tui::disable_keyboard_enhancement();
+    ratatui::restore();
+}
+
+fn resume_jcode_terminal_after_borrow(terminal: &mut DefaultTerminal) -> Result<()> {
+    *terminal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(ratatui::init))
+        .map_err(|_| anyhow::anyhow!("failed to reinitialize terminal after borrowed command"))?;
+
+    let perf_policy = crate::perf::tui_policy();
+    let mut stdout = std::io::stdout();
+    let _ = crossterm::execute!(stdout, crossterm::event::EnableBracketedPaste);
+    if perf_policy.enable_focus_change {
+        let _ = crossterm::execute!(stdout, crossterm::event::EnableFocusChange);
+    }
+    if perf_policy.enable_mouse_capture {
+        let _ = crossterm::execute!(stdout, crossterm::event::EnableMouseCapture);
+    }
+    if perf_policy.enable_keyboard_enhancement {
+        let _ = crate::tui::enable_keyboard_enhancement();
+    }
+    terminal.clear()?;
+    Ok(())
 }

@@ -1249,10 +1249,14 @@ fn external_tool_manual_command(program: &str, args: &[String], cwd: &Path) -> S
 }
 
 fn handle_lazygit_command(app: &mut App, trimmed: &str) -> bool {
-    if trimmed != "/lazygit" && trimmed != "/lg" {
+    let scratchpad = matches!(
+        trimmed,
+        "/lazygit --scratchpad" | "/lazygit scratchpad" | "/lg --scratchpad" | "/lg scratchpad"
+    );
+    if trimmed != "/lazygit" && trimmed != "/lg" && !scratchpad {
         if trimmed.starts_with("/lazygit ") || trimmed.starts_with("/lg ") {
             app.push_display_message(DisplayMessage::error(
-                "Usage: `/lazygit` or `/lg`".to_string(),
+                "Usage: `/lazygit` or `/lg` (use `--scratchpad` for embedded mode)".to_string(),
             ));
             return true;
         }
@@ -1260,7 +1264,11 @@ fn handle_lazygit_command(app: &mut App, trimmed: &str) -> bool {
     }
 
     let cwd = active_or_process_working_dir(app);
-    app.open_scratchpad_terminal("lazygit", "lazygit", Vec::new(), cwd);
+    if scratchpad {
+        app.open_scratchpad_terminal("lazygit", "lazygit", Vec::new(), cwd);
+    } else {
+        app.request_borrow_terminal("lazygit", "lazygit", Vec::new(), cwd);
+    }
     true
 }
 
@@ -1345,10 +1353,18 @@ fn handle_nvim_command(app: &mut App, trimmed: &str) -> bool {
     }
 
     let cwd = active_or_process_working_dir(app);
-    let target = if rest.trim().is_empty() {
+    let mut parts = rest.split_whitespace().collect::<Vec<_>>();
+    let scratchpad = parts
+        .first()
+        .is_some_and(|part| matches!(*part, "--scratchpad" | "scratchpad"));
+    if scratchpad {
+        parts.remove(0);
+    }
+    let target_arg = parts.join(" ");
+    let target = if target_arg.trim().is_empty() {
         cwd.clone()
     } else {
-        match resolve_nvim_target(&cwd, rest.trim()) {
+        match resolve_nvim_target(&cwd, target_arg.trim()) {
             Ok(path) => path,
             Err(error) => {
                 app.push_display_message(DisplayMessage::error(format!(
@@ -1360,7 +1376,11 @@ fn handle_nvim_command(app: &mut App, trimmed: &str) -> bool {
     };
 
     let args = vec![target.display().to_string()];
-    app.open_scratchpad_terminal("nvim", "nvim", args, cwd);
+    if scratchpad {
+        app.open_scratchpad_terminal("nvim", "nvim", args, cwd);
+    } else {
+        app.request_borrow_terminal("nvim", "nvim", args, cwd);
+    }
     true
 }
 

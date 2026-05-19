@@ -3,6 +3,28 @@ use crate::tui::scratchpad_terminal::{ScratchpadSizeMode, ScratchpadTerminal};
 use crossterm::event::KeyEvent;
 
 impl App {
+    pub(super) fn request_borrow_terminal(
+        &mut self,
+        title: impl Into<String>,
+        program: impl Into<String>,
+        args: Vec<String>,
+        cwd: PathBuf,
+    ) {
+        let title = title.into();
+        let program = program.into();
+        self.pending_terminal_borrow = Some(BorrowedTerminalCommand {
+            title: title.clone(),
+            program: program.clone(),
+            args,
+            cwd,
+        });
+        self.set_status_notice(format!("Opening {title} in current terminal..."));
+    }
+
+    pub(super) fn take_pending_terminal_borrow(&mut self) -> Option<BorrowedTerminalCommand> {
+        self.pending_terminal_borrow.take()
+    }
+
     pub(super) fn open_scratchpad_terminal(
         &mut self,
         title: impl Into<String>,

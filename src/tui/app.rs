@@ -50,6 +50,14 @@ pub enum AppRuntimeMode {
     TestHarness,
 }
 
+#[derive(Debug, Clone)]
+pub(super) struct BorrowedTerminalCommand {
+    pub title: String,
+    pub program: String,
+    pub args: Vec<String>,
+    pub cwd: PathBuf,
+}
+
 mod auth;
 mod auth_account_picker_saved_accounts;
 mod catchup;
@@ -799,6 +807,7 @@ pub struct App {
     resume_session_id: Option<String>,
     // Exit code to use when quitting (for canary wrapper communication)
     requested_exit_code: Option<i32>,
+    pending_terminal_borrow: Option<BorrowedTerminalCommand>,
     // Memory feature toggle for this session
     memory_enabled: bool,
     // Automatic end-of-turn review toggle for this session
