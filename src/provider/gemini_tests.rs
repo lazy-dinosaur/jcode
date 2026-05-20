@@ -124,6 +124,8 @@ fn gemini_compatible_schema_removes_vertex_unsupported_json_schema_fields() {
         "title": "Tool input",
         "type": "object",
         "additionalProperties": false,
+        "propertyNames": { "pattern": "^[a-z]+$" },
+        "patternProperties": { "^x-": { "type": "string" } },
         "properties": {
             "mode": {
                 "const": "fast",
@@ -133,6 +135,7 @@ fn gemini_compatible_schema_removes_vertex_unsupported_json_schema_fields() {
             "nested": {
                 "type": "object",
                 "$schema": "nested",
+                "propertyNames": { "pattern": "^[a-z]+$" },
                 "properties": {
                     "value": { "type": "string", "examples": ["x"] }
                 }
@@ -146,9 +149,16 @@ fn gemini_compatible_schema_removes_vertex_unsupported_json_schema_fields() {
     assert!(sanitized.get("$id").is_none());
     assert!(sanitized.get("title").is_none());
     assert!(sanitized.get("additionalProperties").is_none());
+    assert!(sanitized.get("propertyNames").is_none());
+    assert!(sanitized.get("patternProperties").is_none());
     assert_eq!(sanitized["properties"]["mode"]["enum"], json!(["fast"]));
     assert!(sanitized["properties"]["mode"].get("examples").is_none());
     assert!(sanitized["properties"]["nested"].get("$schema").is_none());
+    assert!(
+        sanitized["properties"]["nested"]
+            .get("propertyNames")
+            .is_none()
+    );
     assert!(
         sanitized["properties"]["nested"]["properties"]["value"]
             .get("examples")

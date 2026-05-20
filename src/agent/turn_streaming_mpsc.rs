@@ -204,6 +204,7 @@ impl Agent {
                 std::collections::HashMap::new();
             let store_reasoning_content = self.provider.name() == "openrouter";
             let mut reasoning_content = String::new();
+            let mut thinking_prefix_emitted = false;
             let mut openai_native_compaction: Option<(String, usize)> = None;
             let mut tool_id_to_name: std::collections::HashMap<String, String> =
                 std::collections::HashMap::new();
@@ -289,21 +290,27 @@ impl Agent {
                 };
 
                 match event {
-                    StreamEvent::ThinkingStart | StreamEvent::ThinkingEnd => {}
+                    StreamEvent::ThinkingStart => {
+                        thinking_prefix_emitted = false;
+                    }
+                    StreamEvent::ThinkingEnd => {}
                     StreamEvent::ThinkingDelta(thinking_text) => {
                         // Only send thinking content if enabled in config
                         if crate::config::config().display.show_thinking {
-                            let _ = event_tx.send(ServerEvent::TextDelta {
-                                text: format!("💭 {}\n", thinking_text),
-                            });
+                            let text = format_thinking_delta_for_display(
+                                &thinking_text,
+                                &mut thinking_prefix_emitted,
+                            );
+                            let _ = event_tx.send(ServerEvent::TextDelta { text });
                         }
                         if store_reasoning_content {
                             reasoning_content.push_str(&thinking_text);
                         }
                     }
                     StreamEvent::ThinkingDone { duration_secs } => {
+                        thinking_prefix_emitted = false;
                         let _ = event_tx.send(ServerEvent::TextDelta {
-                            text: format!("Thought for {:.1}s\n", duration_secs),
+                            text: format!("\nThought for {:.1}s\n", duration_secs),
                         });
                     }
                     StreamEvent::TextDelta(text) => {

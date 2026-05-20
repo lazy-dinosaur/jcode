@@ -511,6 +511,7 @@ impl Agent {
             let mut saw_message_end = false;
             let mut stop_reason: Option<String> = None;
             let mut _thinking_start: Option<Instant> = None;
+            let mut thinking_prefix_emitted = false;
             let store_reasoning_content = self.provider.name() == "openrouter";
             let mut reasoning_content = String::new();
             // Track tool results from provider (already executed by Claude Code CLI)
@@ -546,11 +547,19 @@ impl Agent {
                     StreamEvent::ThinkingStart => {
                         // Track start but don't print - wait for ThinkingDone
                         _thinking_start = Some(Instant::now());
+                        thinking_prefix_emitted = false;
                     }
                     StreamEvent::ThinkingDelta(thinking_text) => {
                         // Display reasoning content only if enabled
                         if print_output && crate::config::config().display.show_thinking {
-                            println!("💭 {}", thinking_text);
+                            print!(
+                                "{}",
+                                format_thinking_delta_for_display(
+                                    &thinking_text,
+                                    &mut thinking_prefix_emitted,
+                                )
+                            );
+                            io::stdout().flush()?;
                         }
                         if store_reasoning_content {
                             reasoning_content.push_str(&thinking_text);
@@ -563,8 +572,9 @@ impl Agent {
                     StreamEvent::ThinkingDone { duration_secs } => {
                         // Bridge provides accurate wall-clock timing
                         if print_output {
-                            println!("Thought for {:.1}s\n", duration_secs);
+                            println!("\nThought for {:.1}s\n", duration_secs);
                         }
+                        thinking_prefix_emitted = false;
                     }
                     StreamEvent::TextDelta(text) => {
                         if print_output {

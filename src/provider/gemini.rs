@@ -961,7 +961,26 @@ fn gemini_compatible_schema(schema: &Value) -> Value {
             for (key, value) in map {
                 if matches!(
                     key.as_str(),
-                    "$schema" | "$id" | "examples" | "default" | "title" | "additionalProperties"
+                    "$schema"
+                        | "$id"
+                        | "$comment"
+                        | "examples"
+                        | "default"
+                        | "title"
+                        | "additionalProperties"
+                        | "propertyNames"
+                        | "patternProperties"
+                        | "unevaluatedProperties"
+                        | "unevaluatedItems"
+                        | "dependentSchemas"
+                        | "dependentRequired"
+                        | "if"
+                        | "then"
+                        | "else"
+                        | "not"
+                        | "contains"
+                        | "minContains"
+                        | "maxContains"
                 ) {
                     continue;
                 }

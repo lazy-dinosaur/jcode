@@ -17,7 +17,8 @@ mod turn_streaming_mpsc;
 mod utils;
 
 use self::streaming::{
-    send_stream_keepalive_broadcast, send_stream_keepalive_mpsc, stream_keepalive_ticker,
+    format_thinking_delta_for_display, send_stream_keepalive_broadcast, send_stream_keepalive_mpsc,
+    stream_keepalive_ticker,
 };
 use self::tools::{print_tool_summary, tool_output_to_content_blocks};
 use self::utils::trace_enabled;
