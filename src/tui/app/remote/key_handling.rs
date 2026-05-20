@@ -696,6 +696,15 @@ async fn handle_remote_key_internal(
             if app.activate_picker_from_preview() {
                 return Ok(());
             }
+            if app.input.is_empty()
+                && app.queued_messages_held_after_interrupt
+                && app.has_queued_followups()
+            {
+                app.queued_messages_held_after_interrupt = false;
+                app.set_status_notice("Sending queued message...");
+                super::process_remote_followups(app, remote).await;
+                return Ok(());
+            }
             if !app.input.is_empty() {
                 let prepared = input::take_prepared_input(app);
                 let trimmed = prepared.expanded.trim();

@@ -732,6 +732,36 @@ fn test_remote_interrupted_preserves_queued_followup_without_auto_dispatch() {
 }
 
 #[test]
+fn test_remote_enter_resubmits_queued_followup_held_after_interrupt() {
+    let mut app = create_test_app();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+    remote.mark_history_loaded();
+
+    app.queued_messages
+        .push("queued after interrupt".to_string());
+    app.queued_messages_held_after_interrupt = true;
+
+    rt.block_on(app.handle_remote_key(KeyCode::Enter, KeyModifiers::empty(), &mut remote))
+        .unwrap();
+
+    assert!(!app.queued_messages_held_after_interrupt);
+    assert!(app.queued_messages().is_empty());
+    assert!(app.is_processing);
+    assert!(app.current_message_id.is_some());
+    assert_eq!(
+        app.status_notice(),
+        Some("Sending queued message...".to_string())
+    );
+    assert!(
+        app.display_messages()
+            .iter()
+            .any(|message| message.role == "user" && message.content == "queued after interrupt")
+    );
+}
+
+#[test]
 fn test_remote_interrupted_recovers_pending_interleaves_in_order() {
     let mut app = create_test_app();
     let rt = tokio::runtime::Runtime::new().unwrap();
