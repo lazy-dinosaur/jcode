@@ -186,6 +186,22 @@ fn available_models_display_prefers_discovered_models_and_current_model() {
 }
 
 #[test]
+fn available_models_display_hides_antigravity_only_model_ids() {
+    let provider = GeminiProvider::new();
+    provider.set_model("gemini-3.5-flash-low").unwrap();
+    *provider.fetched_models.write().unwrap() = vec![
+        "gemini-3.5-flash-low".to_string(),
+        "gemini-3-flash-agent".to_string(),
+        "gemini-3-flash-preview".to_string(),
+    ];
+
+    assert_eq!(
+        provider.available_models_display(),
+        vec!["gemini-3-flash-preview".to_string()]
+    );
+}
+
+#[test]
 fn available_models_display_without_discovery_uses_current_model_only() {
     let _guard = crate::storage::lock_test_env();
     let temp = tempfile::TempDir::new().expect("tempdir");

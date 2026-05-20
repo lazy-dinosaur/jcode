@@ -314,6 +314,8 @@ impl Agent {
                         });
                     }
                     StreamEvent::TextDelta(text) => {
+                        let text =
+                            format_text_delta_after_thinking(text, &mut thinking_prefix_emitted);
                         text_content.push_str(&text);
                         if !text_wrapped_detected {
                             if let Some(marker_idx) = text_content

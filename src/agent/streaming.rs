@@ -40,9 +40,18 @@ pub(super) fn format_thinking_delta_for_display(delta: &str, prefix_emitted: &mu
     }
 }
 
+pub(super) fn format_text_delta_after_thinking(text: String, prefix_emitted: &mut bool) -> String {
+    if *prefix_emitted {
+        *prefix_emitted = false;
+        format!("\n{text}")
+    } else {
+        text
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::format_thinking_delta_for_display;
+    use super::{format_text_delta_after_thinking, format_thinking_delta_for_display};
 
     #[test]
     fn thinking_delta_display_prefixes_only_first_fragment() {
@@ -55,5 +64,23 @@ mod tests {
 
         assert_eq!(rendered, "💭 브라우저");
         assert_eq!(rendered.matches('💭').count(), 1);
+    }
+
+    #[test]
+    fn answer_text_after_thinking_starts_on_new_line() {
+        let mut emitted = false;
+        assert_eq!(
+            format_thinking_delta_for_display("생각", &mut emitted),
+            "💭 생각"
+        );
+        assert_eq!(
+            format_text_delta_after_thinking("답".to_string(), &mut emitted),
+            "\n답"
+        );
+        assert!(!emitted);
+        assert_eq!(
+            format_text_delta_after_thinking("변".to_string(), &mut emitted),
+            "변"
+        );
     }
 }

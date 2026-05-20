@@ -577,6 +577,8 @@ impl Agent {
                         thinking_prefix_emitted = false;
                     }
                     StreamEvent::TextDelta(text) => {
+                        let text =
+                            format_text_delta_after_thinking(text, &mut thinking_prefix_emitted);
                         if print_output {
                             print!("{}", text);
                             io::stdout().flush()?;

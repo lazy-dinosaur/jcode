@@ -45,6 +45,13 @@ pub struct GeminiProvider {
     thinking_enabled: Arc<RwLock<Option<bool>>>,
 }
 
+fn is_regular_gemini_supported_model(model: &str) -> bool {
+    !matches!(
+        model.trim(),
+        "gemini-3.5-flash-low" | "gemini-3-flash-agent"
+    )
+}
+
 impl GeminiProvider {
     fn persisted_catalog_path() -> Result<std::path::PathBuf> {
         Ok(crate::storage::app_config_dir()?.join("gemini_models_cache.json"))
@@ -738,13 +745,19 @@ impl Provider for GeminiProvider {
             .map(|guard| guard.clone())
             .unwrap_or_default();
         if discovered.is_empty() {
-            return vec![self.model()];
+            let current = self.model();
+            return if is_regular_gemini_supported_model(&current) {
+                vec![current]
+            } else {
+                Vec::new()
+            };
         }
 
         merge_gemini_model_lists(
             discovered
                 .into_iter()
                 .chain(std::iter::once(self.model()))
+                .filter(|model| is_regular_gemini_supported_model(model))
                 .collect(),
         )
     }
