@@ -31,9 +31,6 @@ pub(super) fn confirm_or_arm_escape_interrupt(app: &mut App) -> bool {
 
     if already_armed {
         app.escape_interrupt_armed_until = None;
-        app.interleave_message = None;
-        app.pending_soft_interrupts.clear();
-        app.pending_soft_interrupt_requests.clear();
         let disabled_auto_poke = app.auto_poke_incomplete_todos
             || app
                 .queued_messages
@@ -1336,9 +1333,6 @@ pub(super) fn handle_global_control_shortcuts(
             if app.is_processing {
                 clear_escape_interrupt_arm(app);
                 app.cancel_requested = true;
-                app.interleave_message = None;
-                app.pending_soft_interrupts.clear();
-                app.pending_soft_interrupt_requests.clear();
                 if app.cancel_overnight_for_interrupt() {
                     app.set_status_notice("Interrupting... Overnight cancelled");
                 } else {

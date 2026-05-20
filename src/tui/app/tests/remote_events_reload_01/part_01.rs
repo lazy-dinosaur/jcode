@@ -691,12 +691,12 @@ fn test_handle_server_event_interrupted_clears_stream_state_and_sets_idle() {
     assert!(app.streaming_text.is_empty());
     assert!(app.streaming_tool_calls.is_empty());
     assert!(app.interleave_message.is_none());
-    assert_eq!(app.queued_messages(), &["queued interrupt"]);
-    assert_eq!(app.pending_soft_interrupts, vec!["pending soft interrupt"]);
     assert_eq!(
-        app.pending_soft_interrupt_requests,
-        vec![(77, "pending soft interrupt".to_string())]
+        app.queued_messages(),
+        &["pending soft interrupt", "queued interrupt"]
     );
+    assert!(app.pending_soft_interrupts.is_empty());
+    assert!(app.pending_soft_interrupt_requests.is_empty());
 
     let last = app
         .display_messages()
@@ -751,11 +751,11 @@ fn test_remote_interrupted_recovers_pending_interleaves_in_order() {
 
     assert!(!app.pending_queued_dispatch);
     assert!(app.queued_messages_held_after_interrupt);
+    assert!(app.pending_soft_interrupts.is_empty());
     assert_eq!(
         app.queued_messages(),
-        &["unsent interleave", "queued later"]
+        &["acked interleave", "unsent interleave", "queued later"]
     );
-    assert_eq!(app.pending_soft_interrupts, vec!["acked interleave"]);
 
     rt.block_on(remote::process_remote_followups(&mut app, &mut remote));
     assert!(app.pending_soft_interrupts.is_empty());

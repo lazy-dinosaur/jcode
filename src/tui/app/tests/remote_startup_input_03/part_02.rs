@@ -1,5 +1,5 @@
 #[test]
-fn test_new_for_remote_restored_soft_interrupt_resend_triggers_dispatch_state() {
+fn test_new_for_remote_restored_soft_interrupt_resend_stays_visible_queued() {
     let mut app = create_test_app();
     let session_id = format!("test-remote-soft-interrupt-dispatch-{}", std::process::id());
 
@@ -10,9 +10,9 @@ fn test_new_for_remote_restored_soft_interrupt_resend_triggers_dispatch_state() 
     let restored = App::new_for_remote(Some(session_id));
     assert!(restored.interleave_message.is_none());
     assert_eq!(restored.queued_messages(), &["sent interrupt"]);
-    assert!(restored.pending_queued_dispatch);
-    assert!(restored.is_processing);
-    assert!(matches!(restored.status, ProcessingStatus::Sending));
+    assert!(!restored.pending_queued_dispatch);
+    assert!(!restored.is_processing);
+    assert!(matches!(restored.status, ProcessingStatus::Idle));
 }
 
 #[test]
@@ -26,11 +26,11 @@ fn test_new_for_remote_does_not_requeue_acked_pending_soft_interrupts() {
     app.save_input_for_reload(&session_id);
 
     let restored = App::new_for_remote(Some(session_id));
+    assert!(restored.interleave_message.is_none());
     assert_eq!(
-        restored.interleave_message.as_deref(),
-        Some("local interleave")
+        restored.queued_messages(),
+        &["local interleave", "queued later"]
     );
-    assert_eq!(restored.queued_messages(), &["queued later"]);
 }
 
 #[test]
@@ -113,7 +113,11 @@ fn test_initial_history_bootstrap_preserves_restored_interleave_state() {
 #[test]
 fn test_remote_history_working_dir_drives_context_instruction_loading() {
     let repo = tempfile::TempDir::new().expect("temp repo");
-    std::fs::write(repo.path().join("AGENTS.md"), "follow remote repo agents policy").unwrap();
+    std::fs::write(
+        repo.path().join("AGENTS.md"),
+        "follow remote repo agents policy",
+    )
+    .unwrap();
     std::fs::create_dir_all(repo.path().join(".jcode/rules")).unwrap();
     std::fs::write(
         repo.path().join(".jcode/rules/private.md"),
@@ -164,7 +168,10 @@ fn test_remote_history_working_dir_drives_context_instruction_loading() {
         &mut remote,
     );
 
-    assert_eq!(app.session.working_dir.as_deref(), Some(repo.path().to_str().unwrap()));
+    assert_eq!(
+        app.session.working_dir.as_deref(),
+        Some(repo.path().to_str().unwrap())
+    );
     let info = <App as crate::tui::TuiState>::context_info(&app);
     assert!(info.has_project_agents_md);
     assert!(info.project_agents_md_chars > 0);

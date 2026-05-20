@@ -348,6 +348,12 @@ pub(in crate::tui::app) fn handle_server_event(
                     app.pending_soft_interrupts.len()
                 ));
             }
+            if !app.pending_soft_interrupts.is_empty() {
+                let mut recovered_interrupts = std::mem::take(&mut app.pending_soft_interrupts);
+                recovered_interrupts.append(&mut app.queued_messages);
+                app.queued_messages = recovered_interrupts;
+                app.pending_soft_interrupt_requests.clear();
+            }
             // Interrupt should only stop the active turn. Messages that the user
             // explicitly queued behind that turn must remain queued for the user
             // to review/send later instead of being auto-dispatched immediately.

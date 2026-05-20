@@ -717,8 +717,8 @@ fn test_ctrl_c_requests_cancel_while_processing() {
         .unwrap();
 
     assert!(app.cancel_requested);
-    assert!(app.interleave_message.is_none());
-    assert!(app.pending_soft_interrupts.is_empty());
+    assert_eq!(app.interleave_message.as_deref(), Some("queued interrupt"));
+    assert_eq!(app.pending_soft_interrupts, vec!["pending soft interrupt"]);
     assert_eq!(app.status_notice(), Some("Interrupting...".to_string()));
 }
 
@@ -778,6 +778,30 @@ fn test_escape_interrupt_first_press_only_arms_while_processing() {
 
     assert!(app.cancel_requested);
     assert_eq!(app.status_notice(), Some("Interrupting...".to_string()));
+}
+
+#[test]
+fn test_escape_interrupt_preserves_visible_queued_interleaves_while_cancelling() {
+    let mut app = create_test_app();
+    app.is_processing = true;
+    app.interleave_message = Some("urgent interleave".to_string());
+    app.pending_soft_interrupts
+        .push("acked soft interleave".to_string());
+    app.pending_soft_interrupt_requests
+        .push((7, "acked soft interleave".to_string()));
+    app.queued_messages.push("queued later".to_string());
+
+    app.handle_key(KeyCode::Esc, KeyModifiers::empty()).unwrap();
+    app.handle_key(KeyCode::Esc, KeyModifiers::empty()).unwrap();
+
+    assert!(app.cancel_requested);
+    assert_eq!(app.interleave_message.as_deref(), Some("urgent interleave"));
+    assert_eq!(app.pending_soft_interrupts, vec!["acked soft interleave"]);
+    assert_eq!(
+        app.pending_soft_interrupt_requests,
+        vec![(7, "acked soft interleave".to_string())]
+    );
+    assert_eq!(app.queued_messages(), &["queued later".to_string()]);
 }
 
 #[test]
