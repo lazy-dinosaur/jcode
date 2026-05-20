@@ -1,4 +1,5 @@
 use super::*;
+use crate::provider::selection::ConfigProviderSelection;
 
 impl MultiProvider {
     pub(super) fn spawn_post_auth_model_refresh(
@@ -68,6 +69,20 @@ impl MultiProvider {
         let provider_init_start = std::time::Instant::now();
         let cfg = crate::config::config();
         let provider_state = ProviderState::from_parts(cfg, &auth_status);
+        if let Some(ConfigProviderSelection::BuiltIn(provider)) =
+            provider_state.default_provider_selection()
+            && !matches!(provider, ActiveProvider::OpenRouter)
+        {
+            // A previous `/model` selection for an OpenAI-compatible profile (for
+            // example Kimi Code) leaves JCODE_OPENROUTER_* in the long-lived
+            // client/server process environment. Those vars are provider runtime
+            // state, not user config, so an explicit built-in default_provider
+            // must clear them before credential probing or OpenRouter/Kimi will
+            // win over the configured default on first prompt.
+            crate::provider_catalog::force_apply_openai_compatible_profile_env(None);
+            crate::env::set_var("JCODE_ACTIVE_PROVIDER", Self::provider_key(provider));
+            crate::env::remove_var("JCODE_FORCE_PROVIDER");
+        }
         let mut default_named_provider_profile: Option<String> = None;
         if std::env::var_os("JCODE_PROVIDER_PROFILE_ACTIVE").is_none()
             && std::env::var_os("JCODE_NAMED_PROVIDER_PROFILE").is_none()

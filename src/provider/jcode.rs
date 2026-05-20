@@ -429,15 +429,19 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
         runtime.block_on(async {
             let _provider = JcodeProvider::new();
-            assert_eq!(std::env::var("JCODE_FORCE_PROVIDER").as_deref(), Ok("0"));
+            assert!(
+                std::env::var("JCODE_FORCE_PROVIDER")
+                    .ok()
+                    .is_none_or(|value| !matches!(
+                        value.trim().to_ascii_lowercase().as_str(),
+                        "1" | "true" | "yes"
+                    ))
+            );
             assert_eq!(
                 std::env::var("JCODE_ACTIVE_PROVIDER").as_deref(),
                 Ok("claude")
             );
-            assert_eq!(
-                std::env::var("JCODE_OPENROUTER_MODEL").as_deref(),
-                Ok("before")
-            );
+            assert!(std::env::var_os("JCODE_OPENROUTER_MODEL").is_none());
         });
 
         crate::env::remove_var("JCODE_FORCE_PROVIDER");

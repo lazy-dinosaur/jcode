@@ -99,6 +99,42 @@ fn with_env_var<T>(key: &str, value: &str, f: impl FnOnce() -> T) -> T {
     result
 }
 
+#[test]
+fn test_config_builtin_default_provider_clears_stale_compatible_runtime_env() {
+    with_clean_provider_test_env(|| {
+        std::fs::write(
+            crate::storage::jcode_dir()
+                .expect("jcode dir")
+                .join("config.toml"),
+            "[provider]\ndefault_provider = \"claude\"\ndefault_model = \"claude-sonnet-4-6[1m]\"\n",
+        )
+        .expect("write config");
+        crate::config::Config::invalidate_cache();
+        crate::env::set_var(
+            "JCODE_OPENROUTER_API_BASE",
+            "https://api.kimi.com/coding/v1",
+        );
+        crate::env::set_var("JCODE_OPENROUTER_API_KEY_NAME", "KIMI_API_KEY");
+        crate::env::set_var("JCODE_OPENROUTER_CACHE_NAMESPACE", "kimi");
+        crate::env::set_var("JCODE_OPENROUTER_STATIC_MODELS", "kimi-for-coding");
+        crate::env::set_var("JCODE_PROVIDER_PROFILE_ACTIVE", "1");
+        crate::env::set_var("JCODE_ACTIVE_PROVIDER", "openrouter");
+
+        let _provider = MultiProvider::new_with_auth_status(crate::auth::AuthStatus::default());
+
+        assert!(std::env::var_os("JCODE_OPENROUTER_API_BASE").is_none());
+        assert!(std::env::var_os("JCODE_OPENROUTER_API_KEY_NAME").is_none());
+        assert!(std::env::var_os("JCODE_OPENROUTER_CACHE_NAMESPACE").is_none());
+        assert!(std::env::var_os("JCODE_OPENROUTER_STATIC_MODELS").is_none());
+        assert!(std::env::var_os("JCODE_PROVIDER_PROFILE_ACTIVE").is_none());
+        assert_eq!(
+            std::env::var("JCODE_ACTIVE_PROVIDER").as_deref(),
+            Ok("claude")
+        );
+        crate::config::Config::invalidate_cache();
+    });
+}
+
 fn save_test_openai_compatible_login_config(default_model: &str) {
     let env_file = crate::provider_catalog::OPENAI_COMPAT_PROFILE.env_file;
     crate::provider_catalog::save_env_value_to_env_file(
