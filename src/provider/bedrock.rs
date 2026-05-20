@@ -20,6 +20,7 @@ use aws_sdk_bedrockruntime::types::{
 use aws_smithy_types::Blob;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use jcode_provider_core::CompletionOptions;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
@@ -1028,7 +1029,25 @@ impl Provider for BedrockProvider {
         messages: &[JMessage],
         tools: &[ToolDefinition],
         system: &str,
+        resume_session_id: Option<&str>,
+    ) -> Result<EventStream> {
+        self.complete_with_options(
+            messages,
+            tools,
+            system,
+            resume_session_id,
+            CompletionOptions::default(),
+        )
+        .await
+    }
+
+    async fn complete_with_options(
+        &self,
+        messages: &[JMessage],
+        tools: &[ToolDefinition],
+        system: &str,
         _resume_session_id: Option<&str>,
+        options: CompletionOptions,
     ) -> Result<EventStream> {
         Self::validate_credentials_if_requested().await?;
         let model = self.model();
@@ -1083,6 +1102,7 @@ impl Provider for BedrockProvider {
             ],
         );
         let (tx, rx) = mpsc::channel::<Result<StreamEvent>>(64);
+        let cancel_signal = options.cancel_signal();
         tokio::spawn(async move {
             let client = Self::runtime_client().await;
             let mut req = client
@@ -1098,7 +1118,15 @@ impl Provider for BedrockProvider {
             if let Some(inference_config) = inference_config {
                 req = req.inference_config(inference_config);
             }
-            let resp = match req.send().await {
+            let send_fut = req.send();
+            let resp = match if let Some(signal) = cancel_signal.as_ref() {
+                tokio::select! {
+                    _ = signal.notified() => return,
+                    response = send_fut => response,
+                }
+            } else {
+                send_fut.await
+            } {
                 Ok(resp) => resp,
                 Err(err) => {
                     let _ = tx
@@ -1112,7 +1140,15 @@ impl Provider for BedrockProvider {
             let mut stream = resp.stream;
             let mut current_tool: Option<(String, String, String)> = None;
             loop {
-                match stream.recv().await {
+                let recv_fut = stream.recv();
+                match if let Some(signal) = cancel_signal.as_ref() {
+                    tokio::select! {
+                        _ = signal.notified() => return,
+                        event = recv_fut => event,
+                    }
+                } else {
+                    recv_fut.await
+                } {
                     Ok(Some(event)) => match event {
                         ConverseStreamOutput::ContentBlockStart(start) => {
                             if let Some(ContentBlockStart::ToolUse(tool)) = start.start {

@@ -21,13 +21,24 @@ pub(super) async fn run_stream_with_retries(
     tx: mpsc::Sender<Result<StreamEvent>>,
     provider_pin: Arc<Mutex<Option<ProviderPin>>>,
     model: String,
+    cancel_signal: Option<jcode_agent_runtime::InterruptSignal>,
 ) {
     let mut last_error = None;
 
     for attempt in 0..MAX_RETRIES {
         if attempt > 0 {
             let delay = RETRY_BASE_DELAY_MS * (1 << (attempt - 1));
-            tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+            if let Some(signal) = cancel_signal.as_ref() {
+                tokio::select! {
+                    _ = signal.notified() => {
+                        let _ = tx.send(Err(anyhow::anyhow!("request cancelled by user interrupt"))).await;
+                        return;
+                    }
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(delay)) => {}
+                }
+            } else {
+                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+            }
             crate::logging::info(&format!(
                 "Retrying API request using {} (attempt {}/{})",
                 auth.label(),
@@ -54,6 +65,7 @@ pub(super) async fn run_stream_with_retries(
             tx.clone(),
             Arc::clone(&provider_pin),
             model.clone(),
+            cancel_signal.clone(),
         )
         .await
         {
@@ -96,6 +108,7 @@ async fn stream_response(
     tx: mpsc::Sender<Result<StreamEvent>>,
     provider_pin: Arc<Mutex<Option<ProviderPin>>>,
     model: String,
+    cancel_signal: Option<jcode_agent_runtime::InterruptSignal>,
 ) -> Result<()> {
     use crate::message::ConnectionPhase;
     let _ = tx
@@ -125,18 +138,23 @@ async fn stream_response(
             .header("X-Title", "jcode");
     }
 
-    let response = req
-        .json(&request)
-        .send()
-        .await
-        .with_context(|| {
-            format!(
-                "Failed to send OpenAI-compatible chat request\n  endpoint: {}\n  model: {}\n  auth: {}\nHint: check network connectivity, DNS/TLS, and that the base URL includes the API version (usually /v1).",
-                url,
-                model,
-                auth.label()
-            )
-        })?;
+    let send_fut = req.json(&request).send();
+    let response = if let Some(signal) = cancel_signal.as_ref() {
+        tokio::select! {
+            _ = signal.notified() => anyhow::bail!("request cancelled by user interrupt"),
+            response = send_fut => response,
+        }
+    } else {
+        send_fut.await
+    }
+    .with_context(|| {
+        format!(
+            "Failed to send OpenAI-compatible chat request\n  endpoint: {}\n  model: {}\n  auth: {}\nHint: check network connectivity, DNS/TLS, and that the base URL includes the API version (usually /v1).",
+            url,
+            model,
+            auth.label()
+        )
+    })?;
 
     let connect_ms = connect_start.elapsed().as_millis();
     crate::logging::info(&format!(
@@ -169,7 +187,16 @@ async fn stream_response(
     const SSE_CHUNK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 
     loop {
-        let event = match tokio::time::timeout(SSE_CHUNK_TIMEOUT, stream.next()).await {
+        let next_fut = tokio::time::timeout(SSE_CHUNK_TIMEOUT, stream.next());
+        let next_result = if let Some(signal) = cancel_signal.as_ref() {
+            tokio::select! {
+                _ = signal.notified() => anyhow::bail!("stream cancelled by user interrupt"),
+                result = next_fut => result,
+            }
+        } else {
+            next_fut.await
+        };
+        let event = match next_result {
             Ok(Some(Ok(event))) => event,
             Ok(Some(Err(e))) => anyhow::bail!(
                 "OpenAI-compatible stream error\n  endpoint: {}\n  model: {}\n  auth: {}\n  error: {}",

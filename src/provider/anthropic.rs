@@ -11,7 +11,8 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use futures::StreamExt;
 use jcode_provider_core::{
-    ANTHROPIC_OAUTH_BETA_HEADERS, anthropic_effectively_1m, anthropic_is_1m_model as is_1m_model,
+    ANTHROPIC_OAUTH_BETA_HEADERS, CompletionOptions, anthropic_effectively_1m,
+    anthropic_is_1m_model as is_1m_model,
     anthropic_map_tool_name_for_oauth as map_tool_name_for_oauth,
     anthropic_map_tool_name_from_oauth as map_tool_name_from_oauth, anthropic_oauth_beta_headers,
     anthropic_stainless_arch as stainless_arch, anthropic_stainless_os as stainless_os,
@@ -1053,7 +1054,25 @@ impl Provider for AnthropicProvider {
         messages: &[Message],
         tools: &[ToolDefinition],
         system: &str,
+        resume_session_id: Option<&str>,
+    ) -> Result<EventStream> {
+        self.complete_with_options(
+            messages,
+            tools,
+            system,
+            resume_session_id,
+            CompletionOptions::default(),
+        )
+        .await
+    }
+
+    async fn complete_with_options(
+        &self,
+        messages: &[Message],
+        tools: &[ToolDefinition],
+        system: &str,
         _resume_session_id: Option<&str>,
+        options: CompletionOptions,
     ) -> Result<EventStream> {
         let (token, is_oauth) = self.get_access_token().await?;
         if is_oauth {
@@ -1109,6 +1128,7 @@ impl Provider for AnthropicProvider {
         let client = self.client.clone();
         let credentials = Arc::clone(&self.credentials);
         let oauth_session_id = self.oauth_session_id.clone();
+        let cancel_signal = options.cancel_signal();
 
         // Spawn task to handle streaming with retry logic.
         // This includes forced OAuth refresh on auth failures.
@@ -1131,6 +1151,7 @@ impl Provider for AnthropicProvider {
                 credentials,
                 model,
                 oauth_session_id,
+                cancel_signal,
             )
             .await;
         });
@@ -1401,6 +1422,7 @@ impl Provider for AnthropicProvider {
                 credentials,
                 model,
                 oauth_session_id,
+                None,
             )
             .await;
         });
@@ -1422,6 +1444,7 @@ async fn run_stream_with_retries(
     credentials: Arc<RwLock<Option<CachedCredentials>>>,
     model_name: String,
     oauth_session_id: String,
+    cancel_signal: Option<jcode_agent_runtime::InterruptSignal>,
 ) {
     let mut token = initial_token;
     let mut last_error = None;
@@ -1439,7 +1462,17 @@ async fn run_stream_with_retries(
                     },
                 }))
                 .await;
-            tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+            if let Some(signal) = cancel_signal.as_ref() {
+                tokio::select! {
+                    _ = signal.notified() => {
+                        let _ = tx.send(Err(anyhow::anyhow!("request cancelled by user interrupt"))).await;
+                        return;
+                    }
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(delay)) => {}
+                }
+            } else {
+                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+            }
             crate::logging::info(&format!(
                 "Retrying Anthropic API request (attempt {}/{})",
                 attempt + 1,
@@ -1455,6 +1488,7 @@ async fn run_stream_with_retries(
             tx.clone(),
             &model_name,
             &oauth_session_id,
+            cancel_signal.clone(),
         )
         .await
         {
@@ -1583,6 +1617,7 @@ async fn stream_response(
     tx: mpsc::Sender<Result<StreamEvent>>,
     model_name: &str,
     oauth_session_id: &str,
+    cancel_signal: Option<jcode_agent_runtime::InterruptSignal>,
 ) -> Result<()> {
     use crate::message::ConnectionPhase;
     if std::env::var("JCODE_ANTHROPIC_DEBUG")
@@ -1641,11 +1676,16 @@ async fn stream_response(
         );
     }
 
-    let response = req
-        .json(&request)
-        .send()
-        .await
-        .context("Failed to send request to Anthropic API")?;
+    let send_fut = req.json(&request).send();
+    let response = if let Some(signal) = cancel_signal.as_ref() {
+        tokio::select! {
+            _ = signal.notified() => anyhow::bail!("request cancelled by user interrupt"),
+            response = send_fut => response,
+        }
+    } else {
+        send_fut.await
+    }
+    .context("Failed to send request to Anthropic API")?;
 
     let connect_ms = connect_start.elapsed().as_millis();
     crate::logging::info(&format!(
@@ -1678,7 +1718,16 @@ async fn stream_response(
     const SSE_CHUNK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 
     loop {
-        let chunk = match tokio::time::timeout(SSE_CHUNK_TIMEOUT, stream.next()).await {
+        let next_fut = tokio::time::timeout(SSE_CHUNK_TIMEOUT, stream.next());
+        let next_result = if let Some(signal) = cancel_signal.as_ref() {
+            tokio::select! {
+                _ = signal.notified() => anyhow::bail!("stream cancelled by user interrupt"),
+                result = next_fut => result,
+            }
+        } else {
+            next_fut.await
+        };
+        let chunk = match next_result {
             Ok(Some(chunk_result)) => chunk_result.context("Error reading stream chunk")?,
             Ok(None) => break, // stream ended normally
             Err(_) => {

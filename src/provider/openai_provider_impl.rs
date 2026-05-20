@@ -2,6 +2,7 @@ use super::openai_stream_runtime::{
     stream_response, stream_response_websocket_persistent, try_persistent_ws_continuation,
 };
 use super::*;
+use jcode_provider_core::CompletionOptions;
 
 #[async_trait]
 impl Provider for OpenAIProvider {
@@ -10,7 +11,25 @@ impl Provider for OpenAIProvider {
         messages: &[ChatMessage],
         tools: &[ToolDefinition],
         system: &str,
+        resume_session_id: Option<&str>,
+    ) -> Result<EventStream> {
+        self.complete_with_options(
+            messages,
+            tools,
+            system,
+            resume_session_id,
+            CompletionOptions::default(),
+        )
+        .await
+    }
+
+    async fn complete_with_options(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[ToolDefinition],
+        system: &str,
         _resume_session_id: Option<&str>,
+        options: CompletionOptions,
     ) -> Result<EventStream> {
         let input = build_responses_input(messages);
         let input_item_count = input.len();
@@ -126,19 +145,27 @@ impl Provider for OpenAIProvider {
         let model_for_transport = model_id.clone();
         let client = self.client.clone();
         let panic_tx = tx.clone();
+        let cancel_signal = options.cancel_signal();
 
         tokio::spawn(async move {
             let stream_task = async move {
                 // Attempt persistent WebSocket continuation first
                 if use_websocket_transport {
-                    let continuation_result = try_persistent_ws_continuation(
+                    let continuation_fut = try_persistent_ws_continuation(
                         &persistent_ws,
                         &request,
                         &input,
                         input_item_count,
                         &tx,
-                    )
-                    .await;
+                    );
+                    let continuation_result = if let Some(signal) = cancel_signal.as_ref() {
+                        tokio::select! {
+                            _ = signal.notified() => return,
+                            result = continuation_fut => result,
+                        }
+                    } else {
+                        continuation_fut.await
+                    };
 
                     match continuation_result {
                         PersistentWsResult::Success => {
@@ -184,7 +211,14 @@ impl Provider for OpenAIProvider {
                     }
                     if attempt > 0 && !skip_backoff_once {
                         let delay = RETRY_BASE_DELAY_MS * (1 << (attempt - 1));
-                        tokio::time::sleep(Duration::from_millis(delay)).await;
+                        if let Some(signal) = cancel_signal.as_ref() {
+                            tokio::select! {
+                                _ = signal.notified() => return,
+                                _ = tokio::time::sleep(Duration::from_millis(delay)) => {}
+                            }
+                        } else {
+                            tokio::time::sleep(Duration::from_millis(delay)).await;
+                        }
                         crate::logging::info(&format!(
                             "Retrying OpenAI API request (attempt {}/{})",
                             attempt + 1,
@@ -241,41 +275,51 @@ impl Provider for OpenAIProvider {
                     ));
 
                     let use_websocket = matches!(transport, OpenAITransport::WebSocket);
-                    let result = if use_websocket {
-                        stream_response_websocket_persistent(
-                            Arc::clone(&credentials),
-                            request.clone(),
-                            tx.clone(),
-                            Arc::clone(&persistent_ws),
-                            input_item_count,
-                        )
-                        .await
-                    } else {
-                        stream_response(
-                            client.clone(),
-                            Arc::clone(&credentials),
-                            request.clone(),
-                            if force_https_for_request {
-                                let reason = last_error
-                                    .as_ref()
-                                    .map(|error: &anyhow::Error| {
-                                        summarize_websocket_fallback_reason(&error.to_string())
-                                    })
-                                    .unwrap_or("websocket error");
-                                format!("https fallback: {}", reason)
-                            } else if let Some(remaining) = websocket_cooldown_remaining(
-                                &websocket_cooldowns,
-                                &model_for_transport,
+                    let stream_fut = async {
+                        if use_websocket {
+                            stream_response_websocket_persistent(
+                                Arc::clone(&credentials),
+                                request.clone(),
+                                tx.clone(),
+                                Arc::clone(&persistent_ws),
+                                input_item_count,
                             )
                             .await
-                            {
-                                format!("https cooldown {}", format_status_duration(remaining))
-                            } else {
-                                "https".to_string()
-                            },
-                            tx.clone(),
-                        )
-                        .await
+                        } else {
+                            stream_response(
+                                client.clone(),
+                                Arc::clone(&credentials),
+                                request.clone(),
+                                if force_https_for_request {
+                                    let reason = last_error
+                                        .as_ref()
+                                        .map(|error: &anyhow::Error| {
+                                            summarize_websocket_fallback_reason(&error.to_string())
+                                        })
+                                        .unwrap_or("websocket error");
+                                    format!("https fallback: {}", reason)
+                                } else if let Some(remaining) = websocket_cooldown_remaining(
+                                    &websocket_cooldowns,
+                                    &model_for_transport,
+                                )
+                                .await
+                                {
+                                    format!("https cooldown {}", format_status_duration(remaining))
+                                } else {
+                                    "https".to_string()
+                                },
+                                tx.clone(),
+                            )
+                            .await
+                        }
+                    };
+                    let result = if let Some(signal) = cancel_signal.as_ref() {
+                        tokio::select! {
+                            _ = signal.notified() => return,
+                            result = stream_fut => result,
+                        }
+                    } else {
+                        stream_fut.await
                     };
 
                     match result {

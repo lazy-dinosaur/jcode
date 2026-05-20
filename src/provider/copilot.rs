@@ -7,6 +7,7 @@ use crate::message::{
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::Utc;
+use jcode_provider_core::CompletionOptions;
 pub use jcode_provider_core::PremiumMode;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -600,6 +601,7 @@ impl CopilotApiProvider {
         tools: Vec<Value>,
         is_user_initiated: bool,
         tx: mpsc::Sender<Result<StreamEvent>>,
+        cancel_signal: Option<jcode_agent_runtime::InterruptSignal>,
     ) {
         use crate::message::ConnectionPhase;
 
@@ -634,7 +636,17 @@ impl CopilotApiProvider {
                         },
                     }))
                     .await;
-                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                if let Some(signal) = cancel_signal.as_ref() {
+                    tokio::select! {
+                        _ = signal.notified() => {
+                            let _ = tx.send(Err(anyhow::anyhow!("request cancelled by user interrupt"))).await;
+                            return;
+                        }
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(delay)) => {}
+                    }
+                } else {
+                    tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                }
             }
 
             crate::logging::info(&format!(
@@ -663,7 +675,7 @@ impl CopilotApiProvider {
 
             let request_id = Uuid::new_v4().to_string();
 
-            let resp = self
+            let send_fut = self
                 .client
                 .post(format!(
                     "{}/chat/completions",
@@ -685,8 +697,15 @@ impl CopilotApiProvider {
                 .header("Vscode-Sessionid", &self.session_id)
                 .header("Vscode-Machineid", &self.machine_id)
                 .json(&body)
-                .send()
-                .await;
+                .send();
+            let resp = if let Some(signal) = cancel_signal.as_ref() {
+                tokio::select! {
+                    _ = signal.notified() => return,
+                    response = send_fut => response,
+                }
+            } else {
+                send_fut.await
+            };
 
             let resp = match resp {
                 Ok(r) => r,
@@ -749,7 +768,10 @@ impl CopilotApiProvider {
                 .await;
 
             // Process SSE stream - returns Err on timeout/stream errors
-            match self.process_sse_stream(resp, tx.clone()).await {
+            match self
+                .process_sse_stream(resp, tx.clone(), cancel_signal.clone())
+                .await
+            {
                 Ok(()) => return,
                 Err(e) => {
                     let error_str = e.to_string().to_lowercase();
@@ -785,6 +807,7 @@ impl CopilotApiProvider {
         &self,
         resp: reqwest::Response,
         tx: mpsc::Sender<Result<StreamEvent>>,
+        cancel_signal: Option<jcode_agent_runtime::InterruptSignal>,
     ) -> Result<()> {
         use futures::StreamExt;
 
@@ -800,7 +823,16 @@ impl CopilotApiProvider {
         let mut saw_any_data = false;
 
         loop {
-            let chunk = match tokio::time::timeout(SSE_CHUNK_TIMEOUT, stream.next()).await {
+            let next_fut = tokio::time::timeout(SSE_CHUNK_TIMEOUT, stream.next());
+            let next_result = if let Some(signal) = cancel_signal.as_ref() {
+                tokio::select! {
+                    _ = signal.notified() => anyhow::bail!("stream cancelled by user interrupt"),
+                    result = next_fut => result,
+                }
+            } else {
+                next_fut.await
+            };
+            let chunk = match next_result {
                 Ok(Some(Ok(c))) => c,
                 Ok(Some(Err(e))) => {
                     anyhow::bail!("Stream error: {}", e);
@@ -986,7 +1018,25 @@ impl Provider for CopilotApiProvider {
         messages: &[ChatMessage],
         tools: &[ToolDefinition],
         system: &str,
+        resume_session_id: Option<&str>,
+    ) -> Result<EventStream> {
+        self.complete_with_options(
+            messages,
+            tools,
+            system,
+            resume_session_id,
+            CompletionOptions::default(),
+        )
+        .await
+    }
+
+    async fn complete_with_options(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[ToolDefinition],
+        system: &str,
         _resume_session_id: Option<&str>,
+        options: CompletionOptions,
     ) -> Result<EventStream> {
         self.wait_for_init().await;
 
@@ -1050,10 +1100,17 @@ impl Provider for CopilotApiProvider {
             user_turn_count: self.user_turn_count.clone(),
             created_at: self.created_at,
         };
+        let cancel_signal = options.cancel_signal();
 
         tokio::spawn(async move {
             provider
-                .stream_request(built_messages, built_tools, is_user_initiated, tx)
+                .stream_request(
+                    built_messages,
+                    built_tools,
+                    is_user_initiated,
+                    tx,
+                    cancel_signal,
+                )
                 .await;
         });
 

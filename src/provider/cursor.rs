@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 use std::fmt;
 use std::io::Read;
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::sync::mpsc;
@@ -555,10 +556,18 @@ async fn run_native_text_command_via_curl(
     let mut pending = Vec::new();
     let mut buf = [0u8; 8192];
     loop {
-        let read = stdout
-            .read(&mut buf)
-            .await
-            .context("Failed to read curl Cursor response stream")?;
+        let read = tokio::select! {
+            _ = tx.closed() => {
+                let _ = child.kill().await;
+                let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
+                let _ = std::fs::remove_file(&body_path);
+                let _ = stderr_task.await;
+                return Ok(());
+            }
+            read = stdout.read(&mut buf) => {
+                read.context("Failed to read curl Cursor response stream")?
+            }
+        };
         if read == 0 {
             break;
         }

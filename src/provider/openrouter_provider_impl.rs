@@ -1,6 +1,7 @@
 use super::openrouter_sse_stream::run_stream_with_retries;
 use super::*;
 use crate::provider::{ModelCatalogRefreshSummary, summarize_model_catalog_refresh};
+use jcode_provider_core::CompletionOptions;
 
 #[async_trait]
 impl Provider for OpenRouterProvider {
@@ -9,7 +10,25 @@ impl Provider for OpenRouterProvider {
         messages: &[Message],
         tools: &[ToolDefinition],
         system: &str,
+        resume_session_id: Option<&str>,
+    ) -> Result<EventStream> {
+        self.complete_with_options(
+            messages,
+            tools,
+            system,
+            resume_session_id,
+            CompletionOptions::default(),
+        )
+        .await
+    }
+
+    async fn complete_with_options(
+        &self,
+        messages: &[Message],
+        tools: &[ToolDefinition],
+        system: &str,
         _resume_session_id: Option<&str>,
+        options: CompletionOptions,
     ) -> Result<EventStream> {
         let model = self.model.read().await.clone();
         let reasoning_effort = self.reasoning_effort();
@@ -631,6 +650,7 @@ impl Provider for OpenRouterProvider {
         let request_for_retries = request;
         let model_for_stream = model.clone();
         let provider_pin = Arc::clone(&self.provider_pin);
+        let cancel_signal = options.cancel_signal();
 
         tokio::spawn(async move {
             if tx
@@ -651,6 +671,7 @@ impl Provider for OpenRouterProvider {
                 tx,
                 provider_pin,
                 model_for_stream,
+                cancel_signal,
             )
             .await;
         });

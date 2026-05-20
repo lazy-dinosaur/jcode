@@ -4,6 +4,7 @@ use crate::message::{ConnectionPhase, Message, StreamEvent, ToolDefinition};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use jcode_provider_core::CompletionOptions;
 use jcode_provider_gemini::{
     CodeAssistGenerateRequest, CodeAssistGenerateResponse, GeminiFunctionCallingConfig,
     GeminiToolConfig, VertexGenerateContentRequest,
@@ -650,6 +651,24 @@ impl Provider for AntigravityProvider {
         system: &str,
         _resume_session_id: Option<&str>,
     ) -> Result<EventStream> {
+        self.complete_with_options(
+            messages,
+            _tools,
+            system,
+            _resume_session_id,
+            CompletionOptions::default(),
+        )
+        .await
+    }
+
+    async fn complete_with_options(
+        &self,
+        messages: &[Message],
+        _tools: &[ToolDefinition],
+        system: &str,
+        _resume_session_id: Option<&str>,
+        options: CompletionOptions,
+    ) -> Result<EventStream> {
         let model = self
             .model
             .read()
@@ -660,6 +679,7 @@ impl Provider for AntigravityProvider {
         let system = system.to_string();
         let resume_session_id = _resume_session_id.map(str::to_string);
         let provider = self.clone();
+        let cancel_signal = options.cancel_signal();
         let (tx, rx) = mpsc::channel::<Result<crate::message::StreamEvent>>(100);
 
         tokio::spawn(async move {
@@ -678,16 +698,21 @@ impl Provider for AntigravityProvider {
                     phase: ConnectionPhase::WaitingForResponse,
                 }))
                 .await;
-            let response = match provider
-                .generate_content(
-                    &model,
-                    &messages,
-                    &tools,
-                    &system,
-                    resume_session_id.as_deref(),
-                )
-                .await
-            {
+            let generate_fut = provider.generate_content(
+                &model,
+                &messages,
+                &tools,
+                &system,
+                resume_session_id.as_deref(),
+            );
+            let response = match if let Some(signal) = cancel_signal.as_ref() {
+                tokio::select! {
+                    _ = signal.notified() => return,
+                    result = generate_fut => result,
+                }
+            } else {
+                generate_fut.await
+            } {
                 Ok(response) => response,
                 Err(err) => {
                     let _ = tx.send(Err(err)).await;

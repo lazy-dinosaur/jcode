@@ -903,7 +903,9 @@ async fn test_sanitize_dangling_tool_ids_with_dots() {
 #[tokio::test]
 async fn set_context_preference_1m_appends_suffix_then_200k_strips_it() {
     let provider = AnthropicProvider::new();
-    provider.set_model("claude-opus-4-7").expect("set base model");
+    provider
+        .set_model("claude-opus-4-7")
+        .expect("set base model");
 
     // Initial state: 200k default
     assert_eq!(provider.context_preference().as_deref(), Some("200k"));
@@ -917,9 +919,7 @@ async fn set_context_preference_1m_appends_suffix_then_200k_strips_it() {
     assert_eq!(provider.context_preference().as_deref(), Some("1m"));
 
     // Idempotent: setting 1m again must not double-append
-    provider
-        .set_context_preference("1m")
-        .expect("set 1m again");
+    provider.set_context_preference("1m").expect("set 1m again");
     assert_eq!(provider.model(), "claude-opus-4-7[1m]");
 
     // Back to 200k

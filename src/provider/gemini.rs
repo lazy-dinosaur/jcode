@@ -4,6 +4,7 @@ use crate::message::{ConnectionPhase, Message, Role, StreamEvent, ToolDefinition
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::Utc;
+use jcode_provider_core::CompletionOptions;
 pub use jcode_provider_gemini::{
     AVAILABLE_MODELS, CODE_ASSIST_API_VERSION, CODE_ASSIST_ENDPOINT, ClientMetadata,
     CodeAssistGenerateRequest, CodeAssistGenerateResponse, DEFAULT_MODEL, GeminiCandidate,
@@ -448,6 +449,24 @@ impl Provider for GeminiProvider {
         system: &str,
         resume_session_id: Option<&str>,
     ) -> Result<EventStream> {
+        self.complete_with_options(
+            messages,
+            tools,
+            system,
+            resume_session_id,
+            CompletionOptions::default(),
+        )
+        .await
+    }
+
+    async fn complete_with_options(
+        &self,
+        messages: &[Message],
+        tools: &[ToolDefinition],
+        system: &str,
+        resume_session_id: Option<&str>,
+        options: CompletionOptions,
+    ) -> Result<EventStream> {
         let model = self.model();
         let messages = messages.to_vec();
         let tools = tools.to_vec();
@@ -455,6 +474,7 @@ impl Provider for GeminiProvider {
         let resume_session_id = resume_session_id.map(|value| value.to_string());
         let state_cache = self.state.clone();
         let provider = self.clone();
+        let cancel_signal = options.cancel_signal();
         let (tx, rx) = mpsc::channel::<Result<StreamEvent>>(100);
 
         tokio::spawn(async move {
@@ -504,17 +524,22 @@ impl Provider for GeminiProvider {
                 }))
                 .await;
 
-            let response = match provider
-                .generate_content(
-                    &state,
-                    &model,
-                    &messages,
-                    &tools,
-                    &system,
-                    resume_session_id.as_deref(),
-                )
-                .await
-            {
+            let generate_fut = provider.generate_content(
+                &state,
+                &model,
+                &messages,
+                &tools,
+                &system,
+                resume_session_id.as_deref(),
+            );
+            let response = match if let Some(signal) = cancel_signal.as_ref() {
+                tokio::select! {
+                    _ = signal.notified() => return,
+                    result = generate_fut => result,
+                }
+            } else {
+                generate_fut.await
+            } {
                 Ok(response) => response,
                 Err(err) if is_gemini_model_not_found_error(&err) => {
                     let mut fallback_response = None;
@@ -524,17 +549,22 @@ impl Provider for GeminiProvider {
                             "Gemini model '{}' was not found; retrying with fallback '{}'",
                             model, fallback_model
                         ));
-                        match provider
-                            .generate_content(
-                                &state,
-                                fallback_model,
-                                &messages,
-                                &tools,
-                                &system,
-                                resume_session_id.as_deref(),
-                            )
-                            .await
-                        {
+                        let fallback_fut = provider.generate_content(
+                            &state,
+                            fallback_model,
+                            &messages,
+                            &tools,
+                            &system,
+                            resume_session_id.as_deref(),
+                        );
+                        match if let Some(signal) = cancel_signal.as_ref() {
+                            tokio::select! {
+                                _ = signal.notified() => return,
+                                result = fallback_fut => result,
+                            }
+                        } else {
+                            fallback_fut.await
+                        } {
                             Ok(response) => {
                                 let _ = provider.set_model(fallback_model);
                                 fallback_response = Some(response);
