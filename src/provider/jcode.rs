@@ -16,15 +16,33 @@ pub struct JcodeProvider {
 }
 
 impl JcodeProvider {
+    fn has_explicit_config_default_provider() -> bool {
+        crate::config::config()
+            .provider
+            .default_provider
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|provider| !provider.is_empty() && provider != "jcode")
+    }
+
     pub fn new() -> Self {
-        crate::subscription_catalog::apply_runtime_env();
-        Self::apply_runtime_profile();
+        let has_explicit_config_default = Self::has_explicit_config_default_provider();
+        if !has_explicit_config_default {
+            crate::subscription_catalog::apply_runtime_env();
+            Self::apply_runtime_profile();
+        }
         let inner = MultiProvider::new_fast();
         let default_model = crate::subscription_catalog::default_model().id.to_string();
-        let _ = inner.set_model(&default_model);
+        if !has_explicit_config_default {
+            let _ = inner.set_model(&default_model);
+        }
         Self {
             inner,
-            selected_model: Arc::new(RwLock::new(default_model)),
+            selected_model: Arc::new(RwLock::new(if has_explicit_config_default {
+                String::new()
+            } else {
+                default_model
+            })),
         }
     }
 
@@ -36,6 +54,9 @@ impl JcodeProvider {
     }
 
     fn ensure_runtime_mode(&self) {
+        if Self::has_explicit_config_default_provider() {
+            return;
+        }
         if !crate::subscription_catalog::is_runtime_mode_enabled() {
             crate::subscription_catalog::apply_runtime_env();
         }
@@ -125,10 +146,16 @@ impl Provider for JcodeProvider {
     }
 
     fn model(&self) -> String {
-        self.selected_model
+        let selected = self
+            .selected_model
             .read()
             .map(|model| model.clone())
-            .unwrap_or_else(|_| crate::subscription_catalog::default_model().id.to_string())
+            .unwrap_or_default();
+        if selected.trim().is_empty() {
+            self.inner.model()
+        } else {
+            selected
+        }
     }
 
     fn set_model(&self, model: &str) -> Result<()> {
@@ -315,9 +342,35 @@ impl Provider for JcodeProvider {
 mod tests {
     use super::*;
 
+    struct JcodeHomeGuard {
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl JcodeHomeGuard {
+        fn new(path: &std::path::Path) -> Self {
+            let previous = std::env::var_os("JCODE_HOME");
+            crate::env::set_var("JCODE_HOME", path);
+            crate::config::Config::invalidate_cache();
+            Self { previous }
+        }
+    }
+
+    impl Drop for JcodeHomeGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = self.previous.take() {
+                crate::env::set_var("JCODE_HOME", previous);
+            } else {
+                crate::env::remove_var("JCODE_HOME");
+            }
+            crate::config::Config::invalidate_cache();
+        }
+    }
+
     #[test]
     fn jcode_provider_enables_subscription_runtime_mode() {
         let _guard = crate::storage::lock_test_env();
+        let temp = tempfile::tempdir().expect("temp jcode home");
+        let _home = JcodeHomeGuard::new(temp.path());
         crate::subscription_catalog::clear_runtime_env();
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
 
@@ -338,6 +391,8 @@ mod tests {
     #[test]
     fn jcode_provider_name_and_default_model_are_curated() {
         let _guard = crate::storage::lock_test_env();
+        let temp = tempfile::tempdir().expect("temp jcode home");
+        let _home = JcodeHomeGuard::new(temp.path());
         crate::subscription_catalog::clear_runtime_env();
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
 
@@ -351,6 +406,43 @@ mod tests {
             );
         });
 
+        crate::subscription_catalog::clear_runtime_env();
+    }
+
+    #[test]
+    fn jcode_provider_does_not_force_subscription_runtime_when_config_default_provider_is_explicit()
+    {
+        let _guard = crate::storage::lock_test_env();
+        crate::subscription_catalog::clear_runtime_env();
+        crate::env::set_var("JCODE_FORCE_PROVIDER", "0");
+        crate::env::set_var("JCODE_ACTIVE_PROVIDER", "claude");
+        crate::env::set_var("JCODE_OPENROUTER_MODEL", "before");
+        let temp = tempfile::tempdir().expect("temp jcode home");
+        let _home = JcodeHomeGuard::new(temp.path());
+        std::fs::write(
+            temp.path().join("config.toml"),
+            "[provider]\ndefault_provider = \"claude\"\ndefault_model = \"claude-opus-4-7[1m]\"\n",
+        )
+        .expect("write config");
+        crate::config::Config::invalidate_cache();
+
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        runtime.block_on(async {
+            let _provider = JcodeProvider::new();
+            assert_eq!(std::env::var("JCODE_FORCE_PROVIDER").as_deref(), Ok("0"));
+            assert_eq!(
+                std::env::var("JCODE_ACTIVE_PROVIDER").as_deref(),
+                Ok("claude")
+            );
+            assert_eq!(
+                std::env::var("JCODE_OPENROUTER_MODEL").as_deref(),
+                Ok("before")
+            );
+        });
+
+        crate::env::remove_var("JCODE_FORCE_PROVIDER");
+        crate::env::remove_var("JCODE_ACTIVE_PROVIDER");
+        crate::env::remove_var("JCODE_OPENROUTER_MODEL");
         crate::subscription_catalog::clear_runtime_env();
     }
 }
