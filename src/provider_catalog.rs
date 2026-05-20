@@ -392,6 +392,15 @@ pub fn openai_compatible_profile_context_limit(profile_id: &str, model: &str) ->
     let model = model.trim().to_ascii_lowercase();
 
     match profile_id.as_str() {
+        // Kimi Code exposes K2.6/K2.5 coding models with a 256K token window.
+        "kimi"
+            if matches!(
+                model.as_str(),
+                "kimi-for-coding" | "kimi-k2.6" | "kimi-k2.5"
+            ) =>
+        {
+            Some(262_144)
+        }
         // DeepSeek V4 direct API models advertise a 1M token context window. The
         // direct profile runs through the OpenRouter/OpenAI-compatible provider
         // implementation, whose live catalog can be unavailable during startup.

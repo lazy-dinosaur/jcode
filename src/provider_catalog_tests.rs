@@ -109,6 +109,18 @@ fn auth_issue_profile_metadata_matches_direct_provider_endpoints() {
 }
 
 #[test]
+fn kimi_profile_uses_k2_6_context_window() {
+    assert_eq!(
+        openai_compatible_profile_context_limit("kimi", "kimi-for-coding"),
+        Some(262_144)
+    );
+    assert_eq!(
+        openai_compatible_profile_context_limit("kimi", "kimi-k2.6"),
+        Some(262_144)
+    );
+}
+
+#[test]
 fn auth_issue_lan_openai_compatible_bases_are_valid_for_local_model_servers() {
     assert_eq!(
         normalize_api_base("http://100.103.78.84:11434/v1").as_deref(),

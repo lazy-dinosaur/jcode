@@ -681,6 +681,17 @@ impl App {
             ) || (route.api_method == "openrouter" && route.provider == "auto")
         }
 
+        fn route_display_name(model: &str, route: &PickerOption) -> String {
+            if route.provider == "Antigravity" {
+                format!("{} · Antigravity", model)
+            } else if route.provider == "Kimi Code" && route.api_method == "openai-compatible:kimi"
+            {
+                format!("{} · Kimi Code", model)
+            } else {
+                model.to_string()
+            }
+        }
+
         let timestamp_started = std::time::Instant::now();
         let openrouter_created_timestamps =
             crate::provider::openrouter::load_model_timestamp_index();
@@ -760,8 +771,9 @@ impl App {
                         *name == current_model && current_effort.as_deref() == Some(*effort);
                     let or_created = openrouter_created_timestamp(name);
                     for route in &entry_routes {
+                        let entry_name = route_display_name(&display_name, route);
                         entries.push(PickerEntry {
-                            name: display_name.clone(),
+                            name: entry_name,
                             options: vec![route.clone()],
                             action: PickerAction::Model,
                             selected_option: 0,
@@ -793,8 +805,9 @@ impl App {
                             || COPILOT_OAUTH_MODELS.contains(&name.as_str())
                             || OPENROUTER_AUTO_ONLY_MODELS.contains(&name.as_str()))
                             || (route_can_be_recommended(name, &route) && route.available));
+                    let entry_name = route_display_name(name, &route);
                     entries.push(PickerEntry {
-                        name: name.clone(),
+                        name: entry_name,
                         options: vec![route],
                         action: PickerAction::Model,
                         selected_option: 0,
