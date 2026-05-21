@@ -380,8 +380,14 @@ fn test_chat_mouse_scroll_requests_immediate_redraw_during_streaming() {
         modifiers: KeyModifiers::empty(),
     });
 
-    assert!(app.auto_scroll_paused, "scroll state should update immediately");
-    assert_ne!(app.scroll_offset, 0, "scroll offset should change immediately");
+    assert!(
+        app.auto_scroll_paused,
+        "scroll state should update immediately"
+    );
+    assert_ne!(
+        app.scroll_offset, 0,
+        "scroll offset should change immediately"
+    );
     assert!(
         !scroll_only,
         "chat mouse wheel scrolls should request immediate redraw while streaming"
@@ -401,20 +407,22 @@ fn test_queued_file_activity_repaint_does_not_leave_trailing_digit_artifact() {
 
     app.is_processing = true;
     app.status = ProcessingStatus::Streaming;
-    app.pending_soft_interrupts = vec![
+    app.enqueue_queued_message(
         "⚠️ File activity: /home/jeremy/jcode/src/lib.rs — amber previously read this file: read lines 1-9999"
             .to_string(),
-    ];
+    );
     let first = render_and_snap(&app, &mut terminal);
     assert!(
         first.contains("1-9999"),
         "expected initial queued alert to render fully"
     );
 
-    app.pending_soft_interrupts = vec![
+    app.queued_messages.clear();
+    app.queued_message_meta.clear();
+    app.enqueue_queued_message(
         "⚠️ File activity: /home/jeremy/jcode/src/lib.rs — amber previously read this file: read lines 1-9"
             .to_string(),
-    ];
+    );
     let second = render_and_snap(&app, &mut terminal);
 
     assert!(
@@ -625,7 +633,10 @@ fn test_local_alt_m_hidden_side_panel_stays_hidden_across_snapshot_update() {
     app.handle_key(KeyCode::Char('m'), KeyModifiers::ALT)
         .unwrap();
     assert_eq!(app.side_panel.focused_page_id.as_deref(), Some("plan"));
-    assert_eq!(app.status_notice(), Some("Side panel: Updated plan".to_string()));
+    assert_eq!(
+        app.status_notice(),
+        Some("Side panel: Updated plan".to_string())
+    );
 }
 
 #[test]
@@ -646,22 +657,29 @@ fn test_local_alt_m_toggles_image_side_panel_visibility() {
     let mut app = create_test_app();
     app.is_remote = true;
     app.side_panel = crate::side_panel::SidePanelSnapshot::default();
-    app.remote_side_pane_images.push(crate::session::RenderedImage {
-        media_type: "image/png".to_string(),
-        data: "image-data".to_string(),
-        label: Some("preview.png".to_string()),
-        source: crate::session::RenderedImageSource::UserInput,
-    });
+    app.remote_side_pane_images
+        .push(crate::session::RenderedImage {
+            media_type: "image/png".to_string(),
+            data: "image-data".to_string(),
+            label: Some("preview.png".to_string()),
+            source: crate::session::RenderedImageSource::UserInput,
+        });
 
     app.handle_key(KeyCode::Char('m'), KeyModifiers::ALT)
         .unwrap();
     assert!(app.side_panel_user_hidden);
-    assert_eq!(app.status_notice(), Some("Image side panel: OFF".to_string()));
+    assert_eq!(
+        app.status_notice(),
+        Some("Image side panel: OFF".to_string())
+    );
 
     app.handle_key(KeyCode::Char('m'), KeyModifiers::ALT)
         .unwrap();
     assert!(!app.side_panel_user_hidden);
-    assert_eq!(app.status_notice(), Some("Image side panel: ON".to_string()));
+    assert_eq!(
+        app.status_notice(),
+        Some("Image side panel: ON".to_string())
+    );
 }
 
 #[test]
