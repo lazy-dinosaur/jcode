@@ -65,6 +65,27 @@ pub(in crate::tui::app) fn restore_prepared_remote_input(
     app.pending_images = prepared.images;
 }
 
+fn rendered_user_input_images(images: &[(String, String)]) -> Vec<crate::session::RenderedImage> {
+    images
+        .iter()
+        .enumerate()
+        .map(|(idx, (media_type, data))| crate::session::RenderedImage {
+            media_type: media_type.clone(),
+            data: data.clone(),
+            label: Some(format!("image {}", idx + 1)),
+            source: crate::session::RenderedImageSource::UserInput,
+        })
+        .collect()
+}
+
+fn append_origin_user_images(app: &mut App, images: &[(String, String)]) {
+    if images.is_empty() {
+        return;
+    }
+    app.remote_side_pane_images
+        .extend(rendered_user_input_images(images));
+}
+
 pub(in crate::tui::app) fn history_matches_pending_startup_prompt(app: &App) -> bool {
     if !app.submit_input_on_startup || !app.pending_images.is_empty() || app.input.trim().is_empty()
     {
@@ -152,9 +173,14 @@ pub(in crate::tui::app) async fn submit_prepared_remote_input(
         title: None,
         tool_data: None,
     });
-    let _ = app
+    let images_for_side_pane = prepared.images.clone();
+    let result = app
         .begin_remote_send(remote, prepared.expanded, prepared.images, false)
         .await;
+    if result.is_ok() {
+        append_origin_user_images(app, &images_for_side_pane);
+    }
+    let _ = result;
     Ok(())
 }
 
@@ -314,8 +340,10 @@ async fn submit_remote_transcript_input(
                 title: None,
                 tool_data: None,
             });
+            let images_for_side_pane = prepared.images.clone();
             app.begin_remote_send(remote, prepared.expanded, prepared.images, false)
                 .await?;
+            append_origin_user_images(app, &images_for_side_pane);
         }
         SendAction::Queue => queue_transcript_input(app),
         SendAction::Interleave => {

@@ -775,10 +775,42 @@ fn test_remote_prompt_defers_while_model_switch_is_in_flight() {
         .expect("prompt should be deferred until ModelChanged arrives");
     assert_eq!(queued.raw_input, "hello after model switch");
     assert_eq!(queued.images.len(), 1);
-    assert!(app
-        .display_messages
-        .iter()
-        .all(|message| message.role != "user"));
+    assert!(
+        app.display_messages
+            .iter()
+            .all(|message| message.role != "user")
+    );
+}
+
+#[test]
+fn test_remote_origin_image_prompt_populates_side_pane_images() {
+    let mut app = create_test_app();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let mut remote = rt.block_on(async { crate::tui::backend::RemoteConnection::dummy() });
+
+    app.is_remote = true;
+    app.side_panel = crate::side_panel::SidePanelSnapshot::default();
+
+    rt.block_on(crate::tui::app::remote::submit_prepared_remote_input(
+        &mut app,
+        &mut remote,
+        crate::tui::app::input::PreparedInput {
+            raw_input: "describe this".to_string(),
+            expanded: "describe this".to_string(),
+            images: vec![("image/png".to_string(), "abc123".to_string())],
+        },
+    ))
+    .expect("remote image prompt should send");
+
+    assert_eq!(app.remote_side_pane_images.len(), 1);
+    let image = &app.remote_side_pane_images[0];
+    assert_eq!(image.media_type, "image/png");
+    assert_eq!(image.data, "abc123");
+    assert_eq!(image.label.as_deref(), Some("image 1"));
+    assert!(matches!(
+        image.source,
+        crate::session::RenderedImageSource::UserInput
+    ));
 }
 
 #[test]
