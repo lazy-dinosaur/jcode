@@ -132,6 +132,18 @@ pub(in crate::tui::app) async fn submit_prepared_remote_input(
     }
 
     app.commit_pending_streaming_assistant_message();
+    if app.queued_messages_held_after_interrupt && app.has_queued_followups() {
+        if !prepared.images.is_empty() {
+            restore_prepared_remote_input(app, prepared);
+            app.set_status_notice("Queued messages are paused — send or edit them first");
+            return Ok(());
+        }
+        app.enqueue_queued_message(prepared.expanded);
+        app.release_held_queued_messages();
+        app.pending_queued_dispatch = true;
+        app.set_status_notice("Queued messages will send first...");
+        return Ok(());
+    }
     app.push_display_message(DisplayMessage {
         role: "user".to_string(),
         content: prepared.raw_input,

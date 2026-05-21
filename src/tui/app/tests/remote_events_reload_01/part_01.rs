@@ -800,6 +800,64 @@ fn test_remote_enter_release_held_queue_while_processing_sends_after_done() {
 }
 
 #[test]
+fn test_remote_new_prompt_appends_behind_pre_interrupt_held_queue() {
+    let mut app = create_test_app();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+    remote.mark_history_loaded();
+
+    app.enqueue_queued_message("second queued before interrupt".to_string());
+    app.queued_messages_held_after_interrupt = true;
+    app.mark_queued_messages_held_after_interrupt();
+    app.input = "third new prompt".to_string();
+    app.cursor_pos = app.input.len();
+
+    rt.block_on(app.handle_remote_key(KeyCode::Enter, KeyModifiers::empty(), &mut remote))
+        .unwrap();
+
+    assert!(!app.queued_messages_held_after_interrupt);
+    assert!(app.pending_queued_dispatch);
+    assert_eq!(
+        app.queued_messages(),
+        &["second queued before interrupt", "third new prompt"]
+    );
+    assert!(!app.is_processing);
+    assert!(app.current_message_id.is_none());
+    assert!(!app.display_messages().iter().any(|message| {
+        message.role == "user" && message.content == "second queued before interrupt"
+    }));
+    assert!(
+        !app.display_messages()
+            .iter()
+            .any(|message| message.role == "user" && message.content == "third new prompt")
+    );
+
+    rt.block_on(remote::handle_tick(&mut app, &mut remote));
+
+    assert_eq!(app.queued_messages(), &["third new prompt"]);
+    assert!(app.is_processing);
+    let second_id = app.current_message_id.expect("second queued send id");
+    assert!(app.display_messages().iter().any(|message| {
+        message.role == "user" && message.content == "second queued before interrupt"
+    }));
+
+    app.handle_server_event(
+        crate::protocol::ServerEvent::Done { id: second_id },
+        &mut remote,
+    );
+    rt.block_on(remote::process_remote_followups(&mut app, &mut remote));
+
+    assert!(app.queued_messages().is_empty());
+    assert!(app.is_processing);
+    assert!(
+        app.display_messages()
+            .iter()
+            .any(|message| { message.role == "user" && message.content == "third new prompt" })
+    );
+}
+
+#[test]
 fn test_remote_interrupted_recovers_pending_interleaves_in_order() {
     let mut app = create_test_app();
     let rt = tokio::runtime::Runtime::new().unwrap();
