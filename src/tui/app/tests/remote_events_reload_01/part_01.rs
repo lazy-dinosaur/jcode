@@ -762,6 +762,44 @@ fn test_remote_enter_resubmits_queued_followup_held_after_interrupt() {
 }
 
 #[test]
+fn test_remote_enter_release_held_queue_while_processing_sends_after_done() {
+    let mut app = create_test_app();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+    remote.mark_history_loaded();
+
+    app.is_processing = true;
+    app.status = ProcessingStatus::Streaming;
+    app.current_message_id = Some(99);
+    app.enqueue_queued_message("queued after current turn".to_string());
+    app.queued_messages_held_after_interrupt = true;
+    app.mark_queued_messages_held_after_interrupt();
+
+    rt.block_on(app.handle_remote_key(KeyCode::Enter, KeyModifiers::empty(), &mut remote))
+        .unwrap();
+
+    assert!(!app.queued_messages_held_after_interrupt);
+    assert!(!app.pending_queued_dispatch);
+    assert_eq!(app.queued_messages(), &["queued after current turn"]);
+    assert!(app.is_processing);
+    assert_eq!(
+        app.status_notice(),
+        Some("Queued message will send after current response...".to_string())
+    );
+
+    app.handle_server_event(crate::protocol::ServerEvent::Done { id: 99 }, &mut remote);
+    rt.block_on(remote::process_remote_followups(&mut app, &mut remote));
+
+    assert!(app.queued_messages().is_empty());
+    assert!(app.is_processing);
+    assert!(app.current_message_id.is_some());
+    assert!(app.display_messages().iter().any(|message| {
+        message.role == "user" && message.content == "queued after current turn"
+    }));
+}
+
+#[test]
 fn test_remote_interrupted_recovers_pending_interleaves_in_order() {
     let mut app = create_test_app();
     let rt = tokio::runtime::Runtime::new().unwrap();

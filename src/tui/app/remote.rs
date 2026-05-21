@@ -180,60 +180,19 @@ pub(super) async fn handle_tick(app: &mut App, remote: &mut RemoteConnection) ->
     }
 
     if app.pending_queued_dispatch {
-        return needs_redraw;
-    }
-
-    if !app.is_processing
-        && !app.queued_messages_held_after_interrupt
-        && !app.queued_messages.is_empty()
-    {
-        let queued_messages = std::mem::take(&mut app.queued_messages);
-        let hidden_reminders = std::mem::take(&mut app.hidden_queued_system_messages);
-        let (messages, reminder, display_system_messages) =
-            super::helpers::partition_queued_messages(queued_messages, hidden_reminders);
-        let combined = messages.join("\n\n");
-        let auto_retry = reminder.is_some() && messages.is_empty();
-        crate::logging::info(&format!(
-            "Sending queued continuation message ({} chars)",
-            combined.len()
-        ));
-        for msg in display_system_messages {
-            app.push_display_message(DisplayMessage::system(msg));
+        if app.is_processing {
+            return needs_redraw;
         }
-        for msg in &messages {
-            app.push_display_message(DisplayMessage::user(msg.clone()));
-        }
-        if begin_remote_send(app, remote, combined, vec![], true, reminder, auto_retry, 0)
-            .await
-            .is_err()
-        {
-            crate::logging::error("Failed to send queued continuation message");
-        }
+        app.pending_queued_dispatch = false;
+        process_remote_followups(app, remote).await;
         needs_redraw = true;
     }
 
-    if !app.is_processing && !app.hidden_queued_system_messages.is_empty() {
-        let reminders = std::mem::take(&mut app.hidden_queued_system_messages);
-        let combined = reminders.join("\n\n");
-        crate::logging::info(&format!(
-            "Sending hidden continuation reminder ({} chars)",
-            combined.len()
-        ));
-        if begin_remote_send(
-            app,
-            remote,
-            String::new(),
-            vec![],
-            true,
-            Some(combined),
-            true,
-            0,
-        )
-        .await
-        .is_err()
-        {
-            crate::logging::error("Failed to send hidden continuation reminder");
-        }
+    if !app.is_processing
+        && (!app.queued_messages_held_after_interrupt && !app.queued_messages.is_empty()
+            || !app.hidden_queued_system_messages.is_empty())
+    {
+        process_remote_followups(app, remote).await;
         needs_redraw = true;
     }
 

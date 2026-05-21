@@ -701,8 +701,12 @@ async fn handle_remote_key_internal(
                 && app.has_queued_followups()
             {
                 app.release_held_queued_messages();
-                app.set_status_notice("Sending queued message...");
-                super::process_remote_followups(app, remote).await;
+                if app.is_processing {
+                    app.set_status_notice("Queued message will send after current response...");
+                } else {
+                    app.set_status_notice("Sending queued message...");
+                    super::process_remote_followups(app, remote).await;
+                }
                 return Ok(());
             }
             if !app.input.is_empty() {
