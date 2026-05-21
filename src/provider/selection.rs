@@ -157,7 +157,9 @@ impl MultiProvider {
             "copilot" => Some("copilot".to_string()),
             "cursor" => Some("cursor".to_string()),
             "bedrock" => Some("bedrock".to_string()),
-            "cli" if provider_display == "Antigravity" => Some("antigravity".to_string()),
+            "cli" | "https" | "antigravity" if provider_display == "Antigravity" => {
+                Some("antigravity".to_string())
+            }
             "openrouter" => Some("openrouter".to_string()),
             method if method.starts_with("openai-compatible") => profile_id.map(ToOwned::to_owned),
             _ => profile_id.map(ToOwned::to_owned),
@@ -269,6 +271,14 @@ mod tests {
             "anthropic/claude-sonnet-4-5@anthropic"
         );
         assert_eq!(openrouter.provider_key.as_deref(), Some("openrouter"));
+
+        let antigravity = MultiProvider::default_model_selection_from_route(
+            "gemini-3.5-flash",
+            "https",
+            "Antigravity",
+        );
+        assert_eq!(antigravity.model_spec, "antigravity:gemini-3.5-flash");
+        assert_eq!(antigravity.provider_key.as_deref(), Some("antigravity"));
     }
 
     #[test]

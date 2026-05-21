@@ -58,7 +58,10 @@ fn available_models_include_gemini_defaults() {
     let provider = GeminiProvider::new();
     let models = provider.available_models();
     assert!(models.contains(&"gemini-3-pro-preview"));
-    assert!(models.contains(&"gemini-3.1-pro-preview"));
+    assert!(models.contains(&"gemini-3.1-pro"));
+    assert!(models.contains(&"gemini-3.1-flash"));
+    assert!(models.contains(&"gemini-3.5-pro"));
+    assert!(models.contains(&"gemini-3.5-flash"));
     assert!(models.contains(&"gemini-2.5-pro"));
     assert!(models.contains(&"gemini-2.5-flash"));
 }
@@ -83,7 +86,10 @@ fn fallback_models_skip_current_model() {
     assert_eq!(
         gemini_fallback_models("gemini-2.5-flash"),
         vec![
-            "gemini-3.1-pro-preview",
+            "gemini-3.5-pro",
+            "gemini-3.5-flash",
+            "gemini-3.1-pro",
+            "gemini-3.1-flash",
             "gemini-3-pro-preview",
             "gemini-2.5-pro",
             "gemini-3-flash-preview",
@@ -99,17 +105,20 @@ fn extract_gemini_model_ids_discovers_nested_models() {
             "manual": {
                 "models": [
                     {"id": "gemini-3-pro-preview"},
-                    {"name": "gemini-3.1-pro-preview"}
+                    {"name": "gemini-3.1-pro"},
+                    {"name": "gemini-3.5-flash"}
                 ]
             },
-            "auto": ["gemini-3-flash-preview", "not-a-model"]
+            "auto": ["gemini-3.1-flash", "gemini-3-flash-preview", "not-a-model"]
         }
     });
 
     assert_eq!(
         extract_gemini_model_ids(&response),
         vec![
-            "gemini-3.1-pro-preview".to_string(),
+            "gemini-3.5-flash".to_string(),
+            "gemini-3.1-pro".to_string(),
+            "gemini-3.1-flash".to_string(),
             "gemini-3-pro-preview".to_string(),
             "gemini-3-flash-preview".to_string(),
         ]
@@ -360,6 +369,34 @@ fn build_tools_rewrites_const_for_gemini_schema_compatibility() {
     assert_eq!(
         parameters["properties"]["tool_calls"]["items"]["oneOf"][0]["properties"]["tool"]["enum"],
         json!(["read"])
+    );
+}
+
+#[test]
+fn build_tools_flattens_nullable_type_arrays_for_proto_schema_compatibility() {
+    let defs = vec![ToolDefinition {
+        name: "nullable_tool".to_string(),
+        description: "nullable schema".to_string(),
+        input_schema: json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+                "maybe_text": { "type": ["string", "null"] },
+                "maybe_count": { "type": ["null", "integer"] }
+            }
+        }),
+    }];
+
+    let built = build_tools_with_schema_mode(&defs, ToolSchemaMode::AntigravityClaude)
+        .expect("antigravity claude tools");
+    let params = &built[0].function_declarations[0].parameters;
+
+    assert_eq!(params.get("$schema"), None);
+    assert_eq!(params["type"], json!("object"));
+    assert_eq!(params["properties"]["maybe_text"]["type"], json!("string"));
+    assert_eq!(
+        params["properties"]["maybe_count"]["type"],
+        json!("integer")
     );
 }
 

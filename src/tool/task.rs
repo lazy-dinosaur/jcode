@@ -1048,7 +1048,7 @@ mod tests {
             "claude-sonnet-4-6"
         ));
         assert!(!super::SubagentTool::should_apply_route_effort(
-            "gemini-3.1-pro-preview"
+            "gemini-3.1-pro"
         ));
         assert!(!super::SubagentTool::should_apply_route_effort(
             "gemini-2.5-flash"
@@ -1268,7 +1268,7 @@ mod tests {
     #[test]
     fn variant_max_on_gemini_resolves_to_thinking_true() {
         let dims = super::SubagentTool::resolve_variant_dimensions_for_provider(
-            "gemini-3.1-pro-preview",
+            "gemini-3.1-pro",
             Some("max"),
         )
         .expect("max on gemini resolves");

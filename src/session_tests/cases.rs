@@ -1306,7 +1306,7 @@ fn test_save_persists_thinking_enabled_true_and_false() -> Result<()> {
         None,
         Some("thinking on".to_string()),
     );
-    on.model = Some("gemini-3.1-pro-preview".to_string());
+    on.model = Some("gemini-3.1-pro".to_string());
     on.thinking_enabled = Some(true);
     on.save()?;
 
@@ -1319,7 +1319,7 @@ fn test_save_persists_thinking_enabled_true_and_false() -> Result<()> {
         None,
         Some("thinking off".to_string()),
     );
-    off.model = Some("gemini-3.1-pro-preview".to_string());
+    off.model = Some("gemini-3.1-pro".to_string());
     off.thinking_enabled = Some(false);
     off.save()?;
 

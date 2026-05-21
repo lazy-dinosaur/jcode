@@ -231,6 +231,8 @@ pub fn normalized_auth_provider_id(provider_hint: Option<&str>) -> Option<&'stat
         crate::provider_catalog::resolve_openai_compatible_profile_selection(provider)
     {
         Some(profile.id)
+    } else if let Some(normalized) = normalized_login_provider_id(provider) {
+        Some(normalized)
     } else if let Some(descriptor) = crate::provider_catalog::resolve_login_provider(provider) {
         normalized_login_provider_id(descriptor.id)
     } else {
@@ -251,7 +253,7 @@ fn normalized_login_provider_id(provider_id: &str) -> Option<&'static str> {
         "cursor" => Some("cursor"),
         "copilot" => Some("copilot"),
         "gemini" => Some("gemini"),
-        "antigravity" => Some("antigravity"),
+        "antigravity" | "agy" => Some("antigravity"),
         _ => None,
     }
 }
@@ -487,6 +489,7 @@ mod tests {
             ("copilot", "copilot", "GitHub Copilot"),
             ("gemini", "gemini", "Google Gemini"),
             ("antigravity", "antigravity", "Antigravity"),
+            ("agy", "antigravity", "Antigravity"),
         ] {
             assert_eq!(normalized_auth_provider_id(Some(hint)), Some(normalized));
             assert_eq!(provider_display_label(Some(hint)).as_deref(), Some(label));

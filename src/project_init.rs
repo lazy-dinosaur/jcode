@@ -494,7 +494,7 @@ high only for code that is hard to validate purely by tests.
 
 const SAMPLE_AGENT_GEMINI_VISUAL_MD: &str = r#"---
 name: gemini-visual
-model: gemini-3.1-pro-preview
+model: gemini-3.1-pro
 thinking: true
 description: Visual / UI / multimodal specialist — screenshots, layouts, diagrams, design critique.
 when:
@@ -598,7 +598,7 @@ mod tests {
         let visual = by_name
             .get("gemini-visual")
             .expect("gemini-visual sample loaded");
-        assert_eq!(visual.model.as_deref(), Some("gemini-3.1-pro-preview"));
+        assert_eq!(visual.model.as_deref(), Some("gemini-3.1-pro"));
         assert_eq!(visual.thinking, Some(true));
 
         let glm = by_name.get("glm-worker").expect("glm-worker sample loaded");

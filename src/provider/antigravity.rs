@@ -7,7 +7,8 @@ use chrono::{DateTime, Utc};
 use jcode_provider_core::CompletionOptions;
 use jcode_provider_gemini::{
     CodeAssistGenerateRequest, CodeAssistGenerateResponse, GeminiFunctionCallingConfig,
-    GeminiToolConfig, VertexGenerateContentRequest,
+    GeminiToolConfig, VertexGenerateContentRequest, gemini3_thinking_generation_config,
+    normalize_antigravity_model_for_api,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -22,10 +23,14 @@ const AVAILABLE_MODELS: &[&str] = &[
     "default",
     "claude-opus-4-6-thinking",
     "claude-sonnet-4-6",
+    "gemini-3.5-pro-high",
+    "gemini-3.5-pro-low",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-low",
+    "gemini-3.1-flash",
     "gemini-3-pro-high",
     "gemini-3-pro-low",
     "gemini-3-flash",
-    "gemini-3.5-flash-low",
     "gemini-3.1-pro-high",
     "gemini-3.1-pro-low",
     "gemini-3-flash-agent",
@@ -180,6 +185,10 @@ fn merge_antigravity_model_ids(models: impl IntoIterator<Item = String>) -> Vec<
 pub(crate) fn is_known_model(model: &str) -> bool {
     let normalized = model.trim();
     !normalized.is_empty() && AVAILABLE_MODELS.contains(&normalized)
+}
+
+fn fallback_default_model_id() -> &'static str {
+    "claude-sonnet-4-6"
 }
 
 fn parse_fetch_available_models_response(
@@ -439,6 +448,38 @@ impl AntigravityProvider {
             .clone()
     }
 
+    fn resolve_model_alias_for_request(&self, model: &str) -> String {
+        let trimmed = model.trim();
+        if !trimmed.eq_ignore_ascii_case(DEFAULT_MODEL) {
+            return trimmed.to_string();
+        }
+
+        let catalog = self.fetched_catalog();
+        catalog
+            .iter()
+            .find(|model| model.id == fallback_default_model_id() && model.available)
+            .or_else(|| {
+                catalog
+                    .iter()
+                    .find(|model| model.id == fallback_default_model_id())
+            })
+            .or_else(|| {
+                catalog
+                    .iter()
+                    .find(|model| model.id.contains("sonnet") && model.available)
+            })
+            .or_else(|| catalog.iter().find(|model| model.id.contains("sonnet")))
+            .or_else(|| {
+                catalog
+                    .iter()
+                    .find(|model| model.recommended && model.available)
+            })
+            .or_else(|| catalog.iter().find(|model| model.available))
+            .or_else(|| catalog.first())
+            .map(|model| model.id.clone())
+            .unwrap_or_else(|| fallback_default_model_id().to_string())
+    }
+
     async fn fetch_available_models_with_project(
         &self,
         access_token: &str,
@@ -544,14 +585,25 @@ impl AntigravityProvider {
                 project_id
             }
         };
+        let requested_model = self.resolve_model_alias_for_request(model);
+        let api_model = normalize_antigravity_model_for_api(&requested_model);
+        let tool_schema_mode = if api_model.model.starts_with("claude-") {
+            super::gemini::ToolSchemaMode::AntigravityClaude
+        } else {
+            super::gemini::ToolSchemaMode::Gemini
+        };
+        let generation_config =
+            gemini3_thinking_generation_config(api_model.thinking_level.as_deref(), false);
+
         let request = CodeAssistGenerateRequest {
-            model: model.to_string(),
+            model: api_model.model.clone(),
             project,
             user_prompt_id: Uuid::new_v4().to_string(),
             request: VertexGenerateContentRequest {
                 contents: super::gemini::build_contents(messages),
                 system_instruction: super::gemini::build_system_instruction(system),
-                tools: super::gemini::build_tools(tools),
+                generation_config,
+                tools: super::gemini::build_tools_with_schema_mode(tools, tool_schema_mode),
                 tool_config: if tools.is_empty() {
                     None
                 } else {
@@ -577,16 +629,22 @@ impl AntigravityProvider {
             .tools
             .as_ref()
             .and_then(|tools| serde_json::to_value(tools).ok());
+        let generation_config_value = request
+            .request
+            .generation_config
+            .as_ref()
+            .and_then(|config| serde_json::to_value(config).ok());
         let payload = json!({
             "model": &request.model,
             "contents": contents_value,
             "system_instruction": system_value.as_ref(),
+            "generation_config": generation_config_value.as_ref(),
             "tools": tools_value.as_ref(),
             "tool_config": &request.request.tool_config,
         });
         super::fingerprint::log_provider_canonical_input(
             "antigravity",
-            model,
+            &api_model.model,
             "gemini_generate_content",
             &payload,
             &content_items,
@@ -750,24 +808,37 @@ impl Provider for AntigravityProvider {
                     .await;
                 return;
             };
+            let stop_reason = candidate
+                .finish_reason
+                .clone()
+                .map(|reason| reason.to_lowercase());
             if let Some(content) = candidate.content {
                 for part in content.parts {
                     if let Some(text) = part.text.filter(|text| !text.is_empty()) {
                         let _ = tx.send(Ok(StreamEvent::TextDelta(text))).await;
                     }
                     if let Some(function_call) = part.function_call {
+                        let raw_call_id = function_call
+                            .id
+                            .clone()
+                            .unwrap_or_else(|| Uuid::new_v4().to_string());
+                        let call_id = crate::message::sanitize_tool_id(&raw_call_id);
                         let _ = tx
-                            .send(Ok(StreamEvent::NativeToolCall {
-                                request_id: function_call
-                                    .id
-                                    .unwrap_or_else(|| Uuid::new_v4().to_string()),
-                                tool_name: function_call.name,
-                                input: function_call.args,
+                            .send(Ok(StreamEvent::ToolUseStart {
+                                id: call_id,
+                                name: function_call.name,
                             }))
                             .await;
+                        let _ = tx
+                            .send(Ok(StreamEvent::ToolInputDelta(
+                                function_call.args.to_string(),
+                            )))
+                            .await;
+                        let _ = tx.send(Ok(StreamEvent::ToolUseEnd)).await;
                     }
                 }
             }
+            let _ = tx.send(Ok(StreamEvent::MessageEnd { stop_reason })).await;
         });
 
         Ok(Box::pin(ReceiverStream::new(rx)))

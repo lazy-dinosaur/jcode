@@ -72,12 +72,113 @@ fn parse_fetch_available_models_response_discovers_metadata_and_priority_order()
 
 #[test]
 fn static_catalog_includes_backend_discovered_antigravity_gemini_3_5_flash_ids() {
-    for model in ["gemini-3-flash-agent", "gemini-3.5-flash-low"] {
+    for model in [
+        "gemini-3.5-flash",
+        "gemini-3.5-flash-low",
+        "gemini-3.5-pro-low",
+        "gemini-3.5-pro-high",
+        "gemini-3.1-flash",
+        "gemini-3-flash-agent",
+    ] {
         assert!(AVAILABLE_MODELS.contains(&model));
         assert!(is_known_model(model));
     }
-    assert!(!AVAILABLE_MODELS.contains(&"gemini-3.5-flash-high"));
-    assert!(!AVAILABLE_MODELS.contains(&"gemini-3.5-flash-medium"));
+    assert!(!AVAILABLE_MODELS.contains(&"antigravity-gemini-3.5-flash"));
+}
+
+#[test]
+fn default_model_alias_resolves_to_recommended_catalog_model_for_requests() {
+    let provider = AntigravityProvider::new();
+    *provider.fetched_catalog.write().expect("catalog lock") = vec![
+        CatalogModel {
+            id: "gemini-3.5-flash".to_string(),
+            display_name: None,
+            reset_time: None,
+            tag_title: None,
+            model_provider: None,
+            max_tokens: None,
+            max_output_tokens: None,
+            recommended: false,
+            available: true,
+            remaining_fraction_milli: Some(1000),
+        },
+        CatalogModel {
+            id: "claude-sonnet-4-6".to_string(),
+            display_name: None,
+            reset_time: None,
+            tag_title: None,
+            model_provider: None,
+            max_tokens: None,
+            max_output_tokens: None,
+            recommended: true,
+            available: true,
+            remaining_fraction_milli: Some(1000),
+        },
+    ];
+
+    assert_eq!(
+        provider.resolve_model_alias_for_request("default"),
+        "claude-sonnet-4-6"
+    );
+    assert_eq!(
+        provider.resolve_model_alias_for_request("gemini-3.5-flash"),
+        "gemini-3.5-flash"
+    );
+}
+
+#[test]
+fn default_model_alias_prefers_sonnet_over_recommended_opus_for_requests() {
+    let provider = AntigravityProvider::new();
+    *provider.fetched_catalog.write().expect("catalog lock") = vec![
+        CatalogModel {
+            id: "claude-opus-4-6-thinking".to_string(),
+            display_name: None,
+            reset_time: None,
+            tag_title: None,
+            model_provider: None,
+            max_tokens: None,
+            max_output_tokens: None,
+            recommended: true,
+            available: true,
+            remaining_fraction_milli: Some(1000),
+        },
+        CatalogModel {
+            id: "claude-sonnet-4-6".to_string(),
+            display_name: None,
+            reset_time: None,
+            tag_title: None,
+            model_provider: None,
+            max_tokens: None,
+            max_output_tokens: None,
+            recommended: false,
+            available: true,
+            remaining_fraction_milli: Some(1000),
+        },
+    ];
+
+    assert_eq!(
+        provider.resolve_model_alias_for_request("default"),
+        "claude-sonnet-4-6"
+    );
+}
+
+#[test]
+fn default_model_alias_never_reaches_generate_content_when_catalog_is_empty() {
+    let provider = AntigravityProvider::new();
+    provider
+        .fetched_catalog
+        .write()
+        .expect("catalog lock")
+        .clear();
+
+    assert_eq!(
+        provider.resolve_model_alias_for_request("default"),
+        fallback_default_model_id()
+    );
+    assert_ne!(
+        provider.resolve_model_alias_for_request("default"),
+        "default"
+    );
 }
 
 #[test]

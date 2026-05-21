@@ -108,6 +108,7 @@ pub enum ProviderChoice {
     Cursor,
     Copilot,
     Gemini,
+    #[value(alias = "agy")]
     Antigravity,
     Google,
     Auto,

@@ -5,7 +5,10 @@ use std::collections::HashSet;
 
 pub const DEFAULT_MODEL: &str = "gemini-2.5-pro";
 pub const AVAILABLE_MODELS: &[&str] = &[
-    "gemini-3.1-pro-preview",
+    "gemini-3.5-pro",
+    "gemini-3.5-flash",
+    "gemini-3.1-pro",
+    "gemini-3.1-flash",
     "gemini-3-pro-preview",
     "gemini-3-flash-preview",
     "gemini-2.5-pro",
@@ -15,7 +18,10 @@ pub const AVAILABLE_MODELS: &[&str] = &[
     "gemini-1.5-flash",
 ];
 pub const FALLBACK_MODELS: &[&str] = &[
-    "gemini-3.1-pro-preview",
+    "gemini-3.5-pro",
+    "gemini-3.5-flash",
+    "gemini-3.1-pro",
+    "gemini-3.1-flash",
     "gemini-3-pro-preview",
     "gemini-2.5-pro",
     "gemini-3-flash-preview",
@@ -139,12 +145,122 @@ pub struct VertexGenerateContentRequest {
     pub contents: Vec<GeminiContent>,
     #[serde(rename = "systemInstruction", skip_serializing_if = "Option::is_none")]
     pub system_instruction: Option<GeminiContent>,
+    #[serde(rename = "generationConfig", skip_serializing_if = "Option::is_none")]
+    pub generation_config: Option<GeminiGenerationConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<GeminiTool>>,
     #[serde(rename = "toolConfig", skip_serializing_if = "Option::is_none")]
     pub tool_config: Option<GeminiToolConfig>,
     #[serde(rename = "session_id", skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GeminiGenerationConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_config: Option<GeminiThinkingConfig>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeminiThinkingConfig {
+    pub include_thoughts: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_level: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_budget: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Gemini3ModelConfig {
+    pub model: String,
+    pub thinking_level: Option<String>,
+}
+
+fn strip_gemini3_tier(model: &str) -> (&str, Option<&str>) {
+    for tier in ["minimal", "low", "medium", "high"] {
+        if let Some(base) = model.strip_suffix(&format!("-{tier}")) {
+            return (base, Some(tier));
+        }
+    }
+    (model, None)
+}
+
+fn is_gemini3_dotted_minor(model: &str) -> bool {
+    let lower = model.to_ascii_lowercase();
+    lower.starts_with("gemini-3.")
+}
+
+fn is_gemini3_legacy_line(model: &str) -> bool {
+    matches!(model, "gemini-3-pro" | "gemini-3-flash")
+}
+
+pub fn normalize_gemini_cli_model_for_api(model: &str) -> String {
+    let mut normalized = model.trim().to_ascii_lowercase();
+    if normalized.ends_with("-preview-customtools") {
+        return normalized;
+    }
+    if is_gemini3_dotted_minor(&normalized)
+        && let Some(base) = normalized.strip_suffix("-preview")
+    {
+        normalized = base.to_string();
+    } else if is_gemini3_legacy_line(&normalized) {
+        normalized.push_str("-preview");
+    }
+    normalized
+}
+
+pub fn normalize_antigravity_model_for_api(model: &str) -> Gemini3ModelConfig {
+    let raw = model.trim().to_ascii_lowercase();
+    let mut normalized = raw
+        .strip_prefix("antigravity-")
+        .or_else(|| raw.strip_prefix("agy-"))
+        .unwrap_or(raw.as_str())
+        .to_string();
+
+    if normalized.ends_with("-preview-customtools") {
+        normalized.truncate(normalized.len() - "-preview-customtools".len());
+    } else if normalized.ends_with("-preview") {
+        normalized.truncate(normalized.len() - "-preview".len());
+    }
+
+    let (base, tier) = strip_gemini3_tier(&normalized);
+    let is_gemini3_pro = base.starts_with("gemini-3") && base.contains("-pro");
+    let is_gemini3_flash = base.starts_with("gemini-3") && base.contains("-flash");
+
+    if is_gemini3_flash {
+        return Gemini3ModelConfig {
+            model: base.to_string(),
+            thinking_level: Some(tier.unwrap_or("low").to_string()),
+        };
+    }
+
+    if is_gemini3_pro {
+        let tier = tier.unwrap_or("low");
+        return Gemini3ModelConfig {
+            model: format!("{base}-{tier}"),
+            thinking_level: Some(tier.to_string()),
+        };
+    }
+
+    Gemini3ModelConfig {
+        model: normalized,
+        thinking_level: None,
+    }
+}
+
+pub fn gemini3_thinking_generation_config(
+    thinking_level: Option<&str>,
+    include_thoughts: bool,
+) -> Option<GeminiGenerationConfig> {
+    thinking_level.map(|level| GeminiGenerationConfig {
+        thinking_config: Some(GeminiThinkingConfig {
+            include_thoughts,
+            thinking_level: Some(level.to_string()),
+            thinking_budget: None,
+        }),
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -424,7 +540,10 @@ mod tests {
         assert_eq!(
             gemini_fallback_models("gemini-2.5-flash"),
             vec![
-                "gemini-3.1-pro-preview",
+                "gemini-3.5-pro",
+                "gemini-3.5-flash",
+                "gemini-3.1-pro",
+                "gemini-3.1-flash",
                 "gemini-3-pro-preview",
                 "gemini-2.5-pro",
                 "gemini-3-flash-preview",
@@ -440,20 +559,99 @@ mod tests {
                 "manual": {
                     "models": [
                         {"id": "gemini-3-pro-preview"},
-                        {"name": "gemini-3.1-pro-preview"}
+                        {"name": "gemini-3.1-pro"},
+                        {"name": "gemini-3.5-flash"}
                     ]
                 },
-                "auto": ["gemini-3-flash-preview", "not-a-model"]
+                "auto": ["gemini-3.1-flash", "gemini-3-flash-preview", "not-a-model"]
             }
         });
 
         assert_eq!(
             extract_gemini_model_ids(&response),
             vec![
-                "gemini-3.1-pro-preview".to_string(),
+                "gemini-3.5-flash".to_string(),
+                "gemini-3.1-pro".to_string(),
+                "gemini-3.1-flash".to_string(),
                 "gemini-3-pro-preview".to_string(),
                 "gemini-3-flash-preview".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn normalizes_gemini_cli_dotted_minor_models_to_bare_names() {
+        assert_eq!(
+            normalize_gemini_cli_model_for_api("gemini-3.1-pro-preview"),
+            "gemini-3.1-pro"
+        );
+        assert_eq!(
+            normalize_gemini_cli_model_for_api("gemini-3.5-flash-preview"),
+            "gemini-3.5-flash"
+        );
+        assert_eq!(
+            normalize_gemini_cli_model_for_api("gemini-3-flash"),
+            "gemini-3-flash-preview"
+        );
+        assert_eq!(
+            normalize_gemini_cli_model_for_api("gemini-3.1-pro-preview-customtools"),
+            "gemini-3.1-pro-preview-customtools"
+        );
+    }
+
+    #[test]
+    fn normalizes_antigravity_gemini3_models_to_backend_ids_and_thinking_levels() {
+        assert_eq!(
+            normalize_antigravity_model_for_api("antigravity-gemini-3.5-flash"),
+            Gemini3ModelConfig {
+                model: "gemini-3.5-flash".to_string(),
+                thinking_level: Some("low".to_string()),
+            }
+        );
+        assert_eq!(
+            normalize_antigravity_model_for_api("agy-gemini-3.5-flash"),
+            Gemini3ModelConfig {
+                model: "gemini-3.5-flash".to_string(),
+                thinking_level: Some("low".to_string()),
+            }
+        );
+        assert_eq!(
+            normalize_antigravity_model_for_api("gemini-3.5-flash-low"),
+            Gemini3ModelConfig {
+                model: "gemini-3.5-flash".to_string(),
+                thinking_level: Some("low".to_string()),
+            }
+        );
+        assert_eq!(
+            normalize_antigravity_model_for_api("gemini-3.5-pro"),
+            Gemini3ModelConfig {
+                model: "gemini-3.5-pro-low".to_string(),
+                thinking_level: Some("low".to_string()),
+            }
+        );
+        assert_eq!(
+            normalize_antigravity_model_for_api("gemini-3.1-pro-preview-customtools"),
+            Gemini3ModelConfig {
+                model: "gemini-3.1-pro-low".to_string(),
+                thinking_level: Some("low".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn serializes_gemini3_thinking_generation_config() {
+        let config = gemini3_thinking_generation_config(Some("low"), false)
+            .expect("thinking config should be produced for Gemini 3 level");
+
+        assert_eq!(
+            serde_json::to_value(config).unwrap(),
+            json!({
+                "thinkingConfig": {
+                    "includeThoughts": false,
+                    "thinkingLevel": "low"
+                }
+            })
+        );
+        assert!(gemini3_thinking_generation_config(None, false).is_none());
     }
 }

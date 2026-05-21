@@ -70,7 +70,7 @@ pub fn parse_provider_hint(value: &str) -> Option<ActiveProvider> {
         "claude" | "anthropic" => Some(ActiveProvider::Claude),
         "openai" => Some(ActiveProvider::OpenAI),
         "copilot" => Some(ActiveProvider::Copilot),
-        "antigravity" => Some(ActiveProvider::Antigravity),
+        "antigravity" | "agy" => Some(ActiveProvider::Antigravity),
         "gemini" => Some(ActiveProvider::Gemini),
         "cursor" => Some(ActiveProvider::Cursor),
         "bedrock" | "aws-bedrock" | "aws_bedrock" => Some(ActiveProvider::Bedrock),
@@ -110,7 +110,7 @@ pub fn provider_from_model_key(key: &str) -> Option<ActiveProvider> {
         "claude" => Some(ActiveProvider::Claude),
         "openai" => Some(ActiveProvider::OpenAI),
         "copilot" => Some(ActiveProvider::Copilot),
-        "antigravity" => Some(ActiveProvider::Antigravity),
+        "antigravity" | "agy" => Some(ActiveProvider::Antigravity),
         "gemini" => Some(ActiveProvider::Gemini),
         "cursor" => Some(ActiveProvider::Cursor),
         "bedrock" => Some(ActiveProvider::Bedrock),
@@ -130,6 +130,8 @@ pub fn explicit_model_provider_prefix(model: &str) -> Option<(ActiveProvider, &'
         Some((ActiveProvider::Copilot, "copilot:", rest))
     } else if let Some(rest) = model.strip_prefix("antigravity:") {
         Some((ActiveProvider::Antigravity, "antigravity:", rest))
+    } else if let Some(rest) = model.strip_prefix("agy:") {
+        Some((ActiveProvider::Antigravity, "agy:", rest))
     } else if let Some(rest) = model.strip_prefix("gemini:") {
         Some((ActiveProvider::Gemini, "gemini:", rest))
     } else if let Some(rest) = model.strip_prefix("cursor:") {
@@ -326,6 +328,12 @@ mod tests {
                 "antigravity:default",
                 ActiveProvider::Antigravity,
                 "antigravity:",
+                "default",
+            ),
+            (
+                "agy:default",
+                ActiveProvider::Antigravity,
+                "agy:",
                 "default",
             ),
             (

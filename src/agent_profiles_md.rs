@@ -575,7 +575,7 @@ mod tests {
         let project = tempfile::TempDir::new().expect("project tempdir");
         write(
             &home.path().join("agents/gemini-fast.md"),
-            "---\nmodel: gemini-3.1-pro-preview\nthinking: true\n---\n",
+            "---\nmodel: gemini-3.1-pro\nthinking: true\n---\n",
         );
         write(
             &project.path().join(".jcode/config.toml"),
@@ -585,6 +585,6 @@ mod tests {
         let agents = Config::load().agents_for_working_dir(Some(project.path()));
         let gf = &agents.profiles["gemini-fast"];
         assert_eq!(gf.thinking, Some(false));
-        assert_eq!(gf.model.as_deref(), Some("gemini-3.1-pro-preview"));
+        assert_eq!(gf.model.as_deref(), Some("gemini-3.1-pro"));
     }
 }

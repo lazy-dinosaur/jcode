@@ -41,6 +41,21 @@ impl Provider for MockProvider {
     fn model(&self) -> String {
         "mock-model".to_string()
     }
+
+    fn available_models_display(&self) -> Vec<String> {
+        vec!["mock-model".to_string()]
+    }
+
+    fn model_routes(&self) -> Vec<crate::provider::ModelRoute> {
+        vec![crate::provider::ModelRoute {
+            model: "mock-model".to_string(),
+            provider: "MockProvider".to_string(),
+            api_method: "mock-oauth".to_string(),
+            available: true,
+            detail: "test route".to_string(),
+            cheapness: None,
+        }]
+    }
 }
 
 #[tokio::test]
@@ -205,6 +220,77 @@ async fn handle_get_history_falls_back_to_persisted_snapshot_when_agent_is_busy(
         crate::env::set_var("JCODE_HOME", prev_home);
     } else {
         crate::env::remove_var("JCODE_HOME");
+    }
+}
+
+#[tokio::test]
+async fn handle_get_history_includes_model_routes_for_remote_picker() {
+    let _guard = crate::storage::lock_test_env();
+    let session_id = "session_history_model_routes";
+    let session = crate::session::Session::create_with_id(
+        session_id.to_string(),
+        None,
+        Some("model routes".to_string()),
+    );
+    let provider: Arc<dyn Provider> = Arc::new(MockProvider);
+    let registry = Registry::empty();
+    let agent = Arc::new(Mutex::new(Agent::new_with_session(
+        provider.clone(),
+        registry,
+        session,
+        None,
+    )));
+    let sessions = Arc::new(RwLock::new(HashMap::from([(
+        session_id.to_string(),
+        Arc::clone(&agent),
+    )])));
+    let client_connections = Arc::new(RwLock::new(HashMap::<String, ClientConnectionInfo>::new()));
+    let client_count = Arc::new(RwLock::new(1usize));
+    let (stream_a, mut stream_b) = crate::transport::stream_pair().expect("stream pair");
+    let (_reader_a, writer_a) = stream_a.into_split();
+    let writer = Arc::new(Mutex::new(writer_a));
+
+    handle_get_history(
+        7,
+        session_id,
+        true,
+        &agent,
+        &provider,
+        &sessions,
+        &client_connections,
+        &client_count,
+        &writer,
+        "server-name",
+        "🔥",
+        None,
+    )
+    .await
+    .expect("history should include model routes");
+
+    drop(writer);
+    let mut bytes = Vec::new();
+    stream_b
+        .read_to_end(&mut bytes)
+        .await
+        .expect("read history event bytes");
+    let mut cursor = std::io::Cursor::new(bytes);
+    let mut line = String::new();
+    cursor.read_line(&mut line).expect("read first line");
+    let event: crate::protocol::ServerEvent =
+        serde_json::from_str(line.trim()).expect("decode history event");
+
+    match event {
+        crate::protocol::ServerEvent::History {
+            available_models,
+            available_model_routes,
+            ..
+        } => {
+            assert_eq!(available_models, vec!["mock-model".to_string()]);
+            assert_eq!(available_model_routes.len(), 1);
+            assert_eq!(available_model_routes[0].provider, "MockProvider");
+            assert_eq!(available_model_routes[0].api_method, "mock-oauth");
+        }
+        other => panic!("expected history event, got {:?}", other),
     }
 }
 

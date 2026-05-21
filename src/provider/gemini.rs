@@ -15,8 +15,9 @@ pub use jcode_provider_gemini::{
     OnboardUserRequest, OnboardUserResponse, ProjectRef, USER_TIER_FREE,
     VertexGenerateContentRequest, VertexGenerateContentResponse, choose_onboard_tier,
     client_metadata, extract_gemini_model_ids, gemini_fallback_models,
-    google_cloud_project_from_env, ineligible_or_project_error, is_gemini_model_id,
-    load_code_assist_request, merge_gemini_model_lists, validate_load_code_assist_response,
+    gemini3_thinking_generation_config, google_cloud_project_from_env, ineligible_or_project_error,
+    is_gemini_model_id, load_code_assist_request, merge_gemini_model_lists,
+    normalize_gemini_cli_model_for_api, validate_load_code_assist_response,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -367,13 +368,21 @@ impl GeminiProvider {
         system: &str,
         resume_session_id: Option<&str>,
     ) -> Result<CodeAssistGenerateResponse> {
+        let api_model = normalize_gemini_cli_model_for_api(model);
+        let generation_config = if api_model.starts_with("gemini-3") {
+            gemini3_thinking_generation_config(Some("low"), false)
+        } else {
+            None
+        };
+
         let request = CodeAssistGenerateRequest {
-            model: model.to_string(),
+            model: api_model.clone(),
             project: state.project_id.clone(),
             user_prompt_id: Uuid::new_v4().to_string(),
             request: VertexGenerateContentRequest {
                 contents: build_contents(messages),
                 system_instruction: build_system_instruction(system),
+                generation_config,
                 tools: build_tools(tools),
                 tool_config: if tools.is_empty() {
                     None
@@ -403,16 +412,22 @@ impl GeminiProvider {
             .tools
             .as_ref()
             .and_then(|tools| serde_json::to_value(tools).ok());
+        let generation_config_value = request
+            .request
+            .generation_config
+            .as_ref()
+            .and_then(|config| serde_json::to_value(config).ok());
         let payload = json!({
             "model": &request.model,
             "contents": contents_value,
             "system_instruction": system_value.as_ref(),
+            "generation_config": generation_config_value.as_ref(),
             "tools": tools_value.as_ref(),
             "tool_config": &request.request.tool_config,
         });
         super::fingerprint::log_provider_canonical_input(
             "gemini",
-            model,
+            &api_model,
             "gemini_generate_content",
             &payload,
             &content_items,
@@ -979,6 +994,19 @@ fn tool_name_from_tool_result(tool_use_id: &str, messages: &[Message]) -> String
 }
 
 pub(crate) fn build_tools(tools: &[ToolDefinition]) -> Option<Vec<GeminiTool>> {
+    build_tools_with_schema_mode(tools, ToolSchemaMode::Gemini)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToolSchemaMode {
+    Gemini,
+    AntigravityClaude,
+}
+
+pub(crate) fn build_tools_with_schema_mode(
+    tools: &[ToolDefinition],
+    mode: ToolSchemaMode,
+) -> Option<Vec<GeminiTool>> {
     if tools.is_empty() {
         return None;
     }
@@ -991,10 +1019,56 @@ pub(crate) fn build_tools(tools: &[ToolDefinition]) -> Option<Vec<GeminiTool>> {
                 // Prompt-visible. Approximate token cost for this field:
                 // tool.description_token_estimate().
                 description: tool.description.clone(),
-                parameters: gemini_compatible_schema(&tool.input_schema),
+                parameters: match mode {
+                    ToolSchemaMode::Gemini => gemini_compatible_schema(&tool.input_schema),
+                    ToolSchemaMode::AntigravityClaude => {
+                        antigravity_claude_compatible_schema(&tool.input_schema)
+                    }
+                },
             })
             .collect(),
     }])
+}
+
+const EMPTY_SCHEMA_PLACEHOLDER_NAME: &str = "_jcode_empty_schema_placeholder";
+const EMPTY_SCHEMA_PLACEHOLDER_DESCRIPTION: &str =
+    "Placeholder argument for tools that do not require any input.";
+
+fn antigravity_claude_compatible_schema(schema: &Value) -> Value {
+    let mut cleaned = antigravity_claude_schema(schema);
+    ensure_object_schema_with_properties(&mut cleaned);
+    cleaned
+}
+
+fn ensure_object_schema_with_properties(schema: &mut Value) {
+    let Value::Object(map) = schema else {
+        *schema = empty_object_tool_schema();
+        return;
+    };
+
+    map.insert("type".to_string(), Value::String("object".to_string()));
+
+    let has_properties = map
+        .get("properties")
+        .and_then(Value::as_object)
+        .is_some_and(|properties| !properties.is_empty());
+
+    if !has_properties {
+        *schema = empty_object_tool_schema();
+    }
+}
+
+fn empty_object_tool_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            EMPTY_SCHEMA_PLACEHOLDER_NAME: {
+                "type": "boolean",
+                "description": EMPTY_SCHEMA_PLACEHOLDER_DESCRIPTION
+            }
+        },
+        "required": [EMPTY_SCHEMA_PLACEHOLDER_NAME]
+    })
 }
 
 fn gemini_compatible_schema(schema: &Value) -> Value {
@@ -1032,6 +1106,8 @@ fn gemini_compatible_schema(schema: &Value) -> Value {
                         "enum".to_string(),
                         Value::Array(vec![gemini_compatible_schema(value)]),
                     );
+                } else if key == "type" {
+                    out.insert(key.clone(), gemini_compatible_type(value));
                 } else {
                     out.insert(key.clone(), gemini_compatible_schema(value));
                 }
@@ -1041,6 +1117,135 @@ fn gemini_compatible_schema(schema: &Value) -> Value {
         Value::Array(items) => Value::Array(items.iter().map(gemini_compatible_schema).collect()),
         _ => schema.clone(),
     }
+}
+
+fn antigravity_claude_schema(schema: &Value) -> Value {
+    match schema {
+        Value::Object(map) => {
+            let mut out = serde_json::Map::new();
+            for (key, value) in map {
+                if matches!(key.as_str(), "anyOf" | "oneOf") {
+                    if let Some(flattened) = flatten_any_or_one_of(value) {
+                        merge_schema_objects(&mut out, flattened);
+                    }
+                } else if key == "allOf" {
+                    if let Some(flattened) = flatten_all_of(value) {
+                        merge_schema_objects(&mut out, flattened);
+                    }
+                } else if key == "const" {
+                    out.insert(
+                        "enum".to_string(),
+                        Value::Array(vec![antigravity_claude_schema(value)]),
+                    );
+                } else if key == "type" {
+                    out.insert(key.clone(), gemini_compatible_type(value));
+                } else if matches!(
+                    key.as_str(),
+                    "$schema"
+                        | "$id"
+                        | "$comment"
+                        | "examples"
+                        | "default"
+                        | "title"
+                        | "additionalProperties"
+                        | "propertyNames"
+                        | "patternProperties"
+                        | "unevaluatedProperties"
+                        | "unevaluatedItems"
+                        | "dependentSchemas"
+                        | "dependentRequired"
+                        | "if"
+                        | "then"
+                        | "else"
+                        | "not"
+                        | "contains"
+                        | "minContains"
+                        | "maxContains"
+                ) {
+                    continue;
+                } else {
+                    out.insert(key.clone(), antigravity_claude_schema(value));
+                }
+            }
+            Value::Object(out)
+        }
+        Value::Array(items) => Value::Array(items.iter().map(antigravity_claude_schema).collect()),
+        _ => schema.clone(),
+    }
+}
+
+fn merge_schema_objects(target: &mut serde_json::Map<String, Value>, schema: Value) {
+    if let Value::Object(map) = schema {
+        for (key, value) in map {
+            target.entry(key).or_insert(value);
+        }
+    }
+}
+
+fn flatten_any_or_one_of(value: &Value) -> Option<Value> {
+    let items = value.as_array()?;
+    if items.is_empty() {
+        return None;
+    }
+
+    let mut enum_values = Vec::new();
+    let mut enum_only = true;
+    for item in items {
+        if let Some(const_value) = item.get("const") {
+            enum_values.push(antigravity_claude_schema(const_value));
+        } else if let Some(values) = item.get("enum").and_then(Value::as_array) {
+            enum_values.extend(values.iter().map(antigravity_claude_schema));
+        } else {
+            enum_only = false;
+            break;
+        }
+    }
+
+    if enum_only && !enum_values.is_empty() {
+        let mut map = serde_json::Map::new();
+        map.insert("type".to_string(), Value::String("string".to_string()));
+        map.insert("enum".to_string(), Value::Array(enum_values));
+        return Some(Value::Object(map));
+    }
+
+    items.first().map(antigravity_claude_schema)
+}
+
+fn flatten_all_of(value: &Value) -> Option<Value> {
+    let items = value.as_array()?;
+    let mut merged = serde_json::Map::new();
+    for item in items {
+        if let Value::Object(map) = antigravity_claude_schema(item) {
+            for (key, value) in map {
+                match (merged.get_mut(&key), value) {
+                    (Some(Value::Object(existing)), Value::Object(new)) if key == "properties" => {
+                        existing.extend(new);
+                    }
+                    (Some(Value::Array(existing)), Value::Array(new)) if key == "required" => {
+                        existing.extend(new);
+                    }
+                    (None, value) => {
+                        merged.insert(key, value);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    Some(Value::Object(merged))
+}
+
+fn gemini_compatible_type(value: &Value) -> Value {
+    if let Value::Array(items) = value {
+        if let Some(non_null) = items
+            .iter()
+            .find(|item| item.as_str().is_some_and(|ty| ty != "null"))
+        {
+            return non_null.clone();
+        }
+        return Value::String("string".to_string());
+    }
+    value.clone()
 }
 
 #[cfg(test)]

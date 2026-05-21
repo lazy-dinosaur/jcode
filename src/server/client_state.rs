@@ -478,12 +478,13 @@ pub(super) async fn send_history(
             (Vec::new(), 0)
         };
 
-        // Model-route expansion can be relatively expensive (provider/account routing,
-        // endpoint cache reads, etc.). The TUI already supports later
-        // AvailableModelsUpdated events, so keep the initial History payload fast and
-        // let the background refresh populate detailed routes asynchronously.
-        let available_model_routes = Vec::new();
-        let model_routes_ms = 0;
+        let model_routes_start = Instant::now();
+        let available_model_routes = if include_model_catalog {
+            agent_guard.model_routes()
+        } else {
+            Vec::new()
+        };
+        let model_routes_ms = model_routes_start.elapsed().as_millis();
 
         let skills_start = Instant::now();
         let skills = agent_guard.available_skill_names();

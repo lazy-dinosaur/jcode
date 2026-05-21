@@ -115,6 +115,56 @@ fn test_available_models_display_uses_route_models_and_filters_placeholder_rows(
 }
 
 #[test]
+fn test_gemini_3_5_flash_has_separate_gemini_and_antigravity_routes() {
+    let gemini_provider = Arc::new(gemini::GeminiProvider::new());
+    gemini_provider
+        .set_model("gemini-3.5-flash")
+        .expect("test Gemini provider should accept Gemini 3.5 Flash");
+
+    let provider = MultiProvider {
+        claude: RwLock::new(None),
+        anthropic: RwLock::new(None),
+        openai: RwLock::new(None),
+        copilot_api: RwLock::new(None),
+        antigravity: RwLock::new(Some(Arc::new(antigravity::AntigravityProvider::new()))),
+        gemini: RwLock::new(Some(gemini_provider)),
+        cursor: RwLock::new(None),
+        bedrock: RwLock::new(None),
+        openrouter: RwLock::new(None),
+        active: RwLock::new(ActiveProvider::Gemini),
+        use_claude_cli: false,
+        startup_notices: RwLock::new(Vec::new()),
+        forced_provider: None,
+    };
+
+    let routes = provider.model_routes();
+    assert!(
+        routes.iter().any(|route| {
+            route.provider == "Gemini"
+                && route.api_method == "code-assist-oauth"
+                && route.model == "gemini-3.5-flash"
+        }),
+        "Gemini route missing for gemini-3.5-flash: {routes:?}"
+    );
+    assert!(
+        routes.iter().any(|route| {
+            route.provider == "Antigravity"
+                && route.api_method == "https"
+                && route.model == "gemini-3.5-flash"
+        }),
+        "Antigravity route missing for gemini-3.5-flash: {routes:?}"
+    );
+    assert!(
+        routes.iter().any(|route| {
+            route.provider == "Antigravity"
+                && route.api_method == "https"
+                && route.model == "gemini-3.5-pro-low"
+        }),
+        "Antigravity route missing for gemini-3.5-pro-low: {routes:?}"
+    );
+}
+
+#[test]
 fn test_cerebras_model_routes_are_profile_scoped_and_unique() {
     with_clean_provider_test_env(|| {
         with_env_var("CEREBRAS_API_KEY", "test-cerebras-key", || {
@@ -145,8 +195,7 @@ fn test_cerebras_model_routes_are_profile_scoped_and_unique() {
             let qwen_routes = routes
                 .iter()
                 .filter(|route| {
-                    route.provider == "Cerebras"
-                        && route.model == "qwen-3-235b-a22b-instruct-2507"
+                    route.provider == "Cerebras" && route.model == "qwen-3-235b-a22b-instruct-2507"
                 })
                 .collect::<Vec<_>>();
             assert_eq!(
