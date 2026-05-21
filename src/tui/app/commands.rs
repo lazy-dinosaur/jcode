@@ -870,8 +870,7 @@ fn handle_btw_command(app: &mut App, trimmed: &str) -> bool {
         }
     }
 
-    app.hidden_queued_system_messages
-        .push(build_btw_system_reminder(question));
+    app.enqueue_hidden_system_message(build_btw_system_reminder(question));
     if app.is_processing {
         app.push_display_message(DisplayMessage::system(
             "Queued `/btw` — answer will appear in the side panel after the current turn."

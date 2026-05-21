@@ -21,6 +21,7 @@ impl App {
         self.submit_input_on_startup = restored.submit_on_restore
             && (!self.input.is_empty() || !self.pending_images.is_empty());
         self.hidden_queued_system_messages = restored.hidden_queued_system_messages;
+        self.hidden_queued_system_meta.clear();
         if let Some(status_notice) = restored.startup_status_notice {
             self.set_status_notice(status_notice);
         } else if self.submit_input_on_startup {
@@ -63,6 +64,8 @@ impl App {
         }
 
         self.queued_messages = queued_messages;
+        self.queued_message_meta.clear();
+        self.ensure_queue_metadata();
         if self.has_queued_followups() {
             if self.is_remote {
                 // Do not synthesize a processing turn for restored remote follow-ups.
@@ -303,7 +306,9 @@ impl App {
             streaming_text: String::new(),
             should_quit: false,
             queued_messages: Vec::new(),
+            queued_message_meta: Vec::new(),
             hidden_queued_system_messages: Vec::new(),
+            hidden_queued_system_meta: Vec::new(),
             current_turn_system_reminder: None,
             streaming_input_tokens: 0,
             streaming_output_tokens: 0,
@@ -677,7 +682,9 @@ impl App {
             streaming_text: String::new(),
             should_quit: false,
             queued_messages: Vec::new(),
+            queued_message_meta: Vec::new(),
             hidden_queued_system_messages: Vec::new(),
+            hidden_queued_system_meta: Vec::new(),
             current_turn_system_reminder: None,
             streaming_input_tokens: 0,
             streaming_output_tokens: 0,
@@ -961,7 +968,7 @@ impl App {
     pub fn set_ambient_mode(&mut self, system_prompt: String, initial_message: String) {
         self.ambient_system_prompt = Some(system_prompt);
         crate::tool::ambient::register_ambient_session(self.session.id.clone());
-        self.queued_messages.push(initial_message);
+        self.enqueue_queued_message(initial_message);
         self.is_processing = true;
         self.status = ProcessingStatus::Sending;
         self.processing_started = Some(Instant::now());
@@ -973,7 +980,7 @@ impl App {
         if message.trim().is_empty() {
             return;
         }
-        self.queued_messages.push(message);
+        self.enqueue_queued_message(message);
         self.is_processing = true;
         self.status = ProcessingStatus::Sending;
         self.processing_started = Some(Instant::now());

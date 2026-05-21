@@ -350,8 +350,14 @@ pub(in crate::tui::app) fn handle_server_event(
             }
             if !app.pending_soft_interrupts.is_empty() {
                 let mut recovered_interrupts = std::mem::take(&mut app.pending_soft_interrupts);
+                let mut recovered_meta: Vec<QueuedPromptMeta> = recovered_interrupts
+                    .iter()
+                    .map(|_| QueuedPromptMeta::soft_interrupt())
+                    .collect();
                 recovered_interrupts.append(&mut app.queued_messages);
                 app.queued_messages = recovered_interrupts;
+                recovered_meta.append(&mut app.queued_message_meta);
+                app.queued_message_meta = recovered_meta;
                 app.pending_soft_interrupt_requests.clear();
             }
             // Interrupt should only stop the active turn. Messages that the user
@@ -360,6 +366,9 @@ pub(in crate::tui::app) fn handle_server_event(
             app.pending_queued_dispatch = false;
             app.queued_messages_held_after_interrupt =
                 !app.queued_messages.is_empty() || !app.hidden_queued_system_messages.is_empty();
+            if app.queued_messages_held_after_interrupt {
+                app.mark_queued_messages_held_after_interrupt();
+            }
             app.push_display_message(DisplayMessage::system("Interrupted"));
             app.is_processing = false;
             app.status = ProcessingStatus::Idle;
@@ -949,8 +958,7 @@ pub(in crate::tui::app) fn handle_server_event(
                     "Reload complete — continuing because a recovery directive was pending."
                         .to_string(),
                 ));
-                app.hidden_queued_system_messages
-                    .push(reload_recovery.continuation_message);
+                app.enqueue_hidden_system_message(reload_recovery.continuation_message);
             } else if pending_reload_reconnect_status.is_some() {
                 let message = match was_interrupted {
                     Some(false) => {

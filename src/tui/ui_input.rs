@@ -205,8 +205,15 @@ pub(super) fn draw_queued(frame: &mut Frame, app: &dyn TuiState, area: Rect, sta
             items.push((QueuedMsgType::Interleave, msg));
         }
     }
-    for msg in app.queued_messages() {
-        items.push((QueuedMsgType::Queued, msg.as_str()));
+    let meta = app.queued_message_meta();
+    for (index, msg) in app.queued_messages().iter().enumerate() {
+        let msg_type = match meta.get(index).map(|m| &m.status) {
+            Some(crate::tui::app::QueuedPromptStatus::HeldAfterInterrupt) => QueuedMsgType::Held,
+            Some(crate::tui::app::QueuedPromptStatus::Sending) => QueuedMsgType::Sending,
+            Some(crate::tui::app::QueuedPromptStatus::Failed) => QueuedMsgType::Failed,
+            _ => QueuedMsgType::Queued,
+        };
+        items.push((msg_type, msg.as_str()));
     }
 
     let pending_count = items.len();
@@ -222,6 +229,9 @@ pub(super) fn draw_queued(frame: &mut Frame, app: &dyn TuiState, area: Rect, sta
                 QueuedMsgType::Pending => ("↻", pending_color(), pending_color(), false),
                 QueuedMsgType::Interleave => ("⚡", asap_color(), asap_color(), false),
                 QueuedMsgType::Queued => ("⏳", queued_color(), queued_color(), true),
+                QueuedMsgType::Held => ("⏸", queued_color(), queued_color(), true),
+                QueuedMsgType::Sending => ("↻", pending_color(), pending_color(), false),
+                QueuedMsgType::Failed => ("⚠", rgb(255, 99, 99), rgb(255, 99, 99), false),
             };
             let mut msg_style = Style::default().fg(msg_color);
             if dim {
@@ -1735,4 +1745,7 @@ enum QueuedMsgType {
     Pending,
     Interleave,
     Queued,
+    Held,
+    Sending,
+    Failed,
 }

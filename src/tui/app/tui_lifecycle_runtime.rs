@@ -347,8 +347,7 @@ impl App {
                     directive.continuation_message.len()
                 ));
                 ReloadContext::log_recovery_outcome("local_restore", session_id, "resumed", detail);
-                self.hidden_queued_system_messages
-                    .push(directive.continuation_message);
+                self.enqueue_hidden_system_message(directive.continuation_message);
                 // Trigger processing so the queued message gets sent to the LLM.
                 // Without this, the local event loop waits for user input since
                 // process_queued_messages only runs inside process_turn_with_input.

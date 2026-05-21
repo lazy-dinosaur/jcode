@@ -448,7 +448,7 @@ fn interrupt_and_queue_synthetic_message(
     app.pending_soft_interrupt_requests.clear();
     app.set_status_notice(status_notice);
     app.push_display_message(DisplayMessage::system(display_notice));
-    app.queued_messages.push(content);
+    app.enqueue_queued_message(content);
 }
 
 pub(super) fn format_improve_status(app: &App) -> String {

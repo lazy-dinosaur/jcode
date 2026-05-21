@@ -257,9 +257,6 @@ impl App {
                                     // Check for cancel request
                                     if self.cancel_requested {
                                         self.cancel_requested = false;
-                                        self.interleave_message = None;
-                                        self.pending_soft_interrupts.clear();
-                                        self.pending_soft_interrupt_requests.clear();
                                         // Save partial assistant response before clearing
                                         if let Some(tool) = current_tool.take() {
                                             tool_calls.push(tool);

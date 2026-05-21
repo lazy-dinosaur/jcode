@@ -695,6 +695,7 @@ fn test_debug_command_message_respects_queue_mode() {
 
     // Test 1: When not processing, should submit directly
     app.is_processing = false;
+    let initial_session_messages = app.session.messages.len();
     let result = app.handle_debug_command("message:hello");
     assert!(
         result.starts_with("OK: submitted message"),
@@ -706,7 +707,7 @@ fn test_debug_command_message_respects_queue_mode() {
     assert!(app.pending_turn);
     assert_eq!(app.messages.len(), 0);
     assert_eq!(app.display_messages.len(), 1);
-    assert_eq!(app.session.messages.len(), 1);
+    assert_eq!(app.session.messages.len(), initial_session_messages + 1);
 
     // Reset for next test
     app.pending_turn = false;

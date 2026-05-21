@@ -844,11 +844,26 @@ fn test_remote_done_recovers_stranded_soft_interrupt_as_queued_followup() {
 
     assert!(app.pending_soft_interrupts.is_empty());
     assert!(app.pending_soft_interrupt_requests.is_empty());
-    assert!(app.queued_messages().is_empty());
+    assert_eq!(app.queued_messages(), &["queued later"]);
     assert!(app.is_processing);
     assert!(matches!(app.status, ProcessingStatus::Sending));
-    assert!(app.current_message_id.is_some());
+    let first_id = app.current_message_id.expect("first queued send id");
 
+    let user_messages: Vec<&str> = app
+        .display_messages()
+        .iter()
+        .filter(|msg| msg.role == "user")
+        .map(|msg| msg.content.as_str())
+        .collect();
+    assert_eq!(user_messages, vec!["late interleave"]);
+
+    app.handle_server_event(
+        crate::protocol::ServerEvent::Done { id: first_id },
+        &mut remote,
+    );
+    rt.block_on(remote::process_remote_followups(&mut app, &mut remote));
+
+    assert!(app.queued_messages().is_empty());
     let user_messages: Vec<&str> = app
         .display_messages()
         .iter()

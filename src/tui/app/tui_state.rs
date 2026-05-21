@@ -334,6 +334,10 @@ impl crate::tui::TuiState for App {
         &self.pending_soft_interrupts
     }
 
+    fn queued_message_meta(&self) -> &[crate::tui::app::QueuedPromptMeta] {
+        &self.queued_message_meta
+    }
+
     fn scroll_offset(&self) -> usize {
         self.scroll_offset
     }

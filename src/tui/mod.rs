@@ -121,6 +121,9 @@ pub trait TuiState {
     fn interleave_message(&self) -> Option<&str>;
     /// Messages sent as soft interrupt but not yet injected (shown in queue preview)
     fn pending_soft_interrupts(&self) -> &[String];
+    fn queued_message_meta(&self) -> &[crate::tui::app::QueuedPromptMeta] {
+        &[]
+    }
     fn scroll_offset(&self) -> usize;
     /// Whether auto-scroll to bottom is paused (user scrolled up during streaming)
     fn auto_scroll_paused(&self) -> bool;

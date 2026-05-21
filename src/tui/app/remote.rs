@@ -1,9 +1,10 @@
 #![cfg_attr(test, allow(clippy::items_after_test_module))]
 
 use super::{
-    App, DisplayMessage, PendingReloadReconnectStatus, ProcessingStatus, RemoteResumeActivity,
-    SendAction, ctrl_bracket_fallback_to_esc, input, parse_rate_limit_error,
-    remote_notifications::present_swarm_notification, spawn_in_new_terminal,
+    App, DisplayMessage, PendingReloadReconnectStatus, ProcessingStatus, QueuedPromptMeta,
+    QueuedPromptStatus, RemoteResumeActivity, SendAction, ctrl_bracket_fallback_to_esc, input,
+    parse_rate_limit_error, remote_notifications::present_swarm_notification,
+    spawn_in_new_terminal,
 };
 use crate::bus::BusEvent;
 use crate::message::ToolCall;
@@ -904,13 +905,20 @@ pub(super) async fn process_remote_followups(app: &mut App, remote: &mut RemoteC
             }
         }
     } else if !app.queued_messages_held_after_interrupt && !app.queued_messages.is_empty() {
-        let queued_messages = std::mem::take(&mut app.queued_messages);
-        let hidden_reminders = std::mem::take(&mut app.hidden_queued_system_messages);
+        app.ensure_queue_metadata();
+        let queued_message = app.queued_messages.remove(0);
+        let mut queued_meta = if app.queued_message_meta.is_empty() {
+            QueuedPromptMeta::user(&queued_message)
+        } else {
+            app.queued_message_meta.remove(0)
+        };
+        queued_meta.status = QueuedPromptStatus::Sending;
+        queued_meta.attempts = queued_meta.attempts.saturating_add(1);
         let (messages, reminder, display_system_messages) =
-            super::helpers::partition_queued_messages(queued_messages, hidden_reminders);
+            super::helpers::partition_queued_messages(vec![queued_message], vec![]);
         let combined = messages.join("\n\n");
         let preserve_visible_turn = super::commands::queued_messages_are_only_pokes(&messages);
-        let auto_retry = reminder.is_some() && messages.is_empty();
+        let auto_retry = false;
         for msg in display_system_messages {
             app.push_display_message(DisplayMessage::system(msg));
         }
@@ -926,22 +934,47 @@ pub(super) async fn process_remote_followups(app: &mut App, remote: &mut RemoteC
                 app.visible_turn_started = Some(Instant::now());
             }
         }
-        let _ =
-            begin_remote_send(app, remote, combined, vec![], true, reminder, auto_retry, 0).await;
+        if let Err(error) =
+            begin_remote_send(app, remote, combined, vec![], true, reminder, auto_retry, 0).await
+        {
+            queued_meta.status = QueuedPromptStatus::Failed;
+            queued_meta.last_error = Some(error.to_string());
+            app.queued_messages.insert(0, messages.join("\n\n"));
+            app.queued_message_meta.insert(0, queued_meta);
+            app.push_display_message(DisplayMessage::error(format!(
+                "Failed to send queued message: {}",
+                error
+            )));
+            app.set_status_notice("Queued message failed — edit or retry");
+        }
     } else if !app.hidden_queued_system_messages.is_empty() {
-        let reminders = std::mem::take(&mut app.hidden_queued_system_messages);
-        let combined = reminders.join("\n\n");
-        let _ = begin_remote_send(
+        app.ensure_queue_metadata();
+        let reminder = app.hidden_queued_system_messages.remove(0);
+        let _meta = if app.hidden_queued_system_meta.is_empty() {
+            QueuedPromptMeta::hidden_system()
+        } else {
+            app.hidden_queued_system_meta.remove(0)
+        };
+        if let Err(error) = begin_remote_send(
             app,
             remote,
             String::new(),
             vec![],
             true,
-            Some(combined),
+            Some(reminder.clone()),
             true,
             0,
         )
-        .await;
+        .await
+        {
+            app.hidden_queued_system_messages.insert(0, reminder);
+            app.hidden_queued_system_meta
+                .insert(0, QueuedPromptMeta::hidden_system());
+            app.push_display_message(DisplayMessage::error(format!(
+                "Failed to send queued system reminder: {}",
+                error
+            )));
+        }
     }
 }
 
@@ -1159,7 +1192,7 @@ fn queue_message_for_reconnect(app: &mut App) {
     }
 
     let prepared = input::take_prepared_input(app);
-    app.queued_messages.push(prepared.expanded);
+    app.enqueue_queued_message(prepared.expanded);
 
     let queued_count = app.queued_messages.len();
     app.set_status_notice(format!(

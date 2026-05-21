@@ -609,7 +609,7 @@ async fn handle_remote_key_internal(
             match app.send_action(true) {
                 SendAction::Submit => submit_prepared_remote_input(app, remote, prepared).await?,
                 SendAction::Queue => {
-                    app.queued_messages.push(prepared.expanded);
+                    app.enqueue_queued_message(prepared.expanded);
                 }
                 SendAction::Interleave => {
                     app.send_interleave_now(prepared.expanded, remote).await;
@@ -700,7 +700,7 @@ async fn handle_remote_key_internal(
                 && app.queued_messages_held_after_interrupt
                 && app.has_queued_followups()
             {
-                app.queued_messages_held_after_interrupt = false;
+                app.release_held_queued_messages();
                 app.set_status_notice("Sending queued message...");
                 super::process_remote_followups(app, remote).await;
                 return Ok(());
@@ -2000,7 +2000,7 @@ async fn handle_remote_key_internal(
                                 app.push_display_message(DisplayMessage::system(
                                     app_mod::commands::improve_stop_notice(true),
                                 ));
-                                app.queued_messages.push(stop_prompt);
+                                app.enqueue_queued_message(stop_prompt);
                             } else {
                                 app.push_display_message(DisplayMessage::system(
                                     app_mod::commands::improve_stop_notice(false),
@@ -2182,7 +2182,7 @@ async fn handle_remote_key_internal(
                                 app.push_display_message(DisplayMessage::system(
                                     app_mod::commands::refactor_stop_notice(true),
                                 ));
-                                app.queued_messages.push(stop_prompt);
+                                app.enqueue_queued_message(stop_prompt);
                             } else {
                                 app.push_display_message(DisplayMessage::system(
                                     app_mod::commands::refactor_stop_notice(false),
@@ -2269,7 +2269,7 @@ async fn handle_remote_key_internal(
                         submit_prepared_remote_input(app, remote, prepared).await?
                     }
                     SendAction::Queue => {
-                        app.queued_messages.push(prepared.expanded);
+                        app.enqueue_queued_message(prepared.expanded);
                     }
                     SendAction::Interleave => {
                         app.send_interleave_now(prepared.expanded, remote).await;

@@ -58,6 +58,67 @@ pub(super) struct BorrowedTerminalCommand {
     pub cwd: PathBuf,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum QueuedPromptKind {
+    User,
+    HiddenSystem,
+    SoftInterrupt,
+    Poke,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum QueuedPromptStatus {
+    Queued,
+    HeldAfterInterrupt,
+    Sending,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct QueuedPromptMeta {
+    pub id: String,
+    pub kind: QueuedPromptKind,
+    pub status: QueuedPromptStatus,
+    pub attempts: u8,
+    pub last_error: Option<String>,
+}
+
+impl QueuedPromptMeta {
+    pub fn user(text: &str) -> Self {
+        Self {
+            id: id::new_id("qmsg"),
+            kind: if crate::tui::app::commands::is_poke_message(text) {
+                QueuedPromptKind::Poke
+            } else {
+                QueuedPromptKind::User
+            },
+            status: QueuedPromptStatus::Queued,
+            attempts: 0,
+            last_error: None,
+        }
+    }
+
+    pub fn hidden_system() -> Self {
+        Self {
+            id: id::new_id("qsys"),
+            kind: QueuedPromptKind::HiddenSystem,
+            status: QueuedPromptStatus::Queued,
+            attempts: 0,
+            last_error: None,
+        }
+    }
+
+    pub fn soft_interrupt() -> Self {
+        Self {
+            id: id::new_id("qint"),
+            kind: QueuedPromptKind::SoftInterrupt,
+            status: QueuedPromptStatus::Queued,
+            attempts: 0,
+            last_error: None,
+        }
+    }
+}
+
 mod auth;
 mod auth_account_picker_saved_accounts;
 mod catchup;
@@ -566,7 +627,9 @@ pub struct App {
     should_quit: bool,
     // Message queueing
     queued_messages: Vec<String>,
+    queued_message_meta: Vec<QueuedPromptMeta>,
     hidden_queued_system_messages: Vec<String>,
+    hidden_queued_system_meta: Vec<QueuedPromptMeta>,
     current_turn_system_reminder: Option<String>,
     // Live token usage (per turn)
     streaming_input_tokens: u64,

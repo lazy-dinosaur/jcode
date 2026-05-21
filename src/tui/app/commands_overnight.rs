@@ -72,7 +72,7 @@ pub(super) fn handle_overnight_command(app: &mut App, trimmed: &str) -> bool {
 fn start_visible_overnight_turn(app: &mut App, content: String) {
     if app.is_remote {
         app.commit_pending_streaming_assistant_message();
-        app.queued_messages.push(content);
+        app.enqueue_queued_message(content);
         app.set_status_notice("Overnight queued in current remote session");
         return;
     }
@@ -406,7 +406,7 @@ impl App {
             "🌙 Overnight auto-poking: {}. `/overnight cancel` to stop.",
             overnight_phase_label(phase)
         )));
-        self.queued_messages.push(prompt);
+        self.enqueue_queued_message(prompt);
         self.pending_queued_dispatch = true;
         self.overnight_auto_poke = Some(state);
         true

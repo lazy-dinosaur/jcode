@@ -1,8 +1,9 @@
 #![cfg_attr(test, allow(clippy::items_after_test_module))]
 
 use super::{
-    App, ContentBlock, DisplayMessage, Message, ProcessingStatus, Role, SendAction, SkillRegistry,
-    commands, ctrl_bracket_fallback_to_esc, is_context_limit_error, remote,
+    App, ContentBlock, DisplayMessage, Message, ProcessingStatus, QueuedPromptMeta,
+    QueuedPromptStatus, Role, SendAction, SkillRegistry, commands, ctrl_bracket_fallback_to_esc,
+    is_context_limit_error, remote,
 };
 use crate::bus::{
     Bus, BusEvent, ClipboardPasteCompleted, ClipboardPasteContent, ClipboardPasteKind,
@@ -704,7 +705,7 @@ pub(super) fn expand_paste_placeholders(app: &mut App, input: &str) -> String {
 
 pub(super) fn queue_message(app: &mut App) {
     let prepared = take_prepared_input(app);
-    app.queued_messages.push(prepared.expanded);
+    app.enqueue_queued_message(prepared.expanded);
 }
 
 pub(super) fn retrieve_pending_message_for_edit(app: &mut App) -> bool {
@@ -726,6 +727,7 @@ pub(super) fn retrieve_pending_message_for_edit(app: &mut App) -> bool {
         parts.push(msg);
     }
     parts.extend(std::mem::take(&mut app.queued_messages));
+    app.queued_message_meta.clear();
 
     if !parts.is_empty() {
         app.input = parts.join("\n\n");
@@ -766,6 +768,70 @@ pub(super) fn handle_shift_enter(app: &mut App) {
 }
 
 impl App {
+    pub(super) fn ensure_queue_metadata(&mut self) {
+        if self.queued_message_meta.len() > self.queued_messages.len() {
+            self.queued_message_meta
+                .truncate(self.queued_messages.len());
+        }
+        while self.queued_message_meta.len() < self.queued_messages.len() {
+            let idx = self.queued_message_meta.len();
+            let text = self
+                .queued_messages
+                .get(idx)
+                .map(String::as_str)
+                .unwrap_or("");
+            self.queued_message_meta.push(QueuedPromptMeta::user(text));
+        }
+        if self.hidden_queued_system_meta.len() > self.hidden_queued_system_messages.len() {
+            self.hidden_queued_system_meta
+                .truncate(self.hidden_queued_system_messages.len());
+        }
+        while self.hidden_queued_system_meta.len() < self.hidden_queued_system_messages.len() {
+            self.hidden_queued_system_meta
+                .push(QueuedPromptMeta::hidden_system());
+        }
+    }
+
+    pub(super) fn enqueue_queued_message(&mut self, content: String) {
+        let meta = QueuedPromptMeta::user(&content);
+        self.queued_messages.push(content);
+        self.queued_message_meta.push(meta);
+    }
+
+    pub(super) fn enqueue_hidden_system_message(&mut self, content: String) {
+        self.hidden_queued_system_messages.push(content);
+        self.hidden_queued_system_meta
+            .push(QueuedPromptMeta::hidden_system());
+    }
+
+    pub(super) fn mark_queued_messages_held_after_interrupt(&mut self) {
+        self.ensure_queue_metadata();
+        for meta in &mut self.queued_message_meta {
+            if meta.status == QueuedPromptStatus::Queued {
+                meta.status = QueuedPromptStatus::HeldAfterInterrupt;
+            }
+        }
+        for meta in &mut self.hidden_queued_system_meta {
+            if meta.status == QueuedPromptStatus::Queued {
+                meta.status = QueuedPromptStatus::HeldAfterInterrupt;
+            }
+        }
+    }
+
+    pub(super) fn release_held_queued_messages(&mut self) {
+        self.ensure_queue_metadata();
+        for meta in self
+            .queued_message_meta
+            .iter_mut()
+            .chain(self.hidden_queued_system_meta.iter_mut())
+        {
+            if meta.status == QueuedPromptStatus::HeldAfterInterrupt {
+                meta.status = QueuedPromptStatus::Queued;
+            }
+        }
+        self.queued_messages_held_after_interrupt = false;
+    }
+
     pub(super) fn has_queued_followups(&self) -> bool {
         self.interleave_message.is_some()
             || !self.queued_messages.is_empty()
@@ -795,8 +861,7 @@ impl App {
             incomplete.len(),
             if incomplete.len() == 1 { "" } else { "s" },
         )));
-        self.queued_messages
-            .push(super::commands::build_poke_message(&incomplete));
+        self.enqueue_queued_message(super::commands::build_poke_message(&incomplete));
         self.pending_queued_dispatch = true;
         true
     }
@@ -805,6 +870,7 @@ impl App {
         if self.has_queued_followups() {
             self.pending_queued_dispatch = false;
             self.queued_messages_held_after_interrupt = true;
+            self.mark_queued_messages_held_after_interrupt();
         }
     }
 
@@ -2208,18 +2274,35 @@ impl App {
         self.pending_turn = true;
     }
 
-    /// Process all queued messages (combined into a single request)
-    /// Loops until queue is empty (in case more messages are queued during processing)
+    /// Process queued messages as independent FIFO requests.
+    /// Loops until queue is empty (in case more messages are queued during processing).
     pub(super) async fn process_queued_messages(
         &mut self,
         terminal: &mut DefaultTerminal,
         event_stream: &mut EventStream,
     ) {
         while !self.queued_messages.is_empty() || !self.hidden_queued_system_messages.is_empty() {
-            // Combine all currently queued messages into one, treating [SYSTEM: ...]
-            // startup continuations as system reminders rather than user turns.
-            let queued_messages = std::mem::take(&mut self.queued_messages);
-            let hidden_reminders = std::mem::take(&mut self.hidden_queued_system_messages);
+            self.ensure_queue_metadata();
+            // Send exactly one queued item per turn so queued rows map 1:1 to user-visible turns.
+            let queued_messages = if !self.queued_messages.is_empty() {
+                let msg = self.queued_messages.remove(0);
+                if !self.queued_message_meta.is_empty() {
+                    let _ = self.queued_message_meta.remove(0);
+                }
+                vec![msg]
+            } else {
+                Vec::new()
+            };
+            let hidden_reminders =
+                if queued_messages.is_empty() && !self.hidden_queued_system_messages.is_empty() {
+                    let reminder = self.hidden_queued_system_messages.remove(0);
+                    if !self.hidden_queued_system_meta.is_empty() {
+                        let _ = self.hidden_queued_system_meta.remove(0);
+                    }
+                    vec![reminder]
+                } else {
+                    Vec::new()
+                };
             let (messages, reminder, display_system_messages) =
                 super::helpers::partition_queued_messages(queued_messages, hidden_reminders);
             let combined = messages.join("\n\n");

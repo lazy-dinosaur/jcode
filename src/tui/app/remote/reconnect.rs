@@ -839,8 +839,7 @@ pub(in crate::tui::app) fn finalize_reload_reconnect(
             app.push_display_message(DisplayMessage::system(
                 "Reload complete — continuing because reload recovery was pending.",
             ));
-            app.hidden_queued_system_messages
-                .push(directive.continuation_message);
+            app.enqueue_hidden_system_message(directive.continuation_message);
         } else {
             ReloadContext::log_recovery_outcome(
                 "tui_reconnect",

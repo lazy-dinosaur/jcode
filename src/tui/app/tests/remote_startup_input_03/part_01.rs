@@ -102,18 +102,20 @@ fn test_multiple_queued_messages() {
 }
 
 #[test]
-fn test_queue_message_combines_on_send() {
+fn test_queue_message_tracks_independent_items_with_metadata() {
     let mut app = create_test_app();
 
-    // Queue two messages directly
-    app.queued_messages.push("message one".to_string());
-    app.queued_messages.push("message two".to_string());
+    app.enqueue_queued_message("message one".to_string());
+    app.enqueue_queued_message("message two".to_string());
 
-    // Take and combine (simulating what process_queued_messages does)
-    let combined = std::mem::take(&mut app.queued_messages).join("\n\n");
-
-    assert_eq!(combined, "message one\n\nmessage two");
-    assert!(app.queued_messages.is_empty());
+    assert_eq!(app.queued_messages(), &["message one", "message two"]);
+    assert_eq!(app.queued_message_meta.len(), 2);
+    assert_ne!(app.queued_message_meta[0].id, app.queued_message_meta[1].id);
+    assert!(
+        app.queued_message_meta
+            .iter()
+            .all(|meta| meta.status == crate::tui::app::QueuedPromptStatus::Queued)
+    );
 }
 
 #[test]
@@ -352,7 +354,11 @@ fn test_tui_system_prompt_uses_session_working_dir_for_agents_md() {
     let split = app.build_system_prompt_split(None);
 
     assert!(split.static_part.contains("follow repo agents policy"));
-    assert!(split.static_part.contains("# AGENTS and Private Instruction Priority"));
+    assert!(
+        split
+            .static_part
+            .contains("# AGENTS and Private Instruction Priority")
+    );
     assert!(app.context_info.has_project_agents_md);
     assert!(app.context_info.project_agents_md_chars > 0);
 }
