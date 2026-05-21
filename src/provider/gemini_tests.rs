@@ -381,6 +381,33 @@ fn gemini_response_deserializes_content_without_role() {
 }
 
 #[test]
+fn gemini_response_deserializes_content_without_parts() {
+    let response: CodeAssistGenerateResponse = serde_json::from_str(
+        r#"{
+            "response": {
+                "candidates": [
+                    {
+                        "content": {
+                            "role": "model"
+                        }
+                    }
+                ]
+            }
+        }"#,
+    )
+    .expect("Gemini content parts may be omitted in empty Antigravity responses");
+
+    let content = response
+        .response
+        .and_then(|response| response.candidates)
+        .and_then(|mut candidates| candidates.pop())
+        .and_then(|candidate| candidate.content)
+        .expect("candidate content");
+    assert_eq!(content.role, "model");
+    assert!(content.parts.is_empty());
+}
+
+#[test]
 fn build_tools_uses_function_declarations() {
     let defs = vec![ToolDefinition {
         name: "read".to_string(),

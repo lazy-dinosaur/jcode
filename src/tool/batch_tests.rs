@@ -148,6 +148,26 @@ fn test_normalize_merges_sibling_args_into_existing_parameters() {
 }
 
 #[test]
+fn test_normalize_accepts_object_valued_tool_names() {
+    let input = json!({
+        "tool_calls": [
+            {"tool": {"name": "bash"}, "parameters": {"command": "pwd"}},
+            {"tool": {"recipient_name": "agentgrep"}, "parameters": {"mode": "grep", "query": "MemoCard"}}
+        ]
+    });
+
+    let normalized = normalize_batch_input(input);
+    let parsed: BatchInput = serde_json::from_value(normalized).unwrap();
+    let names: Vec<String> = parsed
+        .tool_calls
+        .into_iter()
+        .map(|call| call.resolved_parameters().0)
+        .collect();
+
+    assert_eq!(names, vec!["bash", "agentgrep"]);
+}
+
+#[test]
 fn test_reject_duplicate_subcalls_blocks_exact_same_work() {
     let subcalls = vec![
         (0, "read".to_string(), json!({"file_path": "src/lib.rs"})),

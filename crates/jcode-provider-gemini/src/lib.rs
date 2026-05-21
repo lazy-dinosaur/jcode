@@ -273,6 +273,7 @@ pub fn gemini3_thinking_generation_config(
 pub struct GeminiContent {
     #[serde(default)]
     pub role: String,
+    #[serde(default)]
     pub parts: Vec<GeminiPart>,
 }
 

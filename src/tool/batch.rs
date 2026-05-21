@@ -116,6 +116,22 @@ fn normalize_batch_input(mut input: Value) -> Value {
                     obj.insert("tool".to_string(), name_val);
                 }
 
+                if let Some(Value::Object(tool_obj)) = obj.get("tool") {
+                    let normalized_tool = [
+                        "tool",
+                        "name",
+                        "recipient_name",
+                        "function",
+                        "function_name",
+                    ]
+                    .iter()
+                    .find_map(|key| tool_obj.get(*key).and_then(Value::as_str))
+                    .map(str::to_string);
+                    if let Some(tool_name) = normalized_tool {
+                        obj.insert("tool".to_string(), Value::String(tool_name));
+                    }
+                }
+
                 if !obj.contains_key("parameters") {
                     for alias in ["arguments", "args", "input"] {
                         if let Some(alias_val) = obj.remove(alias) {
