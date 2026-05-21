@@ -10,7 +10,7 @@ fn test_ctx(root: &Path) -> ToolContext {
         working_dir: Some(root.to_path_buf()),
         stdin_request_tx: None,
         graceful_shutdown_signal: None,
-            turn_cancel_signal: None,
+        turn_cancel_signal: None,
         execution_mode: super::super::ToolExecutionMode::Direct,
     }
 }
@@ -439,6 +439,22 @@ fn input_defaults_missing_mode_to_grep() {
 
     assert_eq!(params.mode, "grep");
     assert_eq!(params.query.as_deref(), Some("auth_status"));
+}
+
+#[test]
+fn normalize_agentgrep_input_accepts_query_aliases_and_strings() {
+    let cases = [
+        (json!({"pattern": "SheetEditForm"}), "SheetEditForm"),
+        (json!({"search": "ReservationDetail"}), "ReservationDetail"),
+        (json!({"query": "", "intent": "PatientMemo"}), "PatientMemo"),
+        (json!("MemoCard"), "MemoCard"),
+    ];
+
+    for (input, expected) in cases {
+        let params: AgentGrepInput = serde_json::from_value(normalize_agentgrep_input(input))
+            .expect("normalized agentgrep input should deserialize");
+        assert_eq!(params.query.as_deref(), Some(expected));
+    }
 }
 
 #[test]

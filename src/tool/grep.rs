@@ -28,6 +28,45 @@ struct GrepInput {
     include: Option<String>,
 }
 
+fn string_value_trimmed(value: &Value) -> Option<String> {
+    value
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn normalize_grep_input(input: Value) -> Value {
+    match input {
+        Value::String(pattern) if !pattern.trim().is_empty() => json!({ "pattern": pattern }),
+        Value::Object(mut obj) => {
+            let pattern_is_empty = obj
+                .get("pattern")
+                .and_then(Value::as_str)
+                .is_none_or(|value| value.trim().is_empty());
+            if pattern_is_empty {
+                for alias in ["query", "search", "term", "text", "contains"] {
+                    if let Some(pattern) = obj.get(alias).and_then(string_value_trimmed) {
+                        obj.insert("pattern".to_string(), Value::String(pattern));
+                        break;
+                    }
+                }
+            }
+            let pattern_is_empty = obj
+                .get("pattern")
+                .and_then(Value::as_str)
+                .is_none_or(|value| value.trim().is_empty());
+            if pattern_is_empty
+                && let Some(intent) = obj.get("intent").and_then(string_value_trimmed)
+            {
+                obj.insert("pattern".to_string(), Value::String(intent));
+            }
+            Value::Object(obj)
+        }
+        other => other,
+    }
+}
+
 #[derive(Clone)]
 struct GrepResult {
     file: String,
@@ -68,6 +107,7 @@ impl Tool for GrepTool {
     }
 
     async fn execute(&self, input: Value, ctx: ToolContext) -> Result<ToolOutput> {
+        let input = normalize_grep_input(input);
         let params: GrepInput = serde_json::from_value(input)?;
 
         let regex_pattern = params.pattern.clone();
@@ -248,4 +288,28 @@ fn is_binary_extension(path: &Path) -> bool {
         return binary_exts.contains(&ext.as_str());
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_grep_input_accepts_pattern_aliases_and_strings() {
+        let cases = [
+            (json!({"query": "SheetEditForm"}), "SheetEditForm"),
+            (json!({"search": "ReservationDetail"}), "ReservationDetail"),
+            (
+                json!({"pattern": "", "intent": "PatientMemo"}),
+                "PatientMemo",
+            ),
+            (json!("MemoCard"), "MemoCard"),
+        ];
+
+        for (input, expected) in cases {
+            let params: GrepInput = serde_json::from_value(normalize_grep_input(input))
+                .expect("normalized grep input should deserialize");
+            assert_eq!(params.pattern, expected);
+        }
+    }
 }

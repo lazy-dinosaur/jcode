@@ -78,6 +78,44 @@ fn default_agentgrep_mode() -> String {
     "grep".to_string()
 }
 
+fn string_value_trimmed(value: &Value) -> Option<String> {
+    value
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn normalize_agentgrep_input(input: Value) -> Value {
+    match input {
+        Value::String(query) if !query.trim().is_empty() => json!({ "query": query }),
+        Value::Object(mut obj) => {
+            let query_is_empty = obj
+                .get("query")
+                .and_then(Value::as_str)
+                .is_none_or(|value| value.trim().is_empty());
+            if query_is_empty {
+                for alias in ["pattern", "search", "term", "text", "contains", "symbol"] {
+                    if let Some(query) = obj.get(alias).and_then(string_value_trimmed) {
+                        obj.insert("query".to_string(), Value::String(query));
+                        break;
+                    }
+                }
+            }
+            let query_is_empty = obj
+                .get("query")
+                .and_then(Value::as_str)
+                .is_none_or(|value| value.trim().is_empty());
+            if query_is_empty && let Some(intent) = obj.get("intent").and_then(string_value_trimmed)
+            {
+                obj.insert("query".to_string(), Value::String(intent));
+            }
+            Value::Object(obj)
+        }
+        other => other,
+    }
+}
+
 #[derive(Debug, Serialize, Default)]
 struct AgentGrepHarnessContext {
     version: u32,
@@ -234,6 +272,7 @@ impl Tool for AgentGrepTool {
     }
 
     async fn execute(&self, input: Value, ctx: ToolContext) -> Result<ToolOutput> {
+        let input = normalize_agentgrep_input(input);
         let params: AgentGrepInput = serde_json::from_value(input)?;
         let context_path = maybe_write_context_json(&params, &ctx)?;
         let request = summarize_agentgrep_request(&params, &ctx, context_path.as_deref());
