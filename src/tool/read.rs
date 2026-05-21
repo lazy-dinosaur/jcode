@@ -22,6 +22,7 @@ impl ReadTool {
 
 #[derive(Deserialize)]
 struct ReadInput {
+    #[serde(alias = "path", alias = "file", alias = "filename", alias = "filepath")]
     file_path: String,
     #[serde(default)]
     start_line: Option<usize>,
@@ -31,6 +32,24 @@ struct ReadInput {
     offset: Option<usize>,
     #[serde(default)]
     limit: Option<usize>,
+}
+
+fn normalize_read_input(input: Value) -> Value {
+    match input {
+        Value::String(path) => json!({ "file_path": path }),
+        Value::Object(mut obj) => {
+            if !obj.contains_key("file_path") {
+                for alias in ["path", "file", "filename", "filepath"] {
+                    if let Some(value) = obj.remove(alias) {
+                        obj.insert("file_path".to_string(), value);
+                        break;
+                    }
+                }
+            }
+            Value::Object(obj)
+        }
+        other => other,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,6 +168,7 @@ impl Tool for ReadTool {
     }
 
     async fn execute(&self, input: Value, ctx: ToolContext) -> Result<ToolOutput> {
+        let input = normalize_read_input(input);
         let params: ReadInput = serde_json::from_value(input)?;
         let range = normalize_read_range(&params)?;
 

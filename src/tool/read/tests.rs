@@ -10,7 +10,7 @@ fn make_ctx(working_dir: std::path::PathBuf) -> ToolContext {
         working_dir: Some(working_dir),
         stdin_request_tx: None,
         graceful_shutdown_signal: None,
-            turn_cancel_signal: None,
+        turn_cancel_signal: None,
         execution_mode: ToolExecutionMode::Direct,
     }
 }
@@ -187,6 +187,30 @@ fn read_tool_description_advertises_supported_file_types() {
         .as_str()
         .expect("file_path should have a description");
     assert_eq!(file_path_description, "Path to a file.");
+}
+
+#[tokio::test]
+async fn read_tool_accepts_common_path_aliases() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(temp.path().join("sample.txt"), "hello\n").expect("write sample file");
+
+    for input in [
+        json!({"path": "sample.txt"}),
+        json!({"file": "sample.txt"}),
+        json!({"filename": "sample.txt"}),
+        json!({"filepath": "sample.txt"}),
+        json!("sample.txt"),
+    ] {
+        let output = ReadTool::new()
+            .execute(input, make_ctx(temp.path().to_path_buf()))
+            .await
+            .expect("read alias input should succeed");
+        assert!(
+            output.output.contains("hello"),
+            "output={:?}",
+            output.output
+        );
+    }
 }
 
 #[tokio::test]

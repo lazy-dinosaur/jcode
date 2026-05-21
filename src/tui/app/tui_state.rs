@@ -15,20 +15,6 @@ enum WidgetProviderKind {
     Unknown,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::widget_model_uses_spark_quota;
-
-    #[test]
-    fn spark_quota_widget_only_matches_codex_spark_models() {
-        assert!(!widget_model_uses_spark_quota(Some("gpt-5.5")));
-        assert!(!widget_model_uses_spark_quota(Some("gpt-5.5-high")));
-        assert!(!widget_model_uses_spark_quota(Some("gpt-5.3-codex")));
-        assert!(widget_model_uses_spark_quota(Some("gpt-5.3-codex-spark")));
-        assert!(widget_model_uses_spark_quota(Some("GPT-5.3-CODEX-SPARK")));
-    }
-}
-
 impl WidgetProviderKind {
     fn from_provider_key(raw: Option<&str>) -> Self {
         match raw.map(|provider| provider.trim().to_ascii_lowercase()) {
@@ -48,13 +34,6 @@ impl WidgetProviderKind {
 struct WidgetRouteInfo {
     provider: WidgetProviderKind,
     is_remote: bool,
-    uses_spark_model: bool,
-}
-
-fn widget_model_uses_spark_quota(model: Option<&str>) -> bool {
-    model
-        .map(|model| model.to_ascii_lowercase().contains("codex-spark"))
-        .unwrap_or(false)
 }
 
 impl App {
@@ -156,7 +135,6 @@ impl App {
         WidgetRouteInfo {
             provider,
             is_remote: uses_remote_widget_metadata,
-            uses_spark_model: widget_model_uses_spark_quota(model),
         }
     }
 
@@ -267,19 +245,11 @@ impl App {
                         .seven_day
                         .as_ref()
                         .and_then(|w| w.resets_at.clone()),
-                    spark: route
-                        .uses_spark_model
-                        .then(|| openai_usage.spark.as_ref().map(|w| w.usage_ratio))
-                        .flatten(),
-                    spark_resets_at: route
-                        .uses_spark_model
-                        .then(|| {
-                            openai_usage
-                                .spark
-                                .as_ref()
-                                .and_then(|w| w.resets_at.clone())
-                        })
-                        .flatten(),
+                    spark: openai_usage.spark.as_ref().map(|w| w.usage_ratio),
+                    spark_resets_at: openai_usage
+                        .spark
+                        .as_ref()
+                        .and_then(|w| w.resets_at.clone()),
                     total_cost: 0.0,
                     input_tokens: 0,
                     output_tokens: 0,

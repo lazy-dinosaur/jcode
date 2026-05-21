@@ -1029,12 +1029,15 @@ pub fn model_availability_for_account(model: &str) -> AccountModelAvailability {
 const OPENAI_MODEL_PREFERENCE: &[&str] = &[
     "gpt-5.5",
     "gpt-5.4",
-    "gpt-5.3-codex-spark",
     "gpt-5.3-codex",
     "gpt-5.2-codex",
     "gpt-5.1-codex-max",
     "gpt-5.1-codex",
 ];
+
+fn is_openai_spark_model(model: &str) -> bool {
+    model.to_ascii_lowercase().contains("codex-spark")
+}
 
 /// Get the best available OpenAI model, falling back through the preference list.
 /// Returns None if the dynamic model list hasn't been fetched yet.
@@ -1047,16 +1050,19 @@ pub fn get_best_available_openai_model() -> Option<String> {
     let models = cache.get(&scope)?;
 
     for preferred in OPENAI_MODEL_PREFERENCE {
-        if models.contains(*preferred) && runtime_model_unavailability(preferred).is_none() {
+        if !is_openai_spark_model(preferred)
+            && models.contains(*preferred)
+            && runtime_model_unavailability(preferred).is_none()
+        {
             return Some(preferred.to_string());
         }
     }
 
     let mut sorted_models: Vec<String> = models.iter().cloned().collect();
     sorted_models.sort();
-    sorted_models
-        .into_iter()
-        .find(|model| runtime_model_unavailability(model).is_none())
+    sorted_models.into_iter().find(|model| {
+        !is_openai_spark_model(model) && runtime_model_unavailability(model).is_none()
+    })
 }
 
 /// Return the context window size in tokens for a given model, if known.
@@ -1117,6 +1123,21 @@ pub fn provider_for_model_with_hint(
         Some("cursor")
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{OPENAI_MODEL_PREFERENCE, is_openai_spark_model};
+
+    #[test]
+    fn openai_automatic_fallback_preferences_exclude_spark_models() {
+        assert!(is_openai_spark_model("gpt-5.3-codex-spark"));
+        assert!(
+            OPENAI_MODEL_PREFERENCE
+                .iter()
+                .all(|model| !is_openai_spark_model(model))
+        );
     }
 }
 

@@ -790,27 +790,10 @@ impl OpenAIProvider {
         match availability.state {
             crate::provider::AccountModelAvailabilityState::Unavailable => {
                 if let Some(detail) = availability.reason {
-                    crate::logging::info(&format!(
-                        "Model '{}' currently unavailable ({}); selecting fallback",
+                    crate::logging::warn(&format!(
+                        "Model '{}' currently unavailable for this account ({}); not falling back automatically",
                         current, detail
                     ));
-                }
-                if let Some(fallback) = crate::provider::get_best_available_openai_model()
-                    && fallback != current
-                {
-                    crate::logging::info(&format!(
-                        "Model '{}' not available for account; falling back to '{}'",
-                        current, fallback
-                    ));
-                    {
-                        let mut w = self.model.write().await;
-                        *w = fallback.clone();
-                    }
-                    self.clear_persistent_ws(
-                        "automatic OpenAI model fallback changed the response chain",
-                    )
-                    .await;
-                    return fallback;
                 }
             }
             crate::provider::AccountModelAvailabilityState::Unknown => {
