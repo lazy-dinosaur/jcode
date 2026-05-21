@@ -453,7 +453,11 @@ impl Registry {
     /// sub-tool calls (e.g. inside `batch`), but our registry uses internal
     /// names (`grep`, `bash`). This mapping ensures both forms resolve
     /// correctly.
-    fn resolve_tool_name(name: &str) -> &str {
+    pub(crate) fn resolve_tool_name(name: &str) -> &str {
+        let name = name
+            .strip_prefix("default_api:")
+            .or_else(|| name.strip_prefix("default_api."))
+            .unwrap_or(name);
         match name {
             "communicate" | "swarm_now" => "swarm",
             "pwd" | "cd" => "cwd",

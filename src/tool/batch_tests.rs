@@ -100,6 +100,30 @@ fn test_normalize_arguments_aliases_to_parameters() {
 }
 
 #[test]
+fn test_resolved_parameters_strips_default_api_tool_namespace() {
+    let input = json!({
+        "tool_calls": [
+            {"tool": "default_api:bash", "parameters": {"command": "pwd"}},
+            {"tool": "default_api:read", "parameters": {"file_path": "Cargo.toml"}},
+            {"tool": "default_api:mcp__filesystem__list_directory", "parameters": {"path": "."}}
+        ]
+    });
+
+    let normalized = normalize_batch_input(input);
+    let parsed: BatchInput = serde_json::from_value(normalized).unwrap();
+    let names: Vec<String> = parsed
+        .tool_calls
+        .into_iter()
+        .map(|call| call.resolved_parameters().0)
+        .collect();
+
+    assert_eq!(
+        names,
+        vec!["bash", "read", "mcp__filesystem__list_directory"]
+    );
+}
+
+#[test]
 fn test_reject_duplicate_subcalls_blocks_exact_same_work() {
     let subcalls = vec![
         (0, "read".to_string(), json!({"file_path": "src/lib.rs"})),

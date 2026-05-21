@@ -93,10 +93,11 @@ struct ToolCallInput {
 
 impl ToolCallInput {
     fn resolved_parameters(self) -> (String, Value) {
+        let tool = Registry::resolve_tool_name(&self.tool).to_string();
         if let Some(params) = self.parameters {
-            return (self.tool, params);
+            return (tool, params);
         }
-        (self.tool, Value::Object(Default::default()))
+        (tool, Value::Object(Default::default()))
     }
 }
 
@@ -220,7 +221,7 @@ impl Tool for BatchTool {
 
         // Check for disallowed tools
         for tc in &params.tool_calls {
-            if tc.tool == "batch" {
+            if Registry::resolve_tool_name(&tc.tool) == "batch" {
                 return Err(anyhow::anyhow!("Cannot batch the 'batch' tool"));
             }
         }

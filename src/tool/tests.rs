@@ -469,6 +469,12 @@ fn test_resolve_tool_name_oauth_aliases() {
     assert_eq!(Registry::resolve_tool_name("grep"), "grep");
     assert_eq!(Registry::resolve_tool_name("batch"), "batch");
     assert_eq!(Registry::resolve_tool_name("memory"), "memory");
+    assert_eq!(Registry::resolve_tool_name("default_api:bash"), "bash");
+    assert_eq!(Registry::resolve_tool_name("default_api.read"), "read");
+    assert_eq!(
+        Registry::resolve_tool_name("default_api:mcp__filesystem__list_directory"),
+        "mcp__filesystem__list_directory"
+    );
 }
 
 #[tokio::test]
