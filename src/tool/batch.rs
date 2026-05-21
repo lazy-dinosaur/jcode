@@ -125,6 +125,39 @@ fn normalize_batch_input(mut input: Value) -> Value {
                     }
                 }
 
+                if obj.contains_key("parameters") && obj.contains_key("tool") {
+                    let keys: Vec<String> = obj
+                        .keys()
+                        .filter(|k| *k != "tool" && *k != "parameters")
+                        .cloned()
+                        .collect();
+                    let mut moved = Vec::new();
+                    for key in keys {
+                        if let Some(val) = obj.remove(&key) {
+                            moved.push((key, val));
+                        }
+                    }
+                    if !moved.is_empty() {
+                        match obj.get_mut("parameters") {
+                            Some(Value::Object(params)) => {
+                                for (key, val) in moved {
+                                    params.entry(key).or_insert(val);
+                                }
+                            }
+                            Some(params) if params.is_null() => {
+                                let params_map = moved.into_iter().collect();
+                                *params = Value::Object(params_map);
+                            }
+                            Some(_) => {
+                                for (key, val) in moved {
+                                    obj.insert(key, val);
+                                }
+                            }
+                            None => {}
+                        }
+                    }
+                }
+
                 if !obj.contains_key("parameters") && obj.contains_key("tool") {
                     let tool_name = obj.get("tool").cloned();
                     let mut params = serde_json::Map::new();

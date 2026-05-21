@@ -124,6 +124,30 @@ fn test_resolved_parameters_strips_default_api_tool_namespace() {
 }
 
 #[test]
+fn test_normalize_merges_sibling_args_into_existing_parameters() {
+    let input = json!({
+        "tool_calls": [
+            {"tool": "bash", "parameters": {}, "command": "pwd"},
+            {"tool": "agentgrep", "parameters": {"mode": "grep"}, "query": "RoomCell"}
+        ]
+    });
+
+    let normalized = normalize_batch_input(input);
+    let parsed: BatchInput = serde_json::from_value(normalized).unwrap();
+    let calls: Vec<(String, Value)> = parsed
+        .tool_calls
+        .into_iter()
+        .map(|call| call.resolved_parameters())
+        .collect();
+
+    assert_eq!(calls[0].0, "bash");
+    assert_eq!(calls[0].1["command"], "pwd");
+    assert_eq!(calls[1].0, "agentgrep");
+    assert_eq!(calls[1].1["mode"], "grep");
+    assert_eq!(calls[1].1["query"], "RoomCell");
+}
+
+#[test]
 fn test_reject_duplicate_subcalls_blocks_exact_same_work() {
     let subcalls = vec![
         (0, "read".to_string(), json!({"file_path": "src/lib.rs"})),
