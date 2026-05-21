@@ -687,6 +687,31 @@ fn test_save_and_restore_reload_state_preserves_interleave_and_pending_retry() {
 }
 
 #[test]
+fn test_apply_restored_reload_input_clears_stale_rate_limit_timer() {
+    let mut app = create_test_app();
+    let session_id = format!("test-reload-rate-limit-apply-{}", std::process::id());
+
+    app.rate_limit_pending_message = Some(PendingRemoteMessage {
+        content: "retry after reload".to_string(),
+        images: vec![],
+        is_system: false,
+        system_reminder: None,
+        auto_retry: true,
+        retry_attempts: 1,
+        retry_at: None,
+    });
+    app.rate_limit_reset = Some(std::time::Instant::now() + std::time::Duration::from_secs(30));
+    app.save_input_for_reload(&session_id);
+
+    let restored = App::restore_input_for_reload(&session_id).expect("reload state should exist");
+    app.apply_restored_reload_input(restored);
+
+    assert!(app.rate_limit_pending_message.is_none());
+    assert!(app.rate_limit_reset.is_none());
+    assert_eq!(app.queued_messages(), &["retry after reload"]);
+}
+
+#[test]
 fn test_save_and_restore_reload_state_promotes_inflight_prompt_to_startup_submission() {
     let mut app = create_test_app();
     let session_id = format!("test-reload-inflight-prompt-{}", std::process::id());

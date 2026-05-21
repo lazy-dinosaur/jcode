@@ -31,8 +31,15 @@ impl App {
             self.push_display_message(DisplayMessage::system(message).with_title(title));
         }
         self.interleave_message = None;
-        self.rate_limit_pending_message = restored.rate_limit_pending_message;
-        self.rate_limit_reset = restored.rate_limit_reset;
+        // Rate-limit timers are tied to a specific live provider request. After a
+        // process reload/reconnect, the provider state and wall-clock reset can be
+        // stale, and restoring the timer makes the UI keep claiming it is rate
+        // limited even when the new session is not. Recover the pending content as
+        // queued work instead of preserving the countdown/auto-retry state.
+        let restored_rate_limit_pending_message = restored.rate_limit_pending_message;
+        let _discarded_rate_limit_reset = restored.rate_limit_reset;
+        self.rate_limit_pending_message = None;
+        self.rate_limit_reset = None;
         self.observe_page_markdown = restored.observe_page_markdown;
         self.observe_page_updated_at_ms = restored.observe_page_updated_at_ms;
         self.set_observe_mode_enabled(restored.observe_mode_enabled, restored.observe_mode_enabled);
@@ -41,6 +48,15 @@ impl App {
 
         let mut queued_messages = restored.queued_messages;
         let mut recovered_followups = Vec::new();
+        if let Some(pending) = restored_rate_limit_pending_message
+            && !pending.content.trim().is_empty()
+        {
+            if pending.is_system {
+                self.hidden_queued_system_messages.push(pending.content);
+            } else {
+                recovered_followups.push(pending.content);
+            }
+        }
         if let Some(interleave_message) = restored.interleave_message
             && !interleave_message.trim().is_empty()
         {
