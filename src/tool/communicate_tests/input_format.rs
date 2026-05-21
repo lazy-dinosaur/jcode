@@ -46,6 +46,15 @@ fn communicate_input_accepts_delivery_and_share_append() {
 }
 
 #[test]
+fn communicate_input_defaults_missing_action_to_safe_read() {
+    let parsed: CommunicateInput = serde_json::from_value(serde_json::json!({
+        "intent": "Check recent swarm broadcast messages"
+    }))
+    .expect("missing action should default to read");
+    assert_eq!(parsed.action, "read");
+}
+
+#[test]
 fn communicate_input_accepts_spawn_if_needed() {
     let parsed: CommunicateInput = serde_json::from_value(serde_json::json!({
         "action": "assign_task",
@@ -378,7 +387,7 @@ fn format_members_includes_status_and_detail() {
         working_dir: None,
         stdin_request_tx: None,
         graceful_shutdown_signal: None,
-            turn_cancel_signal: None,
+        turn_cancel_signal: None,
         execution_mode: ToolExecutionMode::Direct,
     };
 

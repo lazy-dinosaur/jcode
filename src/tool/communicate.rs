@@ -666,6 +666,7 @@ impl CommunicateTool {
 
 #[derive(Deserialize)]
 struct CommunicateInput {
+    #[serde(default = "default_communicate_action")]
     action: String,
     #[serde(default)]
     key: Option<String>,
@@ -731,6 +732,10 @@ struct CommunicateInput {
     validation: Option<String>,
     #[serde(default)]
     follow_up: Option<String>,
+}
+
+fn default_communicate_action() -> String {
+    "read".to_string()
 }
 
 impl CommunicateInput {
