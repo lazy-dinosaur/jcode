@@ -5,7 +5,7 @@ use super::protocol::{ContentBlock, McpToolDef};
 use crate::tool::{Tool, ToolContext, ToolOutput};
 use anyhow::Result;
 use async_trait::async_trait;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -33,6 +33,46 @@ impl McpTool {
         let text = format!("{:#}", error).to_ascii_lowercase();
         text.contains("unknowntool") || text.contains("unknown tool")
     }
+
+    fn normalize_input(&self, input: Value) -> Value {
+        normalize_mcp_input(&self.server_name, &self.tool_def.name, input)
+    }
+}
+
+fn normalize_mcp_input(server_name: &str, tool_name: &str, input: Value) -> Value {
+    if server_name != "filesystem" {
+        return input;
+    }
+
+    match input {
+        Value::String(value) if tool_name == "search_files" => {
+            json!({ "path": ".", "pattern": value })
+        }
+        Value::String(value) => json!({ "path": value }),
+        Value::Object(mut obj) => {
+            if !obj.contains_key("path") {
+                for alias in ["file_path", "file", "filename", "dir", "directory"] {
+                    if let Some(value) = obj.remove(alias) {
+                        obj.insert("path".to_string(), value);
+                        break;
+                    }
+                }
+            }
+            if tool_name == "search_files" && !obj.contains_key("pattern") {
+                for alias in ["query", "glob", "include", "name"] {
+                    if let Some(value) = obj.remove(alias) {
+                        obj.insert("pattern".to_string(), value);
+                        break;
+                    }
+                }
+            }
+            if tool_name == "search_files" && !obj.contains_key("path") {
+                obj.insert("path".to_string(), Value::String(".".to_string()));
+            }
+            Value::Object(obj)
+        }
+        other => other,
+    }
 }
 
 #[async_trait]
@@ -56,6 +96,7 @@ impl Tool for McpTool {
         } else {
             input
         };
+        let input = self.normalize_input(input);
         let manager = self.manager.read().await;
         let result = match manager
             .call_tool(&self.server_name, &self.tool_def.name, input.clone())
@@ -174,5 +215,33 @@ mod tests {
         assert!(!McpTool::is_unknown_tool_error(&anyhow::anyhow!(
             "MCP error -32000: timeout"
         )));
+    }
+
+    #[test]
+    fn normalizes_filesystem_path_aliases() {
+        assert_eq!(
+            normalize_mcp_input(
+                "filesystem",
+                "read_text_file",
+                json!({"file_path": "README.md"})
+            ),
+            json!({"path": "README.md"})
+        );
+        assert_eq!(
+            normalize_mcp_input("filesystem", "list_directory", json!("src")),
+            json!({"path": "src"})
+        );
+    }
+
+    #[test]
+    fn normalizes_filesystem_search_aliases() {
+        assert_eq!(
+            normalize_mcp_input("filesystem", "search_files", json!("*.tsx")),
+            json!({"path": ".", "pattern": "*.tsx"})
+        );
+        assert_eq!(
+            normalize_mcp_input("filesystem", "search_files", json!({"query": "*.md"})),
+            json!({"path": ".", "pattern": "*.md"})
+        );
     }
 }

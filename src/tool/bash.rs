@@ -549,6 +549,12 @@ impl BashTool {
 
 #[derive(Deserialize)]
 struct BashInput {
+    #[serde(
+        alias = "cmd",
+        alias = "script",
+        alias = "shell",
+        alias = "command_line"
+    )]
     command: String,
     #[serde(default)]
     intent: Option<String>,
@@ -560,6 +566,24 @@ struct BashInput {
     notify: bool,
     #[serde(default)]
     wake: bool,
+}
+
+fn normalize_bash_input(input: Value) -> Value {
+    match input {
+        Value::String(command) => json!({ "command": command }),
+        Value::Object(mut obj) => {
+            if !obj.contains_key("command") {
+                for alias in ["cmd", "script", "shell", "command_line"] {
+                    if let Some(value) = obj.remove(alias) {
+                        obj.insert("command".to_string(), value);
+                        break;
+                    }
+                }
+            }
+            Value::Object(obj)
+        }
+        other => other,
+    }
 }
 
 fn default_true() -> bool {
@@ -616,6 +640,7 @@ impl Tool for BashTool {
     }
 
     async fn execute(&self, input: Value, ctx: ToolContext) -> Result<ToolOutput> {
+        let input = normalize_bash_input(input);
         let mut params: BashInput = serde_json::from_value(input)?;
         let run_in_background = params.run_in_background.unwrap_or(false);
 

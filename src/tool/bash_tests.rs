@@ -47,6 +47,24 @@ async fn test_basic_command_no_stdin() {
 }
 
 #[tokio::test]
+async fn test_command_alias_inputs() {
+    let tool = BashTool::new();
+    for input in [
+        json!({"cmd": "echo alias-cmd"}),
+        json!({"script": "echo alias-script"}),
+        json!({"shell": "echo alias-shell"}),
+        json!({"command_line": "echo alias-command-line"}),
+        json!("echo alias-string"),
+    ] {
+        let result = tool
+            .execute(input, make_ctx(None))
+            .await
+            .expect("bash alias input should execute");
+        assert!(result.output.contains("alias-"), "output={}", result.output);
+    }
+}
+
+#[tokio::test]
 async fn test_basic_command_with_unused_stdin_channel() {
     let (tx, _rx) = mpsc::unbounded_channel();
     let tool = BashTool::new();
