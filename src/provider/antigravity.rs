@@ -400,6 +400,7 @@ pub struct AntigravityProvider {
     client: reqwest::Client,
     model: Arc<RwLock<String>>,
     fetched_catalog: Arc<RwLock<Vec<CatalogModel>>>,
+    tool_thought_signatures: Arc<RwLock<HashMap<String, String>>>,
 }
 
 impl Clone for AntigravityProvider {
@@ -408,6 +409,7 @@ impl Clone for AntigravityProvider {
             client: self.client.clone(),
             model: self.model.clone(),
             fetched_catalog: self.fetched_catalog.clone(),
+            tool_thought_signatures: self.tool_thought_signatures.clone(),
         }
     }
 }
@@ -465,6 +467,7 @@ impl AntigravityProvider {
             client: crate::provider::shared_http_client(),
             model: Arc::new(RwLock::new(model)),
             fetched_catalog: Arc::new(RwLock::new(Vec::new())),
+            tool_thought_signatures: Arc::new(RwLock::new(HashMap::new())),
         };
         provider.seed_cached_catalog();
         provider
@@ -628,12 +631,21 @@ impl AntigravityProvider {
         let generation_config =
             gemini3_thinking_generation_config(api_model.thinking_level.as_deref(), false);
 
+        let tool_thought_signatures = self
+            .tool_thought_signatures
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+
         let request = CodeAssistGenerateRequest {
             model: api_model.model.clone(),
             project,
             user_prompt_id: Uuid::new_v4().to_string(),
             request: VertexGenerateContentRequest {
-                contents: super::gemini::build_contents(messages),
+                contents: super::gemini::build_contents_with_thought_signatures(
+                    messages,
+                    &tool_thought_signatures,
+                ),
                 system_instruction: super::gemini::build_system_instruction(system),
                 generation_config,
                 tools: super::gemini::build_tools_with_schema_mode(tools, tool_schema_mode),
@@ -772,6 +784,7 @@ impl Provider for AntigravityProvider {
         let provider = self.clone();
         let cancel_signal = options.cancel_signal();
         let (tx, rx) = mpsc::channel::<Result<crate::message::StreamEvent>>(100);
+        let tool_thought_signatures = Arc::clone(&self.tool_thought_signatures);
 
         tokio::spawn(async move {
             let _ = tx
@@ -851,11 +864,19 @@ impl Provider for AntigravityProvider {
                         let _ = tx.send(Ok(StreamEvent::TextDelta(text))).await;
                     }
                     if let Some(function_call) = part.function_call {
+                        let thought_signature = part.thought_signature.clone();
                         let raw_call_id = function_call
                             .id
                             .clone()
                             .unwrap_or_else(|| Uuid::new_v4().to_string());
                         let call_id = crate::message::sanitize_tool_id(&raw_call_id);
+                        if let Some(signature) = thought_signature.filter(|value| !value.is_empty())
+                        {
+                            tool_thought_signatures
+                                .write()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                .insert(call_id.clone(), signature);
+                        }
                         let _ = tx
                             .send(Ok(StreamEvent::ToolUseStart {
                                 id: call_id,
@@ -998,6 +1019,7 @@ impl Provider for AntigravityProvider {
             client: self.client.clone(),
             model: Arc::new(RwLock::new(self.model())),
             fetched_catalog: self.fetched_catalog.clone(),
+            tool_thought_signatures: self.tool_thought_signatures.clone(),
         })
     }
 }

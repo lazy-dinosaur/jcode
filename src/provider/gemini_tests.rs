@@ -313,6 +313,29 @@ fn build_contents_normalizes_non_object_tool_call_args_for_gemini_struct() {
 }
 
 #[test]
+fn build_contents_replays_matching_tool_call_thought_signatures() {
+    let messages = vec![Message {
+        role: Role::Assistant,
+        content: vec![ContentBlock::ToolUse {
+            id: "call_signed".to_string(),
+            name: "read".to_string(),
+            input: json!({"path":"README.md"}),
+        }],
+        timestamp: None,
+        tool_duration_ms: None,
+    }];
+    let thought_signatures =
+        HashMap::from([("call_signed".to_string(), "opaque-signature".to_string())]);
+
+    let contents = build_contents_with_thought_signatures(&messages, &thought_signatures);
+
+    assert_eq!(
+        contents[0].parts[0].thought_signature.as_deref(),
+        Some("opaque-signature")
+    );
+}
+
+#[test]
 fn build_tools_uses_function_declarations() {
     let defs = vec![ToolDefinition {
         name: "read".to_string(),
@@ -398,6 +421,29 @@ fn build_tools_flattens_nullable_type_arrays_for_proto_schema_compatibility() {
         params["properties"]["maybe_count"]["type"],
         json!("integer")
     );
+}
+
+#[test]
+fn build_tools_prunes_required_fields_removed_by_schema_sanitizer() {
+    let defs = vec![ToolDefinition {
+        name: "strict_tool".to_string(),
+        description: "schema with unsupported required properties".to_string(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string" }
+            },
+            "required": ["path", "patternProperties", "additionalProperties"]
+        }),
+    }];
+
+    let built = build_tools_with_schema_mode(&defs, ToolSchemaMode::Gemini).expect("gemini tools");
+    let params = &built[0].function_declarations[0].parameters;
+
+    assert_eq!(params["required"], json!(["path"]));
+    assert!(params["properties"].get("path").is_some());
+    assert!(params["properties"].get("patternProperties").is_none());
+    assert!(params["properties"].get("additionalProperties").is_none());
 }
 
 #[tokio::test]

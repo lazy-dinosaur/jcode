@@ -22,6 +22,7 @@ pub use jcode_provider_gemini::{
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::sync::{Mutex, mpsc};
@@ -39,6 +40,7 @@ pub struct GeminiProvider {
     model: Arc<RwLock<String>>,
     state: Arc<Mutex<Option<GeminiRuntimeState>>>,
     fetched_models: Arc<RwLock<Vec<String>>>,
+    tool_thought_signatures: Arc<RwLock<HashMap<String, String>>>,
     /// M47-C4: provider-aware thinking preference.
     /// Stored as Option<bool> so callers can distinguish "user explicitly
     /// turned thinking off" from "never set". The Gemini request builder may
@@ -101,6 +103,7 @@ impl GeminiProvider {
             model: Arc::new(RwLock::new(model)),
             state: Arc::new(Mutex::new(None)),
             fetched_models: Arc::new(RwLock::new(Vec::new())),
+            tool_thought_signatures: Arc::new(RwLock::new(HashMap::new())),
             thinking_enabled: Arc::new(RwLock::new(None)),
         };
         provider.seed_cached_catalog();
@@ -375,12 +378,20 @@ impl GeminiProvider {
             None
         };
 
+        let tool_thought_signatures = self
+            .tool_thought_signatures
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
         let request = CodeAssistGenerateRequest {
             model: api_model.clone(),
             project: state.project_id.clone(),
             user_prompt_id: Uuid::new_v4().to_string(),
             request: VertexGenerateContentRequest {
-                contents: build_contents(messages),
+                contents: build_contents_with_thought_signatures(
+                    messages,
+                    &tool_thought_signatures,
+                ),
                 system_instruction: build_system_instruction(system),
                 generation_config,
                 tools: build_tools(tools),
@@ -511,6 +522,7 @@ impl Provider for GeminiProvider {
                     state: state_cache.clone(),
                     fetched_models: provider.fetched_models.clone(),
                     thinking_enabled: provider.thinking_enabled.clone(),
+                    tool_thought_signatures: provider.tool_thought_signatures.clone(),
                 };
                 match provider.ensure_state().await {
                     Ok(state) => state,
@@ -520,6 +532,8 @@ impl Provider for GeminiProvider {
                     }
                 }
             };
+
+            let tool_thought_signatures = Arc::clone(&provider.tool_thought_signatures);
 
             let _ = tx
                 .send(Ok(StreamEvent::SessionId(
@@ -699,12 +713,21 @@ impl Provider for GeminiProvider {
                         {
                             let _ = tx.send(Ok(StreamEvent::TextDelta(text))).await;
                         }
+                        let thought_signature = part.thought_signature.clone();
                         if let Some(function_call) = part.function_call {
                             let raw_call_id = function_call
                                 .id
                                 .clone()
                                 .unwrap_or_else(|| Uuid::new_v4().to_string());
                             let call_id = crate::message::sanitize_tool_id(&raw_call_id);
+                            if let Some(signature) =
+                                thought_signature.filter(|value| !value.is_empty())
+                            {
+                                tool_thought_signatures
+                                    .write()
+                                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                    .insert(call_id.clone(), signature);
+                            }
                             let _ = tx
                                 .send(Ok(StreamEvent::ToolUseStart {
                                     id: call_id,
@@ -840,6 +863,7 @@ impl Provider for GeminiProvider {
             model: Arc::new(RwLock::new(self.model())),
             state: self.state.clone(),
             fetched_models: self.fetched_models.clone(),
+            tool_thought_signatures: self.tool_thought_signatures.clone(),
             thinking_enabled: self.thinking_enabled.clone(),
         })
     }
@@ -857,6 +881,7 @@ impl Clone for GeminiProvider {
             model: self.model.clone(),
             state: self.state.clone(),
             fetched_models: self.fetched_models.clone(),
+            tool_thought_signatures: self.tool_thought_signatures.clone(),
             thinking_enabled: self.thinking_enabled.clone(),
         }
     }
@@ -910,7 +935,15 @@ pub(crate) fn build_system_instruction(system: &str) -> Option<GeminiContent> {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn build_contents(messages: &[Message]) -> Vec<GeminiContent> {
+    build_contents_with_thought_signatures(messages, &HashMap::new())
+}
+
+pub(crate) fn build_contents_with_thought_signatures(
+    messages: &[Message],
+    thought_signatures: &HashMap<String, String>,
+) -> Vec<GeminiContent> {
     messages
         .iter()
         .filter_map(|message| {
@@ -935,6 +968,7 @@ pub(crate) fn build_contents(messages: &[Message]) -> Vec<GeminiContent> {
                                 args: crate::message::ToolCall::input_as_object(input),
                                 id: Some(id.clone()),
                             }),
+                            thought_signature: thought_signatures.get(id).cloned(),
                             ..Default::default()
                         });
                     }
@@ -1112,7 +1146,9 @@ fn gemini_compatible_schema(schema: &Value) -> Value {
                     out.insert(key.clone(), gemini_compatible_schema(value));
                 }
             }
-            Value::Object(out)
+            let mut cleaned = Value::Object(out);
+            prune_required_to_existing_properties(&mut cleaned);
+            cleaned
         }
         Value::Array(items) => Value::Array(items.iter().map(gemini_compatible_schema).collect()),
         _ => schema.clone(),
@@ -1167,10 +1203,53 @@ fn antigravity_claude_schema(schema: &Value) -> Value {
                     out.insert(key.clone(), antigravity_claude_schema(value));
                 }
             }
-            Value::Object(out)
+            let mut cleaned = Value::Object(out);
+            prune_required_to_existing_properties(&mut cleaned);
+            cleaned
         }
         Value::Array(items) => Value::Array(items.iter().map(antigravity_claude_schema).collect()),
         _ => schema.clone(),
+    }
+}
+
+fn prune_required_to_existing_properties(schema: &mut Value) {
+    match schema {
+        Value::Object(map) => {
+            for value in map.values_mut() {
+                prune_required_to_existing_properties(value);
+            }
+
+            let property_names: Option<std::collections::HashSet<String>> = map
+                .get("properties")
+                .and_then(Value::as_object)
+                .map(|properties| properties.keys().cloned().collect());
+
+            if let Some(required) = map.get_mut("required").and_then(Value::as_array_mut) {
+                if let Some(property_names) = property_names.as_ref() {
+                    required.retain(|entry| {
+                        entry
+                            .as_str()
+                            .is_some_and(|name| property_names.contains(name))
+                    });
+                } else {
+                    required.clear();
+                }
+            }
+
+            if map
+                .get("required")
+                .and_then(Value::as_array)
+                .is_some_and(Vec::is_empty)
+            {
+                map.remove("required");
+            }
+        }
+        Value::Array(items) => {
+            for value in items {
+                prune_required_to_existing_properties(value);
+            }
+        }
+        _ => {}
     }
 }
 
