@@ -271,6 +271,7 @@ pub fn gemini3_thinking_generation_config(
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GeminiContent {
+    #[serde(default)]
     pub role: String,
     pub parts: Vec<GeminiPart>,
 }
@@ -286,6 +287,8 @@ pub struct GeminiPart {
     pub function_call: Option<GeminiFunctionCall>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub function_response: Option<GeminiFunctionResponse>,
+    #[serde(rename = "thoughtSignature", skip_serializing_if = "Option::is_none")]
+    pub thought_signature: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

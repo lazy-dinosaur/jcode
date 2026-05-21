@@ -1,3 +1,4 @@
+use super::gemini::normalize_gemini_function_name;
 use super::{EventStream, Provider};
 use crate::auth::antigravity as antigravity_auth;
 use crate::message::{ConnectionPhase, Message, StreamEvent, ToolDefinition};
@@ -880,7 +881,7 @@ impl Provider for AntigravityProvider {
                         let _ = tx
                             .send(Ok(StreamEvent::ToolUseStart {
                                 id: call_id,
-                                name: function_call.name,
+                                name: normalize_gemini_function_name(&function_call.name),
                             }))
                             .await;
                         let _ = tx

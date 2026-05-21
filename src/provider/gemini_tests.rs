@@ -336,6 +336,51 @@ fn build_contents_replays_matching_tool_call_thought_signatures() {
 }
 
 #[test]
+fn normalize_gemini_function_name_strips_antigravity_default_api_namespace() {
+    assert_eq!(normalize_gemini_function_name("default_api:batch"), "batch");
+    assert_eq!(
+        normalize_gemini_function_name("default_api:mcp__filesystem__list_directory"),
+        "mcp__filesystem__list_directory"
+    );
+    assert_eq!(normalize_gemini_function_name("read"), "read");
+}
+
+#[test]
+fn gemini_response_deserializes_content_without_role() {
+    let response: CodeAssistGenerateResponse = serde_json::from_str(
+        r#"{
+            "response": {
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [
+                                {
+                                    "functionCall": {
+                                        "name": "default_api:batch",
+                                        "args": {},
+                                        "id": "call_1"
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        }"#,
+    )
+    .expect("Gemini content role is optional in Antigravity responses");
+
+    let content = response
+        .response
+        .and_then(|response| response.candidates)
+        .and_then(|mut candidates| candidates.pop())
+        .and_then(|candidate| candidate.content)
+        .expect("candidate content");
+    assert_eq!(content.role, "");
+    assert_eq!(content.parts.len(), 1);
+}
+
+#[test]
 fn build_tools_uses_function_declarations() {
     let defs = vec![ToolDefinition {
         name: "read".to_string(),

@@ -731,7 +731,7 @@ impl Provider for GeminiProvider {
                             let _ = tx
                                 .send(Ok(StreamEvent::ToolUseStart {
                                     id: call_id,
-                                    name: function_call.name,
+                                    name: normalize_gemini_function_name(&function_call.name),
                                 }))
                                 .await;
                             let _ = tx
@@ -918,6 +918,13 @@ fn is_gemini_model_not_found_error(err: &anyhow::Error) -> bool {
     lower.contains("http 404")
         || lower.contains("\"status\": \"not_found\"")
         || lower.contains("requested entity was not found")
+}
+
+pub(crate) fn normalize_gemini_function_name(name: &str) -> String {
+    name.strip_prefix("default_api:")
+        .or_else(|| name.strip_prefix("default_api."))
+        .unwrap_or(name)
+        .to_string()
 }
 
 pub(crate) fn build_system_instruction(system: &str) -> Option<GeminiContent> {
