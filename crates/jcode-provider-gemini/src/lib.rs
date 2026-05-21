@@ -230,6 +230,12 @@ pub fn normalize_antigravity_model_for_api(model: &str) -> Gemini3ModelConfig {
     let is_gemini3_flash = base.starts_with("gemini-3") && base.contains("-flash");
 
     if is_gemini3_flash {
+        if base.starts_with("gemini-3.") && tier.is_some() {
+            return Gemini3ModelConfig {
+                model: normalized.clone(),
+                thinking_level: tier.map(str::to_string),
+            };
+        }
         return Gemini3ModelConfig {
             model: base.to_string(),
             thinking_level: Some(tier.unwrap_or("low").to_string()),
@@ -618,7 +624,7 @@ mod tests {
         assert_eq!(
             normalize_antigravity_model_for_api("gemini-3.5-flash-low"),
             Gemini3ModelConfig {
-                model: "gemini-3.5-flash".to_string(),
+                model: "gemini-3.5-flash-low".to_string(),
                 thinking_level: Some("low".to_string()),
             }
         );

@@ -357,6 +357,35 @@ fn catalog_model_detail(model: &CatalogModel) -> String {
     parts.join(" · ")
 }
 
+fn resolve_requested_model_against_catalog(
+    requested: &str,
+    catalog: &[CatalogModel],
+) -> Option<String> {
+    let requested = requested.trim();
+    if requested.is_empty() || catalog.is_empty() {
+        return None;
+    }
+
+    if catalog.iter().any(|model| model.id == requested) {
+        return Some(requested.to_string());
+    }
+
+    let lower = requested.to_ascii_lowercase();
+    let candidates: &[&str] = match lower.as_str() {
+        "gemini-3.5-flash" => &["gemini-3.5-flash-low", "gemini-3-flash-agent"],
+        "gemini-3.5-flash-low" => &["gemini-3.5-flash-low"],
+        "gemini-3.5-flash-high" => &["gemini-3-flash-agent"],
+        "gemini-3.5-pro" => &["gemini-3.5-pro-low"],
+        "gemini-3.1-pro" => &["gemini-3.1-pro-low"],
+        _ => &[],
+    };
+
+    candidates
+        .iter()
+        .find(|candidate| catalog.iter().any(|model| model.id == **candidate))
+        .map(|candidate| (*candidate).to_string())
+}
+
 fn catalog_is_stale(fetched_at_rfc3339: &str) -> bool {
     let Ok(fetched_at) = DateTime::parse_from_rfc3339(fetched_at_rfc3339) else {
         return true;
@@ -451,6 +480,10 @@ impl AntigravityProvider {
     fn resolve_model_alias_for_request(&self, model: &str) -> String {
         let trimmed = model.trim();
         if !trimmed.eq_ignore_ascii_case(DEFAULT_MODEL) {
+            let catalog = self.fetched_catalog();
+            if let Some(resolved) = resolve_requested_model_against_catalog(trimmed, &catalog) {
+                return resolved;
+            }
             return trimmed.to_string();
         }
 
@@ -889,39 +922,17 @@ impl Provider for AntigravityProvider {
     fn model_routes(&self) -> Vec<super::ModelRoute> {
         let catalog = self.fetched_catalog();
         if !catalog.is_empty() {
-            let mut seen = HashSet::new();
-            let mut routes: Vec<_> = catalog
+            return catalog
                 .into_iter()
-                .map(|model| {
-                    seen.insert(model.id.clone());
-                    super::ModelRoute {
-                        model: model.id.clone(),
-                        provider: "Antigravity".to_string(),
-                        api_method: "https".to_string(),
-                        available: model.available,
-                        detail: catalog_model_detail(&model),
-                        cheapness: None,
-                    }
+                .map(|model| super::ModelRoute {
+                    model: model.id.clone(),
+                    provider: "Antigravity".to_string(),
+                    api_method: "https".to_string(),
+                    available: model.available,
+                    detail: catalog_model_detail(&model),
+                    cheapness: None,
                 })
                 .collect();
-            for model in AVAILABLE_MODELS
-                .iter()
-                .copied()
-                .map(str::to_string)
-                .chain(std::iter::once(self.model()))
-            {
-                if seen.insert(model.clone()) {
-                    routes.push(super::ModelRoute {
-                        model,
-                        provider: "Antigravity".to_string(),
-                        api_method: "https".to_string(),
-                        available: true,
-                        detail: "fallback catalog".to_string(),
-                        cheapness: None,
-                    });
-                }
-            }
-            return routes;
         }
 
         self.available_models_display()

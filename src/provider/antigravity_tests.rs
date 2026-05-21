@@ -197,6 +197,77 @@ fn antigravity_dynamic_catalog_preserves_backend_model_ids() {
 }
 
 #[test]
+fn model_routes_with_live_catalog_do_not_add_404_pr_fallback_ids() {
+    let provider = AntigravityProvider::new();
+    *provider.fetched_catalog.write().expect("catalog lock") = vec![
+        CatalogModel {
+            id: "gemini-3.5-flash-low".to_string(),
+            display_name: Some("Gemini 3.5 Flash (Low)".to_string()),
+            reset_time: None,
+            tag_title: None,
+            model_provider: None,
+            max_tokens: None,
+            max_output_tokens: None,
+            recommended: true,
+            available: true,
+            remaining_fraction_milli: Some(1000),
+        },
+        CatalogModel {
+            id: "gemini-3-flash-agent".to_string(),
+            display_name: Some("Gemini 3.5 Flash (High)".to_string()),
+            reset_time: None,
+            tag_title: None,
+            model_provider: None,
+            max_tokens: None,
+            max_output_tokens: None,
+            recommended: true,
+            available: true,
+            remaining_fraction_milli: Some(1000),
+        },
+    ];
+
+    let routes = provider.model_routes();
+
+    assert!(
+        routes
+            .iter()
+            .any(|route| route.model == "gemini-3.5-flash-low")
+    );
+    assert!(
+        routes
+            .iter()
+            .any(|route| route.model == "gemini-3-flash-agent")
+    );
+    assert!(!routes.iter().any(|route| route.model == "gemini-3.5-flash"));
+}
+
+#[test]
+fn bare_gemini_3_5_flash_alias_resolves_to_live_catalog_low_id() {
+    let provider = AntigravityProvider::new();
+    *provider.fetched_catalog.write().expect("catalog lock") = vec![CatalogModel {
+        id: "gemini-3.5-flash-low".to_string(),
+        display_name: Some("Gemini 3.5 Flash (Low)".to_string()),
+        reset_time: None,
+        tag_title: None,
+        model_provider: None,
+        max_tokens: None,
+        max_output_tokens: None,
+        recommended: true,
+        available: true,
+        remaining_fraction_milli: Some(1000),
+    }];
+
+    assert_eq!(
+        provider.resolve_model_alias_for_request("gemini-3.5-flash"),
+        "gemini-3.5-flash-low"
+    );
+    assert_eq!(
+        provider.resolve_model_alias_for_request("gemini-3.5-flash-low"),
+        "gemini-3.5-flash-low"
+    );
+}
+
+#[test]
 fn client_metadata_uses_backend_accepted_platform() {
     assert_eq!(metadata_platform(), "PLATFORM_UNSPECIFIED");
     assert!(client_metadata_header().contains("\"platform\":\"PLATFORM_UNSPECIFIED\""));
