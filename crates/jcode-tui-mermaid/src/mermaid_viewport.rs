@@ -238,8 +238,20 @@ fn can_use_kitty_virtual_viewport(
     scroll_x: u16,
     scroll_y: u16,
 ) -> bool {
+    if !kitty_virtual_viewport_enabled() {
+        return false;
+    }
     let max_index = KITTY_DIACRITICS.len() as u16;
     full_cols < max_index && full_rows < max_index && scroll_x < max_index && scroll_y < max_index
+}
+
+fn kitty_virtual_viewport_enabled() -> bool {
+    std::env::var("JCODE_MERMAID_KITTY_VIRTUAL_VIEWPORT").is_ok_and(|raw| {
+        matches!(
+            raw.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
 }
 
 fn kitty_add_placeholder(buf: &mut String, x: u16, y: u16, id_extra: u8) {
