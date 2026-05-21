@@ -13,7 +13,14 @@ impl App {
             .iter()
             .position(|(id, _)| *id == request_id)
         {
-            self.pending_soft_interrupt_requests.remove(index);
+            let (_, content) = self.pending_soft_interrupt_requests.remove(index);
+            if let Some(pending_index) = self
+                .pending_soft_interrupts
+                .iter()
+                .position(|pending| pending == &content)
+            {
+                self.pending_soft_interrupts.remove(pending_index);
+            }
             true
         } else {
             false
