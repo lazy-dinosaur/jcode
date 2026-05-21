@@ -537,7 +537,7 @@ fn test_handle_server_event_ack_removes_only_matching_unacked_soft_interrupt() {
 
     app.handle_server_event(crate::protocol::ServerEvent::Ack { id: 11 }, &mut remote);
 
-    assert_eq!(app.pending_soft_interrupts, vec!["second"]);
+    assert_eq!(app.pending_soft_interrupts, vec!["first", "second"]);
     assert_eq!(
         app.pending_soft_interrupt_requests,
         vec![(22, "second".to_string())]
@@ -559,13 +559,14 @@ fn test_acknowledged_soft_interrupt_is_not_recovered_and_resent_after_done() {
     app.pending_soft_interrupt_requests = vec![(55, "acked queued item".to_string())];
 
     app.handle_server_event(crate::protocol::ServerEvent::Ack { id: 55 }, &mut remote);
-    assert!(app.pending_soft_interrupts.is_empty());
+    assert_eq!(app.pending_soft_interrupts, vec!["acked queued item"]);
     assert!(app.pending_soft_interrupt_requests.is_empty());
 
     app.handle_server_event(crate::protocol::ServerEvent::Done { id: 42 }, &mut remote);
     rt.block_on(remote::process_remote_followups(&mut app, &mut remote));
 
     assert!(app.queued_messages().is_empty());
+    assert!(app.pending_soft_interrupts.is_empty());
     assert!(
         !app.display_messages()
             .iter()

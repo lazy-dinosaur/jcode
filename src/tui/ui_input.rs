@@ -146,17 +146,31 @@ pub(super) fn wrapped_input_line_count(
 }
 
 pub(super) fn pending_prompt_count(app: &dyn TuiState) -> usize {
+    let pending_count = if app.is_processing() {
+        app.pending_soft_interrupts().len()
+    } else {
+        0
+    };
     let interleave = app.is_processing()
         && app
             .interleave_message()
             .map(|msg| !msg.is_empty())
             .unwrap_or(false);
-    app.queued_messages().len() + if interleave { 1 } else { 0 }
+    app.queued_messages().len() + pending_count + if interleave { 1 } else { 0 }
 }
 
 pub(super) fn pending_queue_preview(app: &dyn TuiState) -> Vec<String> {
     let mut previews = Vec::new();
     if app.is_processing() {
+        for msg in app.pending_soft_interrupts() {
+            if !msg.is_empty() {
+                let normalized = normalize_repaint_sensitive_notice_text(msg);
+                previews.push(format!(
+                    "↻ {}",
+                    normalized.chars().take(100).collect::<String>()
+                ));
+            }
+        }
         if let Some(msg) = app.interleave_message()
             && !msg.is_empty()
         {
@@ -180,6 +194,11 @@ pub(super) fn pending_queue_preview(app: &dyn TuiState) -> Vec<String> {
 pub(super) fn draw_queued(frame: &mut Frame, app: &dyn TuiState, area: Rect, start_num: usize) {
     let mut items: Vec<(QueuedMsgType, &str)> = Vec::new();
     if app.is_processing() {
+        for msg in app.pending_soft_interrupts() {
+            if !msg.is_empty() {
+                items.push((QueuedMsgType::Sending, msg.as_str()));
+            }
+        }
         if let Some(msg) = app.interleave_message()
             && !msg.is_empty()
         {

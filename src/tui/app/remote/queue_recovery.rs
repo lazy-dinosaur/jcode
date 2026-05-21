@@ -13,14 +13,7 @@ impl App {
             .iter()
             .position(|(id, _)| *id == request_id)
         {
-            let (_, content) = self.pending_soft_interrupt_requests.remove(index);
-            if let Some(pending_index) = self
-                .pending_soft_interrupts
-                .iter()
-                .position(|pending| pending == &content)
-            {
-                self.pending_soft_interrupts.remove(pending_index);
-            }
+            self.pending_soft_interrupt_requests.remove(index);
             true
         } else {
             false
@@ -112,13 +105,17 @@ pub(super) async fn recover_stranded_soft_interrupts(
         return false;
     }
 
-    let recovered_interrupts = std::mem::take(&mut app.pending_soft_interrupts);
+    let recovered_interrupts: Vec<String> = app
+        .pending_soft_interrupt_requests
+        .iter()
+        .map(|(_, pending)| pending.clone())
+        .collect();
     if recovered_interrupts.is_empty() {
+        app.pending_soft_interrupts.clear();
         return false;
     }
 
     if let Err(err) = remote.cancel_soft_interrupts().await {
-        app.pending_soft_interrupts = recovered_interrupts;
         app.push_display_message(DisplayMessage::error(format!(
             "Failed to recover queued interleave message: {}",
             err
@@ -131,6 +128,7 @@ pub(super) async fn recover_stranded_soft_interrupts(
         "Recovering {} stranded soft interrupt(s) into queued follow-ups after turn boundary",
         recovered_interrupts.len()
     ));
+    app.pending_soft_interrupts.clear();
     app.pending_soft_interrupt_requests.clear();
 
     let mut recovered_meta: Vec<QueuedPromptMeta> = recovered_interrupts
