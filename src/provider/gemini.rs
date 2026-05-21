@@ -490,14 +490,13 @@ impl Provider for GeminiProvider {
         messages: &[Message],
         tools: &[ToolDefinition],
         system: &str,
-        resume_session_id: Option<&str>,
+        _resume_session_id: Option<&str>,
         options: CompletionOptions,
     ) -> Result<EventStream> {
         let model = self.model();
         let messages = messages.to_vec();
         let tools = tools.to_vec();
         let system = system.to_string();
-        let resume_session_id = resume_session_id.map(|value| value.to_string());
         let state_cache = self.state.clone();
         let provider = self.clone();
         let cancel_signal = options.cancel_signal();
@@ -536,11 +535,7 @@ impl Provider for GeminiProvider {
             let tool_thought_signatures = Arc::clone(&provider.tool_thought_signatures);
 
             let _ = tx
-                .send(Ok(StreamEvent::SessionId(
-                    resume_session_id
-                        .clone()
-                        .unwrap_or_else(|| state.session_id.clone()),
-                )))
+                .send(Ok(StreamEvent::SessionId(state.session_id.clone())))
                 .await;
             let _ = tx
                 .send(Ok(StreamEvent::ConnectionPhase {
@@ -553,14 +548,8 @@ impl Provider for GeminiProvider {
                 }))
                 .await;
 
-            let generate_fut = provider.generate_content(
-                &state,
-                &model,
-                &messages,
-                &tools,
-                &system,
-                resume_session_id.as_deref(),
-            );
+            let generate_fut =
+                provider.generate_content(&state, &model, &messages, &tools, &system, None);
             let response = match if let Some(signal) = cancel_signal.as_ref() {
                 tokio::select! {
                     _ = signal.notified() => return,
@@ -584,7 +573,7 @@ impl Provider for GeminiProvider {
                             &messages,
                             &tools,
                             &system,
-                            resume_session_id.as_deref(),
+                            None,
                         );
                         match if let Some(signal) = cancel_signal.as_ref() {
                             tokio::select! {

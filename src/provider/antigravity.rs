@@ -606,7 +606,7 @@ impl AntigravityProvider {
         messages: &[Message],
         tools: &[ToolDefinition],
         system: &str,
-        resume_session_id: Option<&str>,
+        _resume_session_id: Option<&str>,
     ) -> Result<CodeAssistGenerateResponse> {
         let mut tokens = antigravity_auth::load_or_refresh_tokens().await?;
         let project = match tokens
@@ -657,9 +657,13 @@ impl AntigravityProvider {
                         function_calling_config: GeminiFunctionCallingConfig { mode: "AUTO" },
                     })
                 },
-                session_id: resume_session_id
-                    .filter(|value| !value.trim().is_empty())
-                    .map(str::to_string),
+                // Antigravity/Gemini session ids are server-side request-chain
+                // state. Reusing a stored id after self-dev reload can pin the
+                // new process to a stale backend chain that behaves rate-limited,
+                // while a fresh session works. Tool continuity is preserved via
+                // replayed contents/thought signatures, so do not resume the old
+                // provider session id here.
+                session_id: None,
             },
         };
 
