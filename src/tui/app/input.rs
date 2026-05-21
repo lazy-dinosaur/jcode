@@ -832,6 +832,23 @@ impl App {
         self.queued_messages_held_after_interrupt = false;
     }
 
+    pub(super) fn should_redraw_streaming_delta(&mut self) -> bool {
+        const STREAM_REDRAW_COALESCE: Duration = Duration::from_millis(16);
+        let now = Instant::now();
+        let should_redraw = self
+            .last_stream_redraw_request
+            .map(|last| now.saturating_duration_since(last) >= STREAM_REDRAW_COALESCE)
+            .unwrap_or(true);
+        if should_redraw {
+            self.last_stream_redraw_request = Some(now);
+        }
+        should_redraw
+    }
+
+    pub(super) fn reset_streaming_redraw_coalescer(&mut self) {
+        self.last_stream_redraw_request = None;
+    }
+
     pub(super) fn has_queued_followups(&self) -> bool {
         self.interleave_message.is_some()
             || !self.queued_messages.is_empty()

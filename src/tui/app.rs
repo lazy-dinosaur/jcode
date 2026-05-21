@@ -671,6 +671,9 @@ pub struct App {
     context_info: crate::prompt::ContextInfo,
     // Track last streaming activity for "stale" detection
     last_stream_activity: Option<Instant>,
+    // Last immediate redraw requested by a streaming text delta. Used to coalesce
+    // high-frequency deltas into frame-sized batches without buffering extra text.
+    last_stream_redraw_request: Option<Instant>,
     // Current terminal foreground handoff (e.g. /nvim or /lazygit) temporarily
     // stops the client event loop. While it is active, elapsed wall-clock time
     // must not count toward remote stream stall detection.

@@ -332,6 +332,33 @@ fn m41_text_delta_on_idle_client_wakes_and_requests_redraw() {
 }
 
 #[test]
+fn streaming_redraw_requests_are_coalesced_to_frame_interval() {
+    let mut app = create_test_app();
+
+    assert!(
+        app.should_redraw_streaming_delta(),
+        "first streaming chunk should paint immediately"
+    );
+    assert!(
+        !app.should_redraw_streaming_delta(),
+        "back-to-back streaming chunks should be coalesced"
+    );
+
+    std::thread::sleep(std::time::Duration::from_millis(17));
+    assert!(
+        app.should_redraw_streaming_delta(),
+        "next frame interval should allow another streaming paint"
+    );
+
+    assert!(!app.should_redraw_streaming_delta());
+    app.reset_streaming_redraw_coalescer();
+    assert!(
+        app.should_redraw_streaming_delta(),
+        "lifecycle events reset the coalescer for immediate feedback"
+    );
+}
+
+#[test]
 fn m41_tool_start_on_idle_client_wakes_and_requests_redraw() {
     use crate::tui::app::ProcessingStatus;
 

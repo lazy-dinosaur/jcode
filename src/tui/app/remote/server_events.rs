@@ -87,7 +87,8 @@ pub(in crate::tui::app) fn handle_server_event(
                     app.append_streaming_text(&chunk);
                 }
                 app.insert_thought_line(thought_line);
-                return eager_stream_redraw || woke_server_initiated_turn;
+                return (eager_stream_redraw && app.should_redraw_streaming_delta())
+                    || woke_server_initiated_turn;
             }
             let mut needs_redraw = false;
             if matches!(
@@ -106,15 +107,18 @@ pub(in crate::tui::app) fn handle_server_event(
                 needs_redraw = true;
             }
             app.last_stream_activity = Some(Instant::now());
-            (eager_stream_redraw && needs_redraw) || woke_server_initiated_turn
+            (eager_stream_redraw && needs_redraw && app.should_redraw_streaming_delta())
+                || woke_server_initiated_turn
         }
         ServerEvent::TextReplace { text } => {
             app.stream_buffer.flush();
             app.replace_streaming_text(text);
             app.resume_streaming_tps();
+            app.reset_streaming_redraw_coalescer();
             true
         }
         ServerEvent::ToolStart { id, name } => {
+            app.reset_streaming_redraw_coalescer();
             app.pause_streaming_tps(false);
             app.clear_active_experimental_feature_notice();
             remote.handle_tool_start(&id, &name);
@@ -300,6 +304,7 @@ pub(in crate::tui::app) fn handle_server_event(
             eager_stream_redraw
         }
         ServerEvent::MessageEnd => {
+            app.reset_streaming_redraw_coalescer();
             app.pause_streaming_tps(true);
             app.stream_message_ended = true;
             true
@@ -313,6 +318,7 @@ pub(in crate::tui::app) fn handle_server_event(
             false
         }
         ServerEvent::Interrupted => {
+            app.reset_streaming_redraw_coalescer();
             let keep_pending_retry = app
                 .rate_limit_pending_message
                 .as_ref()
@@ -387,6 +393,7 @@ pub(in crate::tui::app) fn handle_server_event(
             auto_poked
         }
         ServerEvent::Done { id } => {
+            app.reset_streaming_redraw_coalescer();
             let mut auto_poked = false;
             let mut completed_current_message = false;
             crate::logging::info(&format!(
@@ -465,6 +472,7 @@ pub(in crate::tui::app) fn handle_server_event(
             retry_after_secs,
             ..
         } => {
+            app.reset_streaming_redraw_coalescer();
             let reset_duration = retry_after_secs
                 .map(Duration::from_secs)
                 .or_else(|| parse_rate_limit_error(&message));
