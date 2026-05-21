@@ -168,6 +168,69 @@ fn process_remote_followups_respects_disabled_auto_server_reload() {
 }
 
 #[test]
+fn process_remote_followups_drains_all_queued_prompts_in_one_send() {
+    let mut app = create_test_app();
+    app.is_remote = true;
+    app.enqueue_queued_message("first queued prompt".to_string());
+    app.enqueue_queued_message("second queued prompt".to_string());
+
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+    remote.mark_history_loaded();
+
+    rt.block_on(process_remote_followups(&mut app, &mut remote));
+
+    assert!(app.queued_messages.is_empty());
+    assert!(app.queued_message_meta.is_empty());
+    assert!(app.is_processing);
+    let pending = app
+        .rate_limit_pending_message
+        .as_ref()
+        .expect("queued batch should be the in-flight remote message");
+    assert_eq!(
+        pending.content,
+        "first queued prompt\n\nsecond queued prompt"
+    );
+    assert_eq!(
+        app.display_messages()
+            .iter()
+            .filter(|message| message.role == "user")
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>(),
+        vec!["first queued prompt", "second queued prompt"]
+    );
+}
+
+#[test]
+fn queued_followup_batch_drains_and_restores_all_items_in_order() {
+    let mut app = create_test_app();
+    app.enqueue_queued_message("first".to_string());
+    app.enqueue_queued_message("second".to_string());
+    app.enqueue_hidden_system_message("hidden reminder".to_string());
+
+    let mut batch = app.take_all_queued_followups();
+
+    assert!(app.queued_messages.is_empty());
+    assert!(app.hidden_queued_system_messages.is_empty());
+    assert_eq!(batch.queued_messages, vec!["first", "second"]);
+    assert_eq!(batch.hidden_reminders, vec!["hidden reminder"]);
+    assert!(batch.queued_meta.iter().all(|meta| {
+        meta.status == crate::tui::app::QueuedPromptStatus::Sending && meta.attempts == 1
+    }));
+
+    batch.mark_failed("network down".to_string());
+    app.restore_queued_followups_front(batch);
+
+    assert_eq!(app.queued_messages, vec!["first", "second"]);
+    assert_eq!(app.hidden_queued_system_messages, vec!["hidden reminder"]);
+    assert!(app.queued_message_meta.iter().all(|meta| {
+        meta.status == crate::tui::app::QueuedPromptStatus::Failed
+            && meta.last_error.as_deref() == Some("network down")
+    }));
+}
+
+#[test]
 fn handle_post_connect_dispatches_reload_followup_even_if_history_snapshot_looks_busy() {
     let _guard = crate::storage::lock_test_env();
     let temp_home = tempfile::TempDir::new().expect("create temp home");

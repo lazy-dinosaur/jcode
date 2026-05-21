@@ -2,9 +2,8 @@
 
 use super::{
     App, DisplayMessage, PendingReloadReconnectStatus, ProcessingStatus, QueuedPromptMeta,
-    QueuedPromptStatus, RemoteResumeActivity, SendAction, ctrl_bracket_fallback_to_esc, input,
-    parse_rate_limit_error, remote_notifications::present_swarm_notification,
-    spawn_in_new_terminal,
+    RemoteResumeActivity, SendAction, ctrl_bracket_fallback_to_esc, input, parse_rate_limit_error,
+    remote_notifications::present_swarm_notification, spawn_in_new_terminal,
 };
 use crate::bus::BusEvent;
 use crate::message::ToolCall;
@@ -863,21 +862,21 @@ pub(super) async fn process_remote_followups(app: &mut App, remote: &mut RemoteC
                 )));
             }
         }
-    } else if !app.queued_messages_held_after_interrupt && !app.queued_messages.is_empty() {
-        app.ensure_queue_metadata();
-        let queued_message = app.queued_messages.remove(0);
-        let mut queued_meta = if app.queued_message_meta.is_empty() {
-            QueuedPromptMeta::user(&queued_message)
-        } else {
-            app.queued_message_meta.remove(0)
-        };
-        queued_meta.status = QueuedPromptStatus::Sending;
-        queued_meta.attempts = queued_meta.attempts.saturating_add(1);
+    } else if !app.queued_messages_held_after_interrupt
+        && (!app.queued_messages.is_empty() || !app.hidden_queued_system_messages.is_empty())
+    {
+        let mut queued_batch = app.take_all_queued_followups();
+        if queued_batch.is_empty() {
+            return;
+        }
         let (messages, reminder, display_system_messages) =
-            super::helpers::partition_queued_messages(vec![queued_message], vec![]);
+            super::helpers::partition_queued_messages(
+                queued_batch.queued_messages.clone(),
+                queued_batch.hidden_reminders.clone(),
+            );
         let combined = messages.join("\n\n");
         let preserve_visible_turn = super::commands::queued_messages_are_only_pokes(&messages);
-        let auto_retry = false;
+        let auto_retry = messages.is_empty();
         for msg in display_system_messages {
             app.push_display_message(DisplayMessage::system(msg));
         }
@@ -896,43 +895,13 @@ pub(super) async fn process_remote_followups(app: &mut App, remote: &mut RemoteC
         if let Err(error) =
             begin_remote_send(app, remote, combined, vec![], true, reminder, auto_retry, 0).await
         {
-            queued_meta.status = QueuedPromptStatus::Failed;
-            queued_meta.last_error = Some(error.to_string());
-            app.queued_messages.insert(0, messages.join("\n\n"));
-            app.queued_message_meta.insert(0, queued_meta);
+            queued_batch.mark_failed(error.to_string());
+            app.restore_queued_followups_front(queued_batch);
             app.push_display_message(DisplayMessage::error(format!(
-                "Failed to send queued message: {}",
+                "Failed to send queued messages: {}",
                 error
             )));
             app.set_status_notice("Queued message failed — edit or retry");
-        }
-    } else if !app.hidden_queued_system_messages.is_empty() {
-        app.ensure_queue_metadata();
-        let reminder = app.hidden_queued_system_messages.remove(0);
-        let _meta = if app.hidden_queued_system_meta.is_empty() {
-            QueuedPromptMeta::hidden_system()
-        } else {
-            app.hidden_queued_system_meta.remove(0)
-        };
-        if let Err(error) = begin_remote_send(
-            app,
-            remote,
-            String::new(),
-            vec![],
-            true,
-            Some(reminder.clone()),
-            true,
-            0,
-        )
-        .await
-        {
-            app.hidden_queued_system_messages.insert(0, reminder);
-            app.hidden_queued_system_meta
-                .insert(0, QueuedPromptMeta::hidden_system());
-            app.push_display_message(DisplayMessage::error(format!(
-                "Failed to send queued system reminder: {}",
-                error
-            )));
         }
     }
 }

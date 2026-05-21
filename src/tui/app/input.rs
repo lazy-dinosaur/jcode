@@ -708,6 +708,30 @@ pub(super) fn queue_message(app: &mut App) {
     app.enqueue_queued_message(prepared.expanded);
 }
 
+pub(super) struct QueuedFollowupBatch {
+    pub queued_messages: Vec<String>,
+    pub queued_meta: Vec<QueuedPromptMeta>,
+    pub hidden_reminders: Vec<String>,
+    pub hidden_meta: Vec<QueuedPromptMeta>,
+}
+
+impl QueuedFollowupBatch {
+    pub(super) fn is_empty(&self) -> bool {
+        self.queued_messages.is_empty() && self.hidden_reminders.is_empty()
+    }
+
+    pub(super) fn mark_failed(&mut self, error: String) {
+        for meta in self
+            .queued_meta
+            .iter_mut()
+            .chain(self.hidden_meta.iter_mut())
+        {
+            meta.status = QueuedPromptStatus::Failed;
+            meta.last_error = Some(error.clone());
+        }
+    }
+}
+
 pub(super) fn retrieve_pending_message_for_edit(app: &mut App) -> bool {
     if !app.input.is_empty() {
         return false;
@@ -802,6 +826,44 @@ impl App {
         self.hidden_queued_system_messages.push(content);
         self.hidden_queued_system_meta
             .push(QueuedPromptMeta::hidden_system());
+    }
+
+    pub(super) fn take_all_queued_followups(&mut self) -> QueuedFollowupBatch {
+        self.ensure_queue_metadata();
+
+        for meta in self
+            .queued_message_meta
+            .iter_mut()
+            .chain(self.hidden_queued_system_meta.iter_mut())
+        {
+            meta.status = QueuedPromptStatus::Sending;
+            meta.attempts = meta.attempts.saturating_add(1);
+        }
+
+        QueuedFollowupBatch {
+            queued_messages: std::mem::take(&mut self.queued_messages),
+            queued_meta: std::mem::take(&mut self.queued_message_meta),
+            hidden_reminders: std::mem::take(&mut self.hidden_queued_system_messages),
+            hidden_meta: std::mem::take(&mut self.hidden_queued_system_meta),
+        }
+    }
+
+    pub(super) fn restore_queued_followups_front(&mut self, mut batch: QueuedFollowupBatch) {
+        batch.queued_messages.append(&mut self.queued_messages);
+        self.queued_messages = batch.queued_messages;
+
+        batch.queued_meta.append(&mut self.queued_message_meta);
+        self.queued_message_meta = batch.queued_meta;
+
+        batch
+            .hidden_reminders
+            .append(&mut self.hidden_queued_system_messages);
+        self.hidden_queued_system_messages = batch.hidden_reminders;
+
+        batch
+            .hidden_meta
+            .append(&mut self.hidden_queued_system_meta);
+        self.hidden_queued_system_meta = batch.hidden_meta;
     }
 
     pub(super) fn mark_queued_messages_held_after_interrupt(&mut self) {
@@ -2291,37 +2353,24 @@ impl App {
         self.pending_turn = true;
     }
 
-    /// Process queued messages as independent FIFO requests.
-    /// Loops until queue is empty (in case more messages are queued during processing).
+    /// Process queued followups as batched FIFO requests.
+    /// Drains the currently queued batch into one turn, then loops in case more
+    /// messages were queued while that turn was running.
     pub(super) async fn process_queued_messages(
         &mut self,
         terminal: &mut DefaultTerminal,
         event_stream: &mut EventStream,
     ) {
         while !self.queued_messages.is_empty() || !self.hidden_queued_system_messages.is_empty() {
-            self.ensure_queue_metadata();
-            // Send exactly one queued item per turn so queued rows map 1:1 to user-visible turns.
-            let queued_messages = if !self.queued_messages.is_empty() {
-                let msg = self.queued_messages.remove(0);
-                if !self.queued_message_meta.is_empty() {
-                    let _ = self.queued_message_meta.remove(0);
-                }
-                vec![msg]
-            } else {
-                Vec::new()
-            };
-            let hidden_reminders =
-                if queued_messages.is_empty() && !self.hidden_queued_system_messages.is_empty() {
-                    let reminder = self.hidden_queued_system_messages.remove(0);
-                    if !self.hidden_queued_system_meta.is_empty() {
-                        let _ = self.hidden_queued_system_meta.remove(0);
-                    }
-                    vec![reminder]
-                } else {
-                    Vec::new()
-                };
+            let queued_batch = self.take_all_queued_followups();
+            if queued_batch.is_empty() {
+                break;
+            }
             let (messages, reminder, display_system_messages) =
-                super::helpers::partition_queued_messages(queued_messages, hidden_reminders);
+                super::helpers::partition_queued_messages(
+                    queued_batch.queued_messages,
+                    queued_batch.hidden_reminders,
+                );
             let combined = messages.join("\n\n");
             let has_combined = !combined.is_empty();
             let preserve_visible_turn = super::commands::queued_messages_are_only_pokes(&messages);
