@@ -9,6 +9,16 @@ use std::process::Command;
 
 pub(super) const STATUS_SPINNER_ONLY_INTERVAL: Duration = Duration::from_millis(80);
 
+pub(super) fn status_spinner_interval() -> tokio::time::Interval {
+    let mut interval = tokio::time::interval(STATUS_SPINNER_ONLY_INTERVAL);
+    // The spinner is visual liveness, not simulated time. If terminal/input work
+    // delays a tick, skip missed frames instead of bursting them later. Bursts
+    // are visible while typing because full-frame input renders and spinner-only
+    // cell renders interleave.
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    interval
+}
+
 pub(super) fn status_spinner_only_symbol(app: &App) -> Option<&'static str> {
     let policy = crate::perf::tui_policy();
     if !policy.enable_decorative_animations
@@ -119,7 +129,7 @@ impl App {
         let mut event_stream = EventStream::new();
         let mut redraw_period = crate::tui::redraw_interval(&self);
         let mut redraw_interval = interval(redraw_period);
-        let mut status_spinner_interval = interval(STATUS_SPINNER_ONLY_INTERVAL);
+        let mut status_spinner_interval = status_spinner_interval();
         let mut needs_redraw = true;
         let mut handterm_native_scroll =
             super::handterm_native_scroll::HandtermNativeScrollClient::connect_from_env();
@@ -139,6 +149,7 @@ impl App {
                     self.force_full_redraw = false;
                 }
                 terminal.draw(|frame| crate::tui::ui::draw(frame, &self))?;
+                status_spinner_interval.reset();
                 if let Some(native) = handterm_native_scroll.as_mut() {
                     native.sync_from_app(&self);
                 }
@@ -221,7 +232,7 @@ impl App {
         let mut event_stream = EventStream::new();
         let mut redraw_period = crate::tui::redraw_interval(&self);
         let mut redraw_interval = interval(redraw_period);
-        let mut status_spinner_interval = interval(STATUS_SPINNER_ONLY_INTERVAL);
+        let mut status_spinner_interval = status_spinner_interval();
         let mut needs_redraw = true;
         let mut handterm_native_scroll =
             super::handterm_native_scroll::HandtermNativeScrollClient::connect_from_env();
@@ -241,6 +252,7 @@ impl App {
                     self.force_full_redraw = false;
                 }
                 terminal.draw(|frame| crate::tui::ui::draw(frame, &self))?;
+                status_spinner_interval.reset();
                 needs_redraw = false;
             }
 
@@ -289,6 +301,7 @@ impl App {
                         self.force_full_redraw = false;
                     }
                     terminal.draw(|frame| crate::tui::ui::draw(frame, &self))?;
+                    status_spinner_interval.reset();
                     if let Some(native) = handterm_native_scroll.as_mut() {
                         native.sync_from_app(&self);
                     }
