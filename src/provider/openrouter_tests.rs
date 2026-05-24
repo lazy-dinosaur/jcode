@@ -900,6 +900,31 @@ fn built_in_openai_compatible_static_models_drop_out_after_live_catalog() {
 }
 
 #[test]
+fn direct_openai_compatible_static_models_are_marked_as_fallback_before_live_catalog() {
+    let provider = OpenRouterProvider {
+        supports_provider_features: false,
+        supports_model_catalog: true,
+        profile_id: Some("opencode".to_string()),
+        static_models: vec!["minimax-m2.7".to_string()],
+        send_openrouter_headers: false,
+        ..make_custom_compatible_provider()
+    };
+
+    let routes = provider.model_routes();
+    let route = routes
+        .iter()
+        .find(|route| route.model == "minimax-m2.7")
+        .expect("static fallback route should be present before live catalog fetch");
+
+    assert!(
+        route
+            .detail
+            .contains("fallback: not from live /models catalog"),
+        "fallback routes should be clearly labeled in the model picker: {route:?}"
+    );
+}
+
+#[test]
 fn cerebras_chat_unavailable_catalog_models_are_rejected_on_explicit_switch() {
     let provider = OpenRouterProvider {
         supports_provider_features: false,
