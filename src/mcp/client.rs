@@ -413,7 +413,9 @@ impl McpClient {
 
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         if let Some(child) = client.child.as_mut()
-            && let Some(status) = child.try_wait().context("Failed to poll MCP server process")?
+            && let Some(status) = child
+                .try_wait()
+                .context("Failed to poll MCP server process")?
         {
             anyhow::bail!("MCP server '{}' exited before initialize: {}", name, status);
         }

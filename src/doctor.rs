@@ -388,10 +388,7 @@ fn section_agent_profiles(working_dir: &Path) -> Section {
             // so quiet mode hides it (debug helper, not a problem report).
             let dims = effective_profile_dimensions(&winner.profile);
             if !dims.is_empty() {
-                items.push(info(
-                    format!("  \"{name}\" dimensions"),
-                    dims.join(" · "),
-                ));
+                items.push(info(format!("  \"{name}\" dimensions"), dims.join(" · ")));
             }
         }
     }
@@ -529,23 +526,40 @@ struct AgentDefinition {
 /// "just a markdown prompt body" case).
 fn effective_profile_dimensions(profile: &AgentRouteConfig) -> Vec<String> {
     let mut parts: Vec<String> = Vec::new();
-    if let Some(model) = profile.model.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(model) = profile
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         parts.push(format!("model={}", model));
     }
-    if let Some(variant) = profile.variant.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(variant) = profile
+        .variant
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         parts.push(format!("variant={}", variant));
     }
-    if let Some(effort) = profile.effort.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(effort) = profile
+        .effort
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         parts.push(format!("effort={}", effort));
     }
-    if let Some(context) = profile.context.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(context) = profile
+        .context
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         parts.push(format!("context={}", context));
     }
     if let Some(thinking) = profile.thinking {
-        parts.push(format!(
-            "thinking={}",
-            if thinking { "on" } else { "off" }
-        ));
+        parts.push(format!("thinking={}", if thinking { "on" } else { "off" }));
     }
     parts
 }

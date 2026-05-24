@@ -41,7 +41,12 @@ pub fn parse_agent_md_file(path: &Path) -> Result<(String, AgentRouteConfig)> {
         // common ecosystem aliases so a single SSOT can target multiple tools.
         config.context = string_field(
             value,
-            &["context", "context-window", "context_window", "context-length"],
+            &[
+                "context",
+                "context-window",
+                "context_window",
+                "context-length",
+            ],
         );
         config.thinking = bool_field(
             value,
@@ -517,11 +522,8 @@ mod tests {
         // toggle; a future milestone may add a dedicated numeric budget field.
         let dir = tempfile::TempDir::new().expect("tempdir");
         let path = dir.path().join("budgeted.md");
-        std::fs::write(
-            &path,
-            "---\nname: budgeted\nthinking-budget: 8192\n---\n",
-        )
-        .expect("write file");
+        std::fs::write(&path, "---\nname: budgeted\nthinking-budget: 8192\n---\n")
+            .expect("write file");
 
         let (_, cfg) = parse_agent_md_file(&path).expect("parse");
         assert_eq!(cfg.thinking, Some(true));

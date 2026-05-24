@@ -649,7 +649,12 @@ pub mod m48_fixtures {
         for turn in 1..=6u32 {
             out.push(user_text(turn, "run the test suite please"));
             let tool_id = format!("call_{:03}", turn);
-            out.push(assistant_tool_use(turn, &tool_id, "bash", "cargo test --all"));
+            out.push(assistant_tool_use(
+                turn,
+                &tool_id,
+                "bash",
+                "cargo test --all",
+            ));
             // 4_000 char tool result of varied lines.
             let mut result = String::with_capacity(4_000);
             for line in 0..200u32 {
@@ -673,7 +678,10 @@ pub mod m48_fixtures {
             user_image(1, "image/png"),
             assistant_text(1, "this image looks like a system diagram with three nodes"),
             user_text(2, "explain the arrows"),
-            assistant_text(2, "the arrows show message direction between leader and follower replicas"),
+            assistant_text(
+                2,
+                "the arrows show message direction between leader and follower replicas",
+            ),
         ]
     }
 
@@ -687,7 +695,10 @@ pub mod m48_fixtures {
             user_text(1, "lets continue from where we left off"),
             assistant_openai_compaction(1, "BASE64_ENCRYPTED_NATIVE_COMPACTION_PLACEHOLDER"),
             user_text(2, "next, summarize the open todos"),
-            assistant_text(2, "open todos: 1) finish M48 C-0 fixtures 2) port opencode select() 3) wire prune pass"),
+            assistant_text(
+                2,
+                "open todos: 1) finish M48 C-0 fixtures 2) port opencode select() 3) wire prune pass",
+            ),
         ]
     }
 
@@ -769,9 +780,7 @@ pub mod m48_trace {
             ContentBlock::Text { text, .. } => text.len() / CHARS_PER_TOKEN,
             ContentBlock::Reasoning { text } => text.len() / CHARS_PER_TOKEN,
             ContentBlock::ToolUse { name, input, .. } => {
-                let serialized = serde_json::to_string(input)
-                    .map(|s| s.len())
-                    .unwrap_or(0);
+                let serialized = serde_json::to_string(input).map(|s| s.len()).unwrap_or(0);
                 (name.len() + serialized) / CHARS_PER_TOKEN
             }
             ContentBlock::ToolResult { content, .. } => content.len() / CHARS_PER_TOKEN,
@@ -854,7 +863,10 @@ pub mod m48_trace {
         #[test]
         fn short_session_under_token_budget() {
             let tokens = total_tokens(&m48_fixtures::short_session());
-            assert!(tokens < 200, "short_session should be under 200 tokens, got {tokens}");
+            assert!(
+                tokens < 200,
+                "short_session should be under 200 tokens, got {tokens}"
+            );
         }
 
         #[test]
@@ -894,7 +906,11 @@ pub mod m48_trace {
         fn image_session_image_block_has_nonzero_tokens() {
             let msgs = m48_fixtures::image_session();
             let trace = trace_messages(&msgs);
-            assert!(trace.iter().any(|t| t.blocks.iter().any(|b| b.kind == "image" && b.tokens > 0)));
+            assert!(
+                trace
+                    .iter()
+                    .any(|t| t.blocks.iter().any(|b| b.kind == "image" && b.tokens > 0))
+            );
         }
 
         #[test]
@@ -1174,9 +1190,15 @@ pub mod m48_select {
         #[test]
         fn preserve_recent_budget_clamps_to_range() {
             // Below MIN -> clamped up
-            assert_eq!(preserve_recent_budget(100, None), MIN_PRESERVE_RECENT_TOKENS);
+            assert_eq!(
+                preserve_recent_budget(100, None),
+                MIN_PRESERVE_RECENT_TOKENS
+            );
             // Above MAX -> clamped down
-            assert_eq!(preserve_recent_budget(40_000, None), MAX_PRESERVE_RECENT_TOKENS);
+            assert_eq!(
+                preserve_recent_budget(40_000, None),
+                MAX_PRESERVE_RECENT_TOKENS
+            );
             // Inside range -> floor(usable/4)
             assert_eq!(preserve_recent_budget(20_000, None), 5_000);
             // Explicit override wins
@@ -1257,7 +1279,10 @@ pub mod m48_select {
             // Build a 3-message turn whose total exceeds the budget but
             // whose final message alone fits.
             let msgs = vec![
-                m48_fixtures::user_text(1, "header text occupying many tokens ".repeat(100).as_str()),
+                m48_fixtures::user_text(
+                    1,
+                    "header text occupying many tokens ".repeat(100).as_str(),
+                ),
                 m48_fixtures::assistant_text(1, "long assistant response ".repeat(100).as_str()),
                 m48_fixtures::user_text(2, "follow up"),
             ];
@@ -1280,12 +1305,10 @@ pub mod m48_select {
         fn select_tail_falls_back_to_summarize_everything_when_no_suffix_fits() {
             // Single oversized turn with budget too small to admit even the
             // last message: caller should summarize the whole thing.
-            let msgs = vec![
-                m48_fixtures::user_text(
-                    1,
-                    "a very long single user message ".repeat(2_000).as_str(),
-                ),
-            ];
+            let msgs = vec![m48_fixtures::user_text(
+                1,
+                "a very long single user message ".repeat(2_000).as_str(),
+            )];
             let result = select_tail(&msgs, 1, Some(2));
             assert_eq!(result.tail_start, msgs.len());
             assert_eq!(result.tail_tokens, 0);
@@ -1337,8 +1360,7 @@ pub mod m48_prune {
     /// Placeholder content written in place of pruned tool output. Length
     /// is intentionally short so the prune savings are observable; the text
     /// matches opencode's `<tool result removed by compaction>` convention.
-    pub const PRUNED_PLACEHOLDER: &str =
-        "[tool output removed by compaction]";
+    pub const PRUNED_PLACEHOLDER: &str = "[tool output removed by compaction]";
 
     /// Summary of a prune pass.
     #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -1422,7 +1444,12 @@ pub mod m48_prune {
                 continue;
             }
             for (block_i, block) in msg.content.iter().enumerate().rev() {
-                let ContentBlock::ToolResult { content, tool_use_id, .. } = block else {
+                let ContentBlock::ToolResult {
+                    content,
+                    tool_use_id,
+                    ..
+                } = block
+                else {
                     continue;
                 };
                 if is_pruned_placeholder(content) {
@@ -1593,10 +1620,7 @@ pub mod m48_prune {
                 msgs.push(m48_fixtures::user_text(turn, "run"));
                 let tool_id = format!("call-{turn}");
                 msgs.push(m48_fixtures::assistant_tool_use(
-                    turn,
-                    &tool_id,
-                    "bash",
-                    "ls",
+                    turn, &tool_id, "bash", "ls",
                 ));
                 let payload = "out\n".repeat(15_000);
                 msgs.push(m48_fixtures::user_tool_result(turn, &tool_id, &payload));
@@ -1619,10 +1643,7 @@ pub mod m48_prune {
                 msgs.push(m48_fixtures::user_text(turn, "go"));
                 let tool_id = format!("c-{turn}");
                 msgs.push(m48_fixtures::assistant_tool_use(
-                    turn,
-                    &tool_id,
-                    "bash",
-                    "ls",
+                    turn, &tool_id, "bash", "ls",
                 ));
                 msgs.push(m48_fixtures::user_tool_result(
                     turn,
@@ -1647,10 +1668,7 @@ pub mod m48_prune {
                 msgs.push(m48_fixtures::user_text(turn, "go"));
                 let tool_id = format!("c-{turn}");
                 msgs.push(m48_fixtures::assistant_tool_use(
-                    turn,
-                    &tool_id,
-                    "bash",
-                    "ls",
+                    turn, &tool_id, "bash", "ls",
                 ));
                 msgs.push(m48_fixtures::user_tool_result(
                     turn,
@@ -1773,10 +1791,7 @@ Rules:
         let anchor = match previous_summary {
             Some(prev) => format!(
                 "{}\n{}\n{}\n{}",
-                UPDATE_ANCHOR_PROLOGUE,
-                PREVIOUS_SUMMARY_OPEN_TAG,
-                prev,
-                PREVIOUS_SUMMARY_CLOSE_TAG,
+                UPDATE_ANCHOR_PROLOGUE, PREVIOUS_SUMMARY_OPEN_TAG, prev, PREVIOUS_SUMMARY_CLOSE_TAG,
             ),
             None => CREATE_ANCHOR_PROLOGUE.to_string(),
         };
@@ -2112,7 +2127,8 @@ pub mod m48_overflow {
     /// replay candidate). When this returns false the caller should
     /// drop the replay and fall through to the auto-continue path.
     pub fn is_replay_safe(head: &[Message]) -> bool {
-        head.iter().any(|m| m.role == Role::User && !is_compaction_marker(m))
+        head.iter()
+            .any(|m| m.role == Role::User && !is_compaction_marker(m))
     }
 
     /// One-shot helper: given the full message log and the parent index
@@ -2372,7 +2388,9 @@ pub mod m48_native {
         // Non-OpenAI providers (and search/export) never get the blob.
         if !provider.supports_native_encrypted_content() {
             return if has_text {
-                SummaryRepresentation::Text { dropped_native_len: None }
+                SummaryRepresentation::Text {
+                    dropped_native_len: None,
+                }
             } else {
                 SummaryRepresentation::None
             };
@@ -2397,7 +2415,9 @@ pub mod m48_native {
                 // No blob at all (first compaction event, or already
                 // discarded). Use text if present.
                 if has_text {
-                    SummaryRepresentation::Text { dropped_native_len: None }
+                    SummaryRepresentation::Text {
+                        dropped_native_len: None,
+                    }
                 } else {
                     SummaryRepresentation::None
                 }
@@ -2452,9 +2472,18 @@ pub mod m48_native {
 
         #[test]
         fn classify_provider_id_handles_known_aliases() {
-            assert_eq!(classify_provider_id("openai"), ProviderKind::OpenAIResponses);
-            assert_eq!(classify_provider_id("OpenAI"), ProviderKind::OpenAIResponses);
-            assert_eq!(classify_provider_id("openai-responses"), ProviderKind::OpenAIResponses);
+            assert_eq!(
+                classify_provider_id("openai"),
+                ProviderKind::OpenAIResponses
+            );
+            assert_eq!(
+                classify_provider_id("OpenAI"),
+                ProviderKind::OpenAIResponses
+            );
+            assert_eq!(
+                classify_provider_id("openai-responses"),
+                ProviderKind::OpenAIResponses
+            );
             assert_eq!(classify_provider_id("anthropic"), ProviderKind::Anthropic);
             assert_eq!(classify_provider_id("CLAUDE"), ProviderKind::Anthropic);
             assert_eq!(classify_provider_id("gemini"), ProviderKind::Gemini);
@@ -2475,7 +2504,9 @@ pub mod m48_native {
             );
             assert_eq!(
                 result,
-                SummaryRepresentation::Native { encrypted_content_len: 100_000 }
+                SummaryRepresentation::Native {
+                    encrypted_content_len: 100_000
+                }
             );
         }
 
@@ -2490,7 +2521,9 @@ pub mod m48_native {
             );
             assert_eq!(
                 result,
-                SummaryRepresentation::Text { dropped_native_len: Some(SAFE + 1) }
+                SummaryRepresentation::Text {
+                    dropped_native_len: Some(SAFE + 1)
+                }
             );
         }
 
@@ -2516,7 +2549,9 @@ pub mod m48_native {
             );
             assert_eq!(
                 result,
-                SummaryRepresentation::Text { dropped_native_len: None }
+                SummaryRepresentation::Text {
+                    dropped_native_len: None
+                }
             );
         }
 
@@ -2531,29 +2566,22 @@ pub mod m48_native {
             );
             assert_eq!(
                 result,
-                SummaryRepresentation::Text { dropped_native_len: None }
+                SummaryRepresentation::Text {
+                    dropped_native_len: None
+                }
             );
         }
 
         #[test]
         fn anthropic_with_no_text_returns_none() {
-            let result = decide_summary_representation(
-                ProviderKind::Anthropic,
-                None,
-                None,
-                SAFE,
-            );
+            let result = decide_summary_representation(ProviderKind::Anthropic, None, None, SAFE);
             assert_eq!(result, SummaryRepresentation::None);
         }
 
         #[test]
         fn whitespace_only_text_summary_is_ignored() {
-            let result = decide_summary_representation(
-                ProviderKind::Gemini,
-                None,
-                Some("   \n  "),
-                SAFE,
-            );
+            let result =
+                decide_summary_representation(ProviderKind::Gemini, None, Some("   \n  "), SAFE);
             assert_eq!(result, SummaryRepresentation::None);
         }
 
@@ -2566,7 +2594,10 @@ pub mod m48_native {
                 ProviderKind::OpenRouter,
                 ProviderKind::Other,
             ] {
-                assert_eq!(provider_can_consume_blob(p), p.supports_native_encrypted_content());
+                assert_eq!(
+                    provider_can_consume_blob(p),
+                    p.supports_native_encrypted_content()
+                );
             }
         }
     }
@@ -2687,8 +2718,16 @@ pub mod m48_diagnostics {
                         out,
                         "  [{i}] id={} marker={} summary={} tail_start={:?} legacy={} overflow={} chained={}",
                         t.turn_id,
-                        if t.marker_message_id.is_empty() { "—" } else { &t.marker_message_id },
-                        if t.summary_message_id.is_empty() { "—" } else { &t.summary_message_id },
+                        if t.marker_message_id.is_empty() {
+                            "—"
+                        } else {
+                            &t.marker_message_id
+                        },
+                        if t.summary_message_id.is_empty() {
+                            "—"
+                        } else {
+                            &t.summary_message_id
+                        },
                         t.tail_start_id,
                         t.backfilled_from_legacy,
                         t.overflow,
@@ -2705,15 +2744,19 @@ pub mod m48_diagnostics {
             }
             if let Some(n) = &self.native_state {
                 let label = match &n.representation {
-                    SummaryRepresentation::Native { encrypted_content_len } => {
+                    SummaryRepresentation::Native {
+                        encrypted_content_len,
+                    } => {
                         format!("native ({} bytes)", encrypted_content_len)
                     }
-                    SummaryRepresentation::Text { dropped_native_len: Some(n) } => {
+                    SummaryRepresentation::Text {
+                        dropped_native_len: Some(n),
+                    } => {
                         format!("text (dropped native {} bytes)", n)
                     }
-                    SummaryRepresentation::Text { dropped_native_len: None } => {
-                        "text".to_string()
-                    }
+                    SummaryRepresentation::Text {
+                        dropped_native_len: None,
+                    } => "text".to_string(),
                     SummaryRepresentation::None => "none".to_string(),
                 };
                 let _ = writeln!(out, "native state ({}): {}", n.provider_id, label);
@@ -2728,11 +2771,24 @@ pub mod m48_diagnostics {
         use super::super::m48_prune::PruneReport;
         use super::*;
 
-        fn sample_turn(i: usize, legacy: bool, overflow: bool, chained: bool) -> CompactionTurnDigest {
+        fn sample_turn(
+            i: usize,
+            legacy: bool,
+            overflow: bool,
+            chained: bool,
+        ) -> CompactionTurnDigest {
             CompactionTurnDigest {
                 turn_id: format!("turn-{i}"),
-                marker_message_id: if legacy { String::new() } else { format!("marker-{i}") },
-                summary_message_id: if legacy { String::new() } else { format!("summary-{i}") },
+                marker_message_id: if legacy {
+                    String::new()
+                } else {
+                    format!("marker-{i}")
+                },
+                summary_message_id: if legacy {
+                    String::new()
+                } else {
+                    format!("summary-{i}")
+                },
                 tail_start_id: Some(format!("tail-{i}")),
                 backfilled_from_legacy: legacy,
                 overflow,
@@ -2775,8 +2831,18 @@ pub mod m48_diagnostics {
         #[test]
         fn one_line_header_labels_native_vs_text_vs_none() {
             for (rep, expected_suffix) in [
-                (SummaryRepresentation::Native { encrypted_content_len: 1 }, "native"),
-                (SummaryRepresentation::Text { dropped_native_len: None }, "text"),
+                (
+                    SummaryRepresentation::Native {
+                        encrypted_content_len: 1,
+                    },
+                    "native",
+                ),
+                (
+                    SummaryRepresentation::Text {
+                        dropped_native_len: None,
+                    },
+                    "text",
+                ),
                 (SummaryRepresentation::None, "none"),
             ] {
                 let diag = CompactionDiagnostics {

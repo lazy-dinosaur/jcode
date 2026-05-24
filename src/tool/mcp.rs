@@ -722,7 +722,10 @@ done
                 .mcp_server_tool_names,
             vec!["mcp__atomic__hello"]
         );
-        assert_eq!(manager.read().await.connected_servers().await, vec!["atomic"]);
+        assert_eq!(
+            manager.read().await.connected_servers().await,
+            vec!["atomic"]
+        );
     }
 
     #[tokio::test]

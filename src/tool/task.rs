@@ -116,9 +116,9 @@ impl SubagentTool {
             // 4-provider matrix. The provider classifier looks at the resolved
             // model (post-`[1m]`-suffix), so Claude routes still see themselves
             // even when the suffix has been appended already.
-            let variant_dims = model.as_deref().and_then(|m| {
-                Self::resolve_variant_dimensions_for_provider(m, raw_variant)
-            });
+            let variant_dims = model
+                .as_deref()
+                .and_then(|m| Self::resolve_variant_dimensions_for_provider(m, raw_variant));
 
             // Explicit profile fields beat variant fallback. Empty trimmed values
             // are treated as None so a SSOT can carry placeholder keys without
@@ -127,8 +127,7 @@ impl SubagentTool {
                 .effort
                 .as_deref()
                 .and_then(Self::normalize_route_effort);
-            let explicit_context =
-                raw_context.map(|s| s.to_ascii_lowercase());
+            let explicit_context = raw_context.map(|s| s.to_ascii_lowercase());
             let explicit_thinking = route.thinking;
 
             return ResolvedSubagentRoute {
@@ -1016,7 +1015,9 @@ mod tests {
 
         // OpenAI direct
         assert!(super::SubagentTool::should_apply_route_effort("gpt-5.5"));
-        assert!(super::SubagentTool::should_apply_route_effort("gpt-5.4-pro"));
+        assert!(super::SubagentTool::should_apply_route_effort(
+            "gpt-5.4-pro"
+        ));
 
         // OpenAI through OpenRouter style prefix
         assert!(super::SubagentTool::should_apply_route_effort(
@@ -1255,11 +1256,9 @@ mod tests {
 
     #[test]
     fn variant_max_on_openai_resolves_to_effort_xhigh() {
-        let dims = super::SubagentTool::resolve_variant_dimensions_for_provider(
-            "gpt-5.5",
-            Some("max"),
-        )
-        .expect("max on openai resolves");
+        let dims =
+            super::SubagentTool::resolve_variant_dimensions_for_provider("gpt-5.5", Some("max"))
+                .expect("max on openai resolves");
         assert_eq!(dims.effort.as_deref(), Some("xhigh"));
         assert_eq!(dims.context, None);
         assert_eq!(dims.thinking, None);
@@ -1305,51 +1304,37 @@ mod tests {
 
     #[test]
     fn variant_resolver_returns_none_for_empty_or_unknown_variant() {
-        assert!(super::SubagentTool::resolve_variant_dimensions_for_provider(
-            "gpt-5.5",
-            None
-        )
-        .is_none());
-        assert!(super::SubagentTool::resolve_variant_dimensions_for_provider(
-            "gpt-5.5",
-            Some("")
-        )
-        .is_none());
-        assert!(super::SubagentTool::resolve_variant_dimensions_for_provider(
-            "gpt-5.5",
-            Some("pro")
-        )
-        .is_none());
-        assert!(super::SubagentTool::resolve_variant_dimensions_for_provider(
-            "gpt-5.5",
-            Some("fast")
-        )
-        .is_none());
+        assert!(
+            super::SubagentTool::resolve_variant_dimensions_for_provider("gpt-5.5", None).is_none()
+        );
+        assert!(
+            super::SubagentTool::resolve_variant_dimensions_for_provider("gpt-5.5", Some(""))
+                .is_none()
+        );
+        assert!(
+            super::SubagentTool::resolve_variant_dimensions_for_provider("gpt-5.5", Some("pro"))
+                .is_none()
+        );
+        assert!(
+            super::SubagentTool::resolve_variant_dimensions_for_provider("gpt-5.5", Some("fast"))
+                .is_none()
+        );
     }
 
     #[test]
     fn apply_route_context_appends_1m_on_claude_and_strips_on_200k() {
         assert_eq!(
-            super::SubagentTool::apply_route_context_to_model(
-                "claude-opus-4-7",
-                Some("1m"),
-            ),
+            super::SubagentTool::apply_route_context_to_model("claude-opus-4-7", Some("1m"),),
             "claude-opus-4-7[1m]"
         );
         // Idempotent
         assert_eq!(
-            super::SubagentTool::apply_route_context_to_model(
-                "claude-opus-4-7[1m]",
-                Some("1m"),
-            ),
+            super::SubagentTool::apply_route_context_to_model("claude-opus-4-7[1m]", Some("1m"),),
             "claude-opus-4-7[1m]"
         );
         // Strip back
         assert_eq!(
-            super::SubagentTool::apply_route_context_to_model(
-                "claude-opus-4-7[1m]",
-                Some("200k"),
-            ),
+            super::SubagentTool::apply_route_context_to_model("claude-opus-4-7[1m]", Some("200k"),),
             "claude-opus-4-7"
         );
         // Non-Claude pass-through
