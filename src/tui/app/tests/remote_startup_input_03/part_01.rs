@@ -213,8 +213,11 @@ fn test_paste_expansion_on_submit() {
     assert_eq!(app.display_messages()[0].content, "A: [pasted 5 lines] B");
 
     // Model receives expanded content (actual pasted text)
-    assert_eq!(app.messages.len(), 1);
-    match &app.messages[0].content[0] {
+    let provider_messages = app.materialized_provider_messages();
+    let submitted_message = provider_messages
+        .last()
+        .expect("submitted user message should be materialized");
+    match &submitted_message.content[0] {
         crate::message::ContentBlock::Text { text, .. } => {
             assert_eq!(text, "A: 1\n2\n3\n4\n5 B");
         }

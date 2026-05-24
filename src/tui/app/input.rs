@@ -161,6 +161,22 @@ pub(super) struct PreparedInput {
     pub images: Vec<(String, String)>,
 }
 
+// Roughly 500k English words at ~6 bytes/word including spaces. This is still
+// low enough to avoid multi-megabyte submit-path hangs while allowing very large logs.
+pub(super) const MAX_SUBMITTED_TEXT_BYTES: usize = 3 * 1024 * 1024;
+
+fn oversized_message_notice(size: usize) -> String {
+    format!(
+        "Message is too large to send ({} bytes). Save it as a file or attach it instead. Your input was preserved.",
+        crate::util::format_number(size)
+    )
+}
+
+fn input_exceeds_submit_limit(input: &str) -> Option<String> {
+    let size = input.len();
+    (size > MAX_SUBMITTED_TEXT_BYTES).then(|| oversized_message_notice(size))
+}
+
 pub(super) fn paste_image_from_clipboard(app: &mut App) {
     app.set_status_notice("Reading clipboard image...");
     spawn_clipboard_paste(app, ClipboardPasteKind::ImageOnly);
@@ -531,7 +547,7 @@ pub(super) fn handle_paste(app: &mut App, text: String) {
     handle_text_paste(app, text);
 }
 
-fn handle_text_paste(app: &mut App, text: String) {
+pub(super) fn handle_text_paste(app: &mut App, text: String) {
     crate::logging::info(&format!(
         "Text paste: {} chars, {} lines",
         text.len(),
@@ -2081,6 +2097,13 @@ impl App {
 
         let raw_input = std::mem::take(&mut self.input);
         let input = self.expand_paste_placeholders(&raw_input);
+        if let Some(notice) = input_exceeds_submit_limit(&input) {
+            self.input = raw_input;
+            self.cursor_pos = self.input.len();
+            self.set_status_notice(notice.clone());
+            self.push_display_message(DisplayMessage::system(notice));
+            return;
+        }
         self.pasted_contents.clear();
         self.cursor_pos = 0;
         self.clear_input_undo_history();
