@@ -229,6 +229,19 @@ pub fn normalize_antigravity_model_for_api(model: &str) -> Gemini3ModelConfig {
     let is_gemini3_pro = base.starts_with("gemini-3") && base.contains("-pro");
     let is_gemini3_flash = base.starts_with("gemini-3") && base.contains("-flash");
 
+    if base == "gemini-3.5-flash" {
+        let tier = tier.unwrap_or("low");
+        let backend_model = if tier == "high" {
+            "gemini-3-flash-agent"
+        } else {
+            "gemini-3.5-flash-low"
+        };
+        return Gemini3ModelConfig {
+            model: backend_model.to_string(),
+            thinking_level: Some(tier.to_string()),
+        };
+    }
+
     if is_gemini3_flash {
         if base.starts_with("gemini-3.") && tier.is_some() {
             return Gemini3ModelConfig {
@@ -614,15 +627,29 @@ mod tests {
         assert_eq!(
             normalize_antigravity_model_for_api("antigravity-gemini-3.5-flash"),
             Gemini3ModelConfig {
-                model: "gemini-3.5-flash".to_string(),
+                model: "gemini-3.5-flash-low".to_string(),
                 thinking_level: Some("low".to_string()),
             }
         );
         assert_eq!(
             normalize_antigravity_model_for_api("agy-gemini-3.5-flash"),
             Gemini3ModelConfig {
-                model: "gemini-3.5-flash".to_string(),
+                model: "gemini-3.5-flash-low".to_string(),
                 thinking_level: Some("low".to_string()),
+            }
+        );
+        assert_eq!(
+            normalize_antigravity_model_for_api("gemini-3.5-flash-medium"),
+            Gemini3ModelConfig {
+                model: "gemini-3.5-flash-low".to_string(),
+                thinking_level: Some("medium".to_string()),
+            }
+        );
+        assert_eq!(
+            normalize_antigravity_model_for_api("gemini-3.5-flash-high"),
+            Gemini3ModelConfig {
+                model: "gemini-3-flash-agent".to_string(),
+                thinking_level: Some("high".to_string()),
             }
         );
         assert_eq!(
