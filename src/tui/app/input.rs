@@ -969,7 +969,12 @@ impl App {
 
         let incomplete = super::commands::incomplete_poke_todos(self);
         if incomplete.is_empty() {
+            let had_todos = crate::todo::todos_exist(&super::commands::active_session_id(self))
+                .unwrap_or(false);
             self.auto_poke_incomplete_todos = false;
+            if !had_todos {
+                return false;
+            }
             self.push_display_message(DisplayMessage::system(
                 "✅ Todos complete. Auto-poke finished.".to_string(),
             ));
