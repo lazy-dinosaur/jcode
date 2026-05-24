@@ -128,6 +128,36 @@ async fn user_cancel_turn_control_does_not_set_graceful_reload_signal() {
 }
 
 #[tokio::test]
+async fn prefire_cancel_request_sets_turn_signal_before_ack_path() {
+    let queue = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let background_signal = InterruptSignal::new();
+    let turn_control = TurnControl::new();
+    let stop_signal = turn_control.stop_signal();
+    let control = SessionControlHandle::new(
+        "session_prefire_cancel",
+        Arc::clone(&queue),
+        background_signal,
+        turn_control,
+    );
+    let (tx, mut rx) = mpsc::unbounded_channel();
+
+    prefire_cancel_request(&control, &tx);
+
+    assert!(
+        stop_signal.is_set(),
+        "cancel signal should fire immediately"
+    );
+    let event = rx
+        .recv()
+        .await
+        .expect("prefire should emit interrupt status detail");
+    assert!(
+        matches!(event, ServerEvent::StatusDetail { ref detail } if detail == "interrupting (user_interrupt)"),
+        "unexpected status detail: {event:?}"
+    );
+}
+
+#[tokio::test]
 async fn processing_interrupt_snapshot_tracks_active_task_without_agent_lock() {
     let mut client_is_processing = true;
     let mut processing_message_id = Some(777);

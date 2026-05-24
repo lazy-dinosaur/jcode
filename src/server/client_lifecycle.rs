@@ -1441,6 +1441,16 @@ pub(super) async fn handle_client(
             }
         };
 
+        // Fire latency-sensitive control signals before taking the writer lock
+        // for Ack. During high-volume streaming/thinking output the event
+        // forwarder can temporarily monopolize or backpressure the shared
+        // socket writer. If cancellation waits behind that Ack write, the
+        // provider keeps thinking/streaming even though the server has already
+        // read the cancel request.
+        if matches!(request, Request::Cancel { .. }) {
+            prefire_cancel_request(&session_control, &client_event_tx);
+        }
+
         // Send ack
         let ack = ServerEvent::Ack { id: request.id() };
         let json = encode_event(&ack);
@@ -3138,6 +3148,17 @@ fn clear_soft_interrupts(
         ));
     }
     let _ = client_event_tx.send(ServerEvent::Ack { id });
+}
+
+fn prefire_cancel_request(
+    session_control: &SessionControlHandle,
+    client_event_tx: &mpsc::UnboundedSender<ServerEvent>,
+) {
+    session_control.request_cancel();
+    let diagnostics = session_control.interrupt_diagnostics();
+    if let Some(detail) = diagnostics.status_detail {
+        let _ = client_event_tx.send(ServerEvent::StatusDetail { detail });
+    }
 }
 
 fn move_tool_to_background(
