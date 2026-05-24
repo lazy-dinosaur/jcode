@@ -223,7 +223,14 @@ fn test_schema_only_requires_tool() {
         schema["properties"]["tool_calls"]["items"]["properties"]["tool"]["description"],
         json!("Tool name.")
     );
-    assert!(schema["properties"]["tool_calls"]["items"]["properties"]["parameters"].is_null());
+    assert_eq!(
+        schema["properties"]["tool_calls"]["items"]["properties"]["parameters"]["type"],
+        json!("object")
+    );
+    assert_eq!(
+        schema["properties"]["tool_calls"]["items"]["properties"]["parameters"]["additionalProperties"],
+        json!(true)
+    );
 }
 
 #[test]
@@ -232,11 +239,10 @@ fn test_schema_keeps_flat_generic_subcall_shape() {
 
     assert!(schema["properties"]["tool_calls"]["description"].is_null());
     assert!(schema["properties"]["tool_calls"]["items"]["description"].is_null());
-    assert_eq!(
-        schema["properties"]["tool_calls"]["items"]["properties"]
-            .as_object()
-            .map(|props| props.len()),
-        Some(1)
-    );
+    let props = schema["properties"]["tool_calls"]["items"]["properties"]
+        .as_object()
+        .expect("batch subcall properties should be an object");
+    assert!(props.contains_key("tool"));
+    assert!(props.contains_key("parameters"));
     assert!(schema["properties"]["tool_calls"]["items"]["oneOf"].is_null());
 }

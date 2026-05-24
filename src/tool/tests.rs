@@ -523,9 +523,9 @@ async fn test_definitions_keep_batch_schema_generic() {
             .map(|required| required.iter().any(|value| value == "tool"))
             .unwrap_or(false)
     );
-    assert!(
-        batch_def.input_schema["properties"]["tool_calls"]["items"]["properties"]["parameters"]
-            .is_null()
+    assert_eq!(
+        batch_def.input_schema["properties"]["tool_calls"]["items"]["properties"]["parameters"]["type"],
+        serde_json::json!("object")
     );
 }
 

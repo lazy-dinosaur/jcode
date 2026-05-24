@@ -24,6 +24,11 @@ pub(crate) fn generic_batch_schema() -> Value {
                         "tool": {
                             "type": "string",
                             "description": "Tool name."
+                        },
+                        "parameters": {
+                            "type": "object",
+                            "description": "Parameters for the selected tool. Put the same arguments here that you would pass when calling that tool directly, for example {\"file_path\": \"src/main.rs\"} for read or {\"command\": \"pwd\"} for bash.",
+                            "additionalProperties": true
                         }
                     },
                     "additionalProperties": true
