@@ -1435,6 +1435,21 @@ pub(super) fn handle_visible_copy_shortcut(
         return false;
     }
 
+    if c.eq_ignore_ascii_case(&'e') && app.diff_mode.is_inline() {
+        app.diff_mode = if app.diff_mode.is_full_inline() {
+            crate::config::DiffDisplayMode::Inline
+        } else {
+            crate::config::DiffDisplayMode::FullInline
+        };
+        let action = if app.diff_mode.is_full_inline() {
+            "Expanded edit diffs"
+        } else {
+            "Collapsed edit diffs"
+        };
+        app.set_status_notice(format!("{} · Diffs: {}", action, app.diff_mode.label()));
+        return true;
+    }
+
     if let Some(target) = crate::tui::ui::recent_flicker_copy_target_for_key(c)
         .or_else(|| crate::tui::ui::visible_copy_target_for_key(c))
     {
