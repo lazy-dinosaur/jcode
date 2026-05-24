@@ -1109,7 +1109,17 @@ impl App {
                 added_any = true;
             }
 
-            if Self::remote_model_should_offer_copilot_route(model) && !model.contains("[1m]") {
+            if !added_any
+                && let Some(route) = self.remote_current_openai_compatible_route_for_model(model)
+            {
+                routes.push(route);
+                added_any = true;
+            }
+
+            if !added_any
+                && Self::remote_model_should_offer_copilot_route(model)
+                && !model.contains("[1m]")
+            {
                 routes.push(crate::provider::build_copilot_route(
                     model,
                     auth.copilot == crate::auth::AuthState::Available
@@ -1143,6 +1153,36 @@ impl App {
             }
         }
         routes
+    }
+
+    fn remote_current_openai_compatible_route_for_model(
+        &self,
+        model: &str,
+    ) -> Option<crate::provider::ModelRoute> {
+        if model.trim().is_empty()
+            || model.contains('/')
+            || crate::provider::provider_for_model(model).is_some()
+        {
+            return None;
+        }
+
+        let provider_name = self.remote_provider_name.as_deref()?.trim();
+        let profile_id =
+            crate::provider_catalog::openai_compatible_profile_id_for_display_name(provider_name)?;
+        let profile = crate::provider_catalog::openai_compatible_profile_by_id(profile_id)?;
+        if !crate::provider_catalog::openai_compatible_profile_is_configured(profile) {
+            return None;
+        }
+        let resolved = crate::provider_catalog::resolve_openai_compatible_profile(profile);
+
+        Some(crate::provider::ModelRoute {
+            model: model.to_string(),
+            provider: resolved.display_name,
+            api_method: format!("openai-compatible:{}", resolved.id),
+            available: true,
+            detail: resolved.api_base,
+            cheapness: None,
+        })
     }
 
     pub(super) fn remote_model_should_offer_copilot_route(model: &str) -> bool {
