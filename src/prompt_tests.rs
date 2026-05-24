@@ -402,7 +402,12 @@ fn test_private_jcode_harness_modules_load_sorted() {
 
     let loaded_sources: Vec<_> = _sources
         .iter()
-        .filter(|source| source.status == PromptInstructionStatus::Loaded)
+        .filter(|source| {
+            source.status == PromptInstructionStatus::Loaded
+                && source
+                    .path
+                    .starts_with(project_dir.path().join(".jcode/harness"))
+        })
         .collect();
     assert_eq!(loaded_sources.len(), 2);
     assert!(loaded_sources.iter().all(|source| source.private));

@@ -123,7 +123,10 @@ fn full_and_fast_auth_status_match_for_shared_probe_fields() {
         "JCODE_OPENROUTER_DYNAMIC_BEARER_PROVIDER",
         "JCODE_OPENROUTER_MODEL",
         "JCODE_OPENROUTER_CACHE_NAMESPACE",
+        "JCODE_OPENROUTER_PROVIDER_FEATURES",
         "JCODE_OPENROUTER_ALLOW_NO_AUTH",
+        "JCODE_OPENROUTER_MODEL_CATALOG",
+        "JCODE_OPENROUTER_STATIC_MODELS",
         "JCODE_OPENAI_COMPAT_API_BASE",
         "JCODE_OPENAI_COMPAT_API_KEY_NAME",
         "JCODE_OPENAI_COMPAT_ENV_FILE",
@@ -154,19 +157,26 @@ fn full_and_fast_auth_status_match_for_shared_probe_fields() {
     crate::env::set_var("ANTHROPIC_API_KEY", "anthropic-test-key");
     crate::env::set_var("OPENAI_API_KEY", "openai-test-key");
     crate::env::set_var("OPENROUTER_API_KEY", "openrouter-test-key");
-    crate::env::remove_var("JCODE_OPENROUTER_API_BASE");
-    crate::env::remove_var("JCODE_OPENROUTER_API_KEY_NAME");
-    crate::env::remove_var("JCODE_OPENROUTER_ENV_FILE");
-    crate::env::remove_var("JCODE_OPENROUTER_DYNAMIC_BEARER_PROVIDER");
-    crate::env::remove_var("JCODE_OPENROUTER_MODEL");
-    crate::env::remove_var("JCODE_OPENROUTER_CACHE_NAMESPACE");
-    crate::env::remove_var("JCODE_OPENROUTER_ALLOW_NO_AUTH");
-    crate::env::remove_var("JCODE_OPENAI_COMPAT_API_BASE");
-    crate::env::remove_var("JCODE_OPENAI_COMPAT_API_KEY_NAME");
-    crate::env::remove_var("JCODE_OPENAI_COMPAT_ENV_FILE");
-    crate::env::remove_var("JCODE_OPENAI_COMPAT_SETUP_URL");
-    crate::env::remove_var("JCODE_OPENAI_COMPAT_DEFAULT_MODEL");
-    crate::env::remove_var("JCODE_OPENAI_COMPAT_LOCAL_ENABLED");
+    for key in [
+        "JCODE_OPENROUTER_API_BASE",
+        "JCODE_OPENROUTER_API_KEY_NAME",
+        "JCODE_OPENROUTER_ENV_FILE",
+        "JCODE_OPENROUTER_DYNAMIC_BEARER_PROVIDER",
+        "JCODE_OPENROUTER_MODEL",
+        "JCODE_OPENROUTER_CACHE_NAMESPACE",
+        "JCODE_OPENROUTER_PROVIDER_FEATURES",
+        "JCODE_OPENROUTER_ALLOW_NO_AUTH",
+        "JCODE_OPENROUTER_MODEL_CATALOG",
+        "JCODE_OPENROUTER_STATIC_MODELS",
+        "JCODE_OPENAI_COMPAT_API_BASE",
+        "JCODE_OPENAI_COMPAT_API_KEY_NAME",
+        "JCODE_OPENAI_COMPAT_ENV_FILE",
+        "JCODE_OPENAI_COMPAT_SETUP_URL",
+        "JCODE_OPENAI_COMPAT_DEFAULT_MODEL",
+        "JCODE_OPENAI_COMPAT_LOCAL_ENABLED",
+    ] {
+        crate::env::remove_var(key);
+    }
     crate::env::set_var(
         crate::auth::azure::ENDPOINT_ENV,
         "https://example.openai.azure.com",
