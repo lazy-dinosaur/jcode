@@ -159,20 +159,19 @@ pub fn render_image_widget(
         let mut state = IMAGE_STATE
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let state_key = ImageStateKey::new(hash, ResizeMode::Crop);
         let needs_reset = state
-            .get(&hash)
+            .get(&state_key)
             .map(|s| {
-                s.resize_mode != ResizeMode::Crop
-                    || path
-                        .as_ref()
-                        .map(|p| s.source_path.as_path() != p.as_path())
-                        .unwrap_or(false)
+                path.as_ref()
+                    .map(|p| s.source_path.as_path() != p.as_path())
+                    .unwrap_or(false)
             })
             .unwrap_or(false);
         if needs_reset {
-            state.remove(&hash);
+            state.remove(&state_key);
         }
-        if let Some(img_state) = state.get_mut(hash) {
+        if let Some(img_state) = state.get_mut(state_key) {
             img_state.resize_mode = ResizeMode::Crop;
             img_state.last_viewport = None;
             // Always use Crop mode - no rescaling during scroll
@@ -184,16 +183,12 @@ pub fn render_image_widget(
             // Track whether this is a geometry-identical frame (for skipped_renders stat).
             let same_area = img_state.last_area == Some(render_area);
             // StatefulImage performs resize/encode lazily inside render. Do not
-            // pre-encode here, since pane drag/resizes can change the area every
-            // frame and synchronous resize_encode is expensive. When the image
-            // moves or changes size, cheaply clear the old terminal-graphics
-            // cells first so stale Kitty/Sixel placeholders do not look like the
-            // diagram drifted away from its arrows.
-            if !same_area && let Some(old_area) = img_state.last_area {
-                clear_image_area(old_area, buf);
-            }
+            // pre-clear or pre-encode when the area changes; during pane resizes
+            // those synchronous side effects can fight the terminal image layer
+            // and produce alternating good/blank frames. Mode-specific protocol
+            // states prevent Fit/Scale/Viewport from overwriting each other.
             img_state.last_crop_top = crop_top;
-            let state_key = LastRenderState {
+            let render_state_key = LastRenderState {
                 area: render_area,
                 crop_top,
                 resize_mode: ResizeMode::Crop,
@@ -203,11 +198,11 @@ pub fn render_image_widget(
                     .lock()
                     .ok()
                     .and_then(|mut map| {
-                        let prev = map.get(&hash).cloned();
-                        map.insert(hash, state_key.clone());
+                        let prev = map.get(&state_key).cloned();
+                        map.insert(state_key, render_state_key.clone());
                         prev
                     })
-                    .map(|prev| prev == state_key)
+                    .map(|prev| prev == render_state_key)
                     .unwrap_or(false);
                 if last_same
                     && same_area
@@ -246,8 +241,9 @@ pub fn render_image_widget(
         let mut state = IMAGE_STATE
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let state_key = ImageStateKey::new(hash, ResizeMode::Crop);
         state.insert(
-            hash,
+            state_key,
             ImageState {
                 protocol,
                 source_path: path.clone(),
@@ -258,7 +254,7 @@ pub fn render_image_widget(
             },
         );
 
-        if let Some(img_state) = state.get_mut(hash) {
+        if let Some(img_state) = state.get_mut(state_key) {
             let crop_opts = CropOptions {
                 clip_top: crop_top,
                 clip_left: false,
@@ -434,33 +430,27 @@ fn render_image_widget_fit_inner(
         } else {
             Resize::Fit(None)
         };
+        let state_key = ImageStateKey::new(hash, target_mode);
         let needs_reset = state
-            .get(&hash)
+            .get(&state_key)
             .map(|s| {
-                s.resize_mode != target_mode
-                    || path
-                        .as_ref()
-                        .map(|p| s.source_path.as_path() != p.as_path())
-                        .unwrap_or(false)
+                path.as_ref()
+                    .map(|p| s.source_path.as_path() != p.as_path())
+                    .unwrap_or(false)
             })
             .unwrap_or(false);
         if needs_reset {
-            state.remove(&hash);
+            state.remove(&state_key);
         }
-        if let Some(img_state) = state.get_mut(hash) {
+        if let Some(img_state) = state.get_mut(state_key) {
             img_state.resize_mode = target_mode;
             img_state.last_viewport = None;
             let same_area = img_state.last_area == Some(render_area);
             // StatefulImage performs resize/encode lazily inside render. Keep
-            // that original fast path so pane drag/resizes are not forced to do
-            // an extra synchronous encode each frame. Clearing the previous cell
-            // area is enough to prevent stale terminal-graphics remnants when
-            // the same Mermaid hash is reused in a different pane geometry.
-            if !same_area && let Some(old_area) = img_state.last_area {
-                clear_image_area(old_area, buf);
-            }
+            // that original fast path; mode-specific protocol states prevent the
+            // same Mermaid hash from overwriting itself across fit/zoom paths.
             // Track identical-geometry frames for skipped_renders stat.
-            let state_key = LastRenderState {
+            let render_state_key = LastRenderState {
                 area: render_area,
                 crop_top: false,
                 resize_mode: target_mode,
@@ -470,11 +460,11 @@ fn render_image_widget_fit_inner(
                     .lock()
                     .ok()
                     .and_then(|mut map| {
-                        let prev = map.get(&hash).cloned();
-                        map.insert(hash, state_key.clone());
+                        let prev = map.get(&state_key).cloned();
+                        map.insert(state_key, render_state_key.clone());
                         prev
                     })
-                    .map(|prev| prev == state_key)
+                    .map(|prev| prev == render_state_key)
                     .unwrap_or(false);
                 if last_same
                     && same_area
@@ -519,8 +509,9 @@ fn render_image_widget_fit_inner(
         let mut state = IMAGE_STATE
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let state_key = ImageStateKey::new(hash, target_mode);
         state.insert(
-            hash,
+            state_key,
             ImageState {
                 protocol,
                 source_path: path.clone(),
@@ -531,7 +522,7 @@ fn render_image_widget_fit_inner(
             },
         );
 
-        if let Some(img_state) = state.get_mut(hash) {
+        if let Some(img_state) = state.get_mut(state_key) {
             if !render_stateful_image_safe(hash, render_area, buf, &mut img_state.protocol, resize)
             {
                 return 0;

@@ -726,7 +726,8 @@ pub fn render_image_widget_viewport_precise(
                 .height
                 .min(full_rows.saturating_sub(scroll_y_cells));
             if let Ok(mut state) = IMAGE_STATE.lock()
-                && let Some(img_state) = state.get_mut(hash)
+                && let Some(img_state) =
+                    state.get_mut(ImageStateKey::new(hash, ResizeMode::Viewport))
             {
                 img_state.last_area = Some(image_area);
                 img_state.last_viewport = Some(viewport);
@@ -749,29 +750,24 @@ pub fn render_image_widget_viewport_precise(
         let mut state = IMAGE_STATE
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let state_key = ImageStateKey::new(hash, ResizeMode::Viewport);
         let needs_reset = state
-            .get(&hash)
-            .map(|s| {
-                s.resize_mode != ResizeMode::Viewport
-                    || s.source_path.as_path() != source_path.as_path()
-            })
+            .get(&state_key)
+            .map(|s| s.source_path.as_path() != source_path.as_path())
             .unwrap_or(false);
         if needs_reset {
-            state.remove(&hash);
+            state.remove(&state_key);
         }
-        if let Some(img_state) = state.get_mut(hash)
+        if let Some(img_state) = state.get_mut(state_key)
             && img_state.last_viewport == Some(viewport)
         {
-            let same_area = img_state.last_area == Some(image_area);
             if let Ok(mut dbg) = MERMAID_DEBUG.lock() {
                 dbg.stats.viewport_state_reuse_hits += 1;
             }
-            if !same_area && let Some(old_area) = img_state.last_area {
-                // StatefulImage handles any required resize/encode lazily during
-                // render. Avoid doing it twice on every pane-resize frame; just
-                // clear the old graphics cells so stale placeholders disappear.
-                clear_image_area(old_area, buf);
-            }
+            // StatefulImage handles any required resize/encode lazily during
+            // render. Do not clear the previous area here; during pane resizes
+            // clearing and redrawing terminal graphics in adjacent frames can
+            // produce alternating visible/blank image states.
             let resize = viewport_resize();
             if !render_stateful_image_safe(hash, image_area, buf, &mut img_state.protocol, resize) {
                 return 0;
@@ -790,8 +786,9 @@ pub fn render_image_widget_viewport_precise(
     let mut state = IMAGE_STATE
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let state_key = ImageStateKey::new(hash, ResizeMode::Viewport);
     state.insert(
-        hash,
+        state_key,
         ImageState {
             protocol,
             source_path,
@@ -802,7 +799,7 @@ pub fn render_image_widget_viewport_precise(
         },
     );
 
-    if let Some(img_state) = state.get_mut(hash) {
+    if let Some(img_state) = state.get_mut(state_key) {
         if !render_stateful_image_safe(
             hash,
             image_area,
@@ -839,6 +836,6 @@ pub(super) fn clear_image_area(area: Rect, buf: &mut Buffer) {
 /// Invalidate last render state for a hash (call when content changes)
 pub fn invalidate_render_state(hash: u64) {
     if let Ok(mut last_render) = LAST_RENDER.lock() {
-        last_render.remove(&hash);
+        last_render.retain(|key, _| key.hash != hash);
     }
 }

@@ -566,9 +566,14 @@ static SVG_FONT_DB: LazyLock<Arc<usvg::fontdb::Database>> = LazyLock::new(|| {
 /// growth over long sessions with many diagrams.
 const IMAGE_STATE_MAX: usize = 12;
 
-/// Image state cache - holds StatefulProtocol for each rendered image
-/// Keyed by content hash; source_path guards prevent stale reuse when
-/// a higher-resolution PNG for the same hash replaces the old one.
+/// Image state cache - holds StatefulProtocol for each rendered image.
+/// Keyed by content hash and render mode; source_path guards prevent stale
+/// reuse when a higher-resolution PNG for the same hash replaces the old one.
+/// Keeping Fit/Scale/Crop/Viewport states separate is important because a
+/// single StatefulProtocol owns terminal image placement/encoding state. If the
+/// same Mermaid hash is drawn in the side panel and then redrawn as a zoomed
+/// viewport, sharing one entry makes the modes continuously evict/overwrite each
+/// other and causes visible jump/fallback frames.
 static IMAGE_STATE: LazyLock<Mutex<ImageStateCache>> =
     LazyLock::new(|| Mutex::new(ImageStateCache::new()));
 
@@ -583,7 +588,7 @@ static KITTY_VIEWPORT_STATE: LazyLock<Mutex<KittyViewportCache>> =
     LazyLock::new(|| Mutex::new(KittyViewportCache::new()));
 
 /// Last render state for skip-redundant-render optimization
-static LAST_RENDER: LazyLock<Mutex<HashMap<u64, LastRenderState>>> =
+static LAST_RENDER: LazyLock<Mutex<HashMap<ImageStateKey, LastRenderState>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Render errors for lazy mermaid diagrams (hash -> error message)
@@ -607,10 +612,22 @@ struct ImageState {
     last_viewport: Option<ViewportState>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct ImageStateKey {
+    hash: u64,
+    mode: ResizeMode,
+}
+
+impl ImageStateKey {
+    const fn new(hash: u64, mode: ResizeMode) -> Self {
+        Self { hash, mode }
+    }
+}
+
 /// LRU-bounded cache for ImageState entries.
 struct ImageStateCache {
-    entries: HashMap<u64, ImageState>,
-    order: VecDeque<u64>,
+    entries: HashMap<ImageStateKey, ImageState>,
+    order: VecDeque<ImageStateKey>,
 }
 
 impl ImageStateCache {
@@ -621,33 +638,33 @@ impl ImageStateCache {
         }
     }
 
-    fn touch(&mut self, hash: u64) {
-        if let Some(pos) = self.order.iter().position(|h| *h == hash) {
+    fn touch(&mut self, key: ImageStateKey) {
+        if let Some(pos) = self.order.iter().position(|k| *k == key) {
             self.order.remove(pos);
         }
-        self.order.push_back(hash);
+        self.order.push_back(key);
     }
 
-    fn get_mut(&mut self, hash: u64) -> Option<&mut ImageState> {
-        if self.entries.contains_key(&hash) {
-            self.touch(hash);
-            self.entries.get_mut(&hash)
+    fn get_mut(&mut self, key: ImageStateKey) -> Option<&mut ImageState> {
+        if self.entries.contains_key(&key) {
+            self.touch(key);
+            self.entries.get_mut(&key)
         } else {
             None
         }
     }
 
-    fn get(&self, hash: &u64) -> Option<&ImageState> {
-        self.entries.get(hash)
+    fn get(&self, key: &ImageStateKey) -> Option<&ImageState> {
+        self.entries.get(key)
     }
 
-    fn insert(&mut self, hash: u64, state: ImageState) {
-        if let std::collections::hash_map::Entry::Occupied(mut entry) = self.entries.entry(hash) {
+    fn insert(&mut self, key: ImageStateKey, state: ImageState) {
+        if let std::collections::hash_map::Entry::Occupied(mut entry) = self.entries.entry(key) {
             entry.insert(state);
-            self.touch(hash);
+            self.touch(key);
         } else {
-            self.entries.insert(hash, state);
-            self.order.push_back(hash);
+            self.entries.insert(key, state);
+            self.order.push_back(key);
             while self.order.len() > IMAGE_STATE_MAX {
                 if let Some(old) = self.order.pop_front() {
                     self.entries.remove(&old);
@@ -656,11 +673,17 @@ impl ImageStateCache {
         }
     }
 
-    fn remove(&mut self, hash: &u64) {
-        self.entries.remove(hash);
-        if let Some(pos) = self.order.iter().position(|h| h == hash) {
+    fn remove(&mut self, key: &ImageStateKey) {
+        self.entries.remove(key);
+        if let Some(pos) = self.order.iter().position(|k| k == key) {
             self.order.remove(pos);
         }
+    }
+
+    #[cfg(feature = "renderer")]
+    fn remove_hash(&mut self, hash: u64) {
+        self.entries.retain(|key, _| key.hash != hash);
+        self.order.retain(|key| key.hash != hash);
     }
 
     fn clear(&mut self) {
@@ -668,7 +691,7 @@ impl ImageStateCache {
         self.order.clear();
     }
 
-    fn iter(&self) -> impl Iterator<Item = (&u64, &ImageState)> {
+    fn iter(&self) -> impl Iterator<Item = (&ImageStateKey, &ImageState)> {
         self.entries.iter()
     }
 }
@@ -682,12 +705,21 @@ struct ViewportState {
 }
 
 /// Resize mode for images - locked at creation time
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum ResizeMode {
     Fit,
     Scale,
     Crop,
     Viewport,
+}
+
+fn resize_mode_label(mode: ResizeMode) -> &'static str {
+    match mode {
+        ResizeMode::Fit => "Fit",
+        ResizeMode::Scale => "Scale",
+        ResizeMode::Crop => "Crop",
+        ResizeMode::Viewport => "Viewport",
+    }
 }
 
 /// Cache decoded source images for fast viewport cropping

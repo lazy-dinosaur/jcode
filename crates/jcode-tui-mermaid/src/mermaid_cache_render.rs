@@ -262,7 +262,7 @@ pub fn get_cached_path(hash: u64) -> Option<PathBuf> {
 #[cfg(feature = "renderer")]
 fn invalidate_cached_image(hash: u64) {
     if let Ok(mut state) = IMAGE_STATE.lock() {
-        state.remove(&hash);
+        state.remove_hash(hash);
     }
     if let Ok(mut kitty) = KITTY_VIEWPORT_STATE.lock() {
         kitty.remove(&hash);

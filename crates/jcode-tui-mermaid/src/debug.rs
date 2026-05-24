@@ -94,8 +94,8 @@ pub fn debug_image_state() -> Vec<ImageStateInfo> {
     if let Ok(state) = IMAGE_STATE.lock() {
         state
             .iter()
-            .map(|(hash, img_state)| ImageStateInfo {
-                hash: format!("{:016x}", hash),
+            .map(|(key, img_state)| ImageStateInfo {
+                hash: format!("{:016x}/{}", key.hash, resize_mode_label(key.mode)),
                 resize_mode: match img_state.resize_mode {
                     ResizeMode::Fit => "Fit".to_string(),
                     ResizeMode::Scale => "Scale".to_string(),
@@ -161,12 +161,10 @@ pub fn debug_render(content: &str) -> TestRenderResult {
         } => {
             // Check what resize mode was assigned
             let resize_mode = if let Ok(state) = IMAGE_STATE.lock() {
-                state.get(&hash).map(|s| match s.resize_mode {
-                    ResizeMode::Fit => "Fit".to_string(),
-                    ResizeMode::Scale => "Scale".to_string(),
-                    ResizeMode::Crop => "Crop".to_string(),
-                    ResizeMode::Viewport => "Viewport".to_string(),
-                })
+                state
+                    .iter()
+                    .find(|(key, _)| key.hash == hash)
+                    .map(|(_, s)| resize_mode_label(s.resize_mode).to_string())
             } else {
                 None
             };
@@ -233,12 +231,10 @@ pub fn debug_test_resize_stability(hash: u64) -> serde_json::Value {
     for area in &areas {
         // Check current resize mode for this hash
         let mode = if let Ok(state) = IMAGE_STATE.lock() {
-            state.get(&hash).map(|s| match s.resize_mode {
-                ResizeMode::Fit => "Fit",
-                ResizeMode::Scale => "Scale",
-                ResizeMode::Crop => "Crop",
-                ResizeMode::Viewport => "Viewport",
-            })
+            state
+                .iter()
+                .find(|(key, _)| key.hash == hash)
+                .map(|(_, s)| resize_mode_label(s.resize_mode))
         } else {
             None
         };
@@ -382,14 +378,9 @@ pub fn debug_test_scroll(content: Option<&str>) -> ScrollTestResult {
 
             // Check resize mode
             if let Ok(state) = IMAGE_STATE.lock()
-                && let Some(img_state) = state.get(&hash)
+                && let Some((_, img_state)) = state.iter().find(|(key, _)| key.hash == hash)
             {
-                let mode = match img_state.resize_mode {
-                    ResizeMode::Fit => "Fit",
-                    ResizeMode::Scale => "Scale",
-                    ResizeMode::Crop => "Crop",
-                    ResizeMode::Viewport => "Viewport",
-                };
+                let mode = resize_mode_label(img_state.resize_mode);
                 frame_info.resize_mode = Some(mode.to_string());
                 modes_seen.push(mode.to_string());
             }
