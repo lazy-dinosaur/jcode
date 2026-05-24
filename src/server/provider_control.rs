@@ -412,11 +412,29 @@ pub(super) async fn handle_set_reasoning_effort(
     agent: &Arc<Mutex<Agent>>,
     client_event_tx: &mpsc::UnboundedSender<ServerEvent>,
 ) {
-    let result = {
-        let mut agent_guard = agent.lock().await;
+    let result = if let Ok(mut agent_guard) = agent.try_lock() {
         agent_guard.set_reasoning_effort(&effort)
+    } else {
+        crate::logging::warn(&format!(
+            "Deferring reasoning effort change until session is idle; not waiting for busy agent lock (request_id={id}, effort={effort})"
+        ));
+        spawn_deferred_reasoning_effort_change(
+            id,
+            effort,
+            Arc::clone(agent),
+            client_event_tx.clone(),
+        );
+        return;
     };
 
+    send_reasoning_effort_result(id, result, client_event_tx);
+}
+
+fn send_reasoning_effort_result(
+    id: u64,
+    result: anyhow::Result<Option<String>>,
+    client_event_tx: &mpsc::UnboundedSender<ServerEvent>,
+) {
     match result {
         Ok(effort) => {
             let _ = client_event_tx.send(ServerEvent::ReasoningEffortChanged {
@@ -433,6 +451,25 @@ pub(super) async fn handle_set_reasoning_effort(
             });
         }
     }
+}
+
+fn spawn_deferred_reasoning_effort_change(
+    id: u64,
+    effort: String,
+    agent: Arc<Mutex<Agent>>,
+    client_event_tx: mpsc::UnboundedSender<ServerEvent>,
+) {
+    tokio::spawn(async move {
+        let mut agent_guard = agent.lock().await;
+        let result = agent_guard.set_reasoning_effort(&effort);
+        crate::logging::info(&format!(
+            "Deferred reasoning effort change completed request_id={} requested={} success={}",
+            id,
+            effort,
+            result.is_ok()
+        ));
+        send_reasoning_effort_result(id, result, &client_event_tx);
+    });
 }
 
 pub(super) async fn handle_set_service_tier(

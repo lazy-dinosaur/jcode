@@ -9,6 +9,18 @@ pub(crate) use jcode_tui_tool_display::{
     canonical_tool_name, is_edit_tool_name, resolve_display_tool_name, tool_output_looks_failed,
 };
 
+fn log_missing_tool_field_for_display(tool: &ToolCall, display_context: &str, field: &str) {
+    let keys = tool
+        .input
+        .as_object()
+        .map(|object| object.keys().cloned().collect::<Vec<_>>().join(","))
+        .unwrap_or_else(|| format!("non-object:{}", tool.input));
+    crate::logging::warn(&format!(
+        "tool summary missing field: context={} tool={} id={} field={} intent={:?} input_keys={}",
+        display_context, tool.name, tool.id, field, tool.intent, keys
+    ));
+}
+
 fn infer_bg_action_from_intent_for_display(intent: Option<&str>) -> Option<&'static str> {
     let intent = intent?.trim().to_ascii_lowercase();
     if intent.is_empty() {
@@ -1241,7 +1253,10 @@ pub(super) fn get_tool_summary_with_budget(
                 .input
                 .get("operation")
                 .and_then(|v| v.as_str())
-                .unwrap_or("command missing");
+                .unwrap_or_else(|| {
+                    log_missing_tool_field_for_display(tool, "lsp", "operation");
+                    "command missing"
+                });
             let file = tool
                 .input
                 .get("file_path")
@@ -1298,11 +1313,17 @@ pub(super) fn get_tool_summary_with_budget(
             format!("{} ({})", desc, agent_type)
         }
         "debug_socket" => {
+            if !tool.input.is_object() {
+                return String::new();
+            }
             let cmd = tool
                 .input
                 .get("command")
                 .and_then(|v| v.as_str())
-                .unwrap_or("command missing");
+                .unwrap_or_else(|| {
+                    log_missing_tool_field_for_display(tool, "debug_socket", "command");
+                    "command missing"
+                });
             truncate_middle_display(cmd, bounded(40))
         }
         name if name.starts_with("mcp__") => tool
