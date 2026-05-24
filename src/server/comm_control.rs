@@ -1240,6 +1240,7 @@ pub(super) async fn handle_comm_assign_next(
                 working_dir.clone(),
                 None,
                 run_id.clone(),
+                None,
                 sessions,
                 global_session_id,
                 provider_template,

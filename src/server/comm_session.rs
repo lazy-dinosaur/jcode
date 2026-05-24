@@ -12,6 +12,7 @@ use super::{
     update_member_status, update_member_status_with_report,
 };
 use crate::agent::Agent;
+use crate::config::SwarmSpawnMode;
 use crate::protocol::{NotificationType, ServerEvent};
 use crate::provider::Provider;
 use crate::session::Session;
@@ -305,27 +306,30 @@ async fn resolve_coordinator_working_dir(
         .and_then(|member| member.working_dir.clone())
 }
 
-/// Lazydino M2 stage 2 — return `true` when swarm spawn must run headless
-/// regardless of terminal availability. Priority: env var > config > default
-/// (`false`, i.e. keep upstream visible-first behavior).
+/// Resolve swarm spawn mode. Priority: per-call request > legacy env var > config.
 ///
-/// `JCODE_SWARM_NO_TERMINAL=1` (also `true`, `yes`, `on`, case-insensitive)
-/// forces headless. `JCODE_SWARM_NO_TERMINAL=0` (also `false`, `no`, `off`)
-/// forces visible-attempt even if config says otherwise. Empty/unset env
-/// falls through to `agents.swarm_spawn_visible`: `Some(false)` forces
-/// headless, `Some(true)` or `None` keeps upstream behavior.
-fn swarm_force_headless_spawn() -> bool {
+/// `JCODE_SWARM_NO_TERMINAL=1` (also `true`, `yes`, `on`) forces headless.
+/// `JCODE_SWARM_NO_TERMINAL=0` (also `false`, `no`, `off`) forces visible.
+/// Unknown/empty env values fall through to config. The legacy
+/// `agents.swarm_spawn_visible` option is still honored by config loading by
+/// mapping `false` to `Headless` and `true` to `Visible`.
+fn resolve_swarm_spawn_mode(requested: Option<SwarmSpawnMode>) -> SwarmSpawnMode {
+    if let Some(mode) = requested {
+        return mode;
+    }
     if let Ok(raw) = std::env::var("JCODE_SWARM_NO_TERMINAL") {
         match raw.trim().to_ascii_lowercase().as_str() {
-            "1" | "true" | "yes" | "on" => return true,
-            "0" | "false" | "no" | "off" | "" => return false,
+            "1" | "true" | "yes" | "on" => return SwarmSpawnMode::Headless,
+            "0" | "false" | "no" | "off" => return SwarmSpawnMode::Visible,
             _ => {}
         }
     }
-    matches!(
-        crate::config::config().agents.swarm_spawn_visible,
-        Some(false)
-    )
+    crate::config::config().agents.swarm_spawn_mode
+}
+
+#[cfg(test)]
+fn swarm_force_headless_spawn() -> bool {
+    matches!(resolve_swarm_spawn_mode(None), SwarmSpawnMode::Headless)
 }
 
 fn spawn_visible_session_window(
@@ -540,6 +544,7 @@ pub(super) async fn spawn_swarm_agent(
     working_dir: Option<String>,
     initial_message: Option<String>,
     run_id: Option<String>,
+    spawn_mode: Option<SwarmSpawnMode>,
     sessions: &SessionAgents,
     global_session_id: &Arc<RwLock<String>>,
     provider_template: &Arc<dyn Provider>,
@@ -588,7 +593,9 @@ pub(super) async fn spawn_swarm_agent(
             })
             .unwrap_or((None, None, false))
     };
-    let configured_swarm_model = crate::config::config().agents.swarm_model.clone();
+    let agents_config = &crate::config::config().agents;
+    let configured_swarm_model = agents_config.swarm_model.clone();
+    let resolved_spawn_mode = resolve_swarm_spawn_mode(spawn_mode);
     let spawn_model = coordinator_model.or(configured_swarm_model);
     let spawn_provider_key = coordinator_provider_key
         .or_else(|| provider_key_for_spawn_model(spawn_model.as_deref(), None));
@@ -597,25 +604,16 @@ pub(super) async fn spawn_swarm_agent(
         .as_deref()
         .map(append_swarm_completion_report_instructions);
 
-    // Lazydino M2 stage 2: force headless spawn when configured or when the
-    // `JCODE_SWARM_NO_TERMINAL=1` env var is set. This avoids the upstream
-    // issue #76 failure mode where the coordinator opens a swarm of visible
-    // terminal windows that the user cannot easily control.
-    let force_headless_spawn = swarm_force_headless_spawn();
-    let visible_spawn = if force_headless_spawn {
-        // Synthesize the same "visible attempt failed" signal so the existing
-        // fallback path below creates a headless session. Using `Ok((_, false))`
-        // keeps the matcher arm hot without an extra error path.
-        Ok((String::new(), false))
-    } else {
-        prepare_visible_spawn_session(
+    let visible_spawn = match resolved_spawn_mode {
+        SwarmSpawnMode::Headless => Err(anyhow::anyhow!("headless spawn requested")),
+        SwarmSpawnMode::Visible | SwarmSpawnMode::Auto => prepare_visible_spawn_session(
             resolved_working_dir.as_deref(),
             spawn_model.as_deref(),
             spawn_provider_key.as_deref(),
             coordinator_is_canary,
             startup_message.as_deref(),
             spawn_visible_session_window,
-        )
+        ),
     };
 
     let (new_session_id, is_headless_fallback) = match visible_spawn {
@@ -804,6 +802,7 @@ pub(super) async fn handle_comm_spawn(
     initial_message: Option<String>,
     request_nonce: Option<String>,
     run_id: Option<String>,
+    spawn_mode: Option<SwarmSpawnMode>,
     client_event_tx: &mpsc::UnboundedSender<ServerEvent>,
     sessions: &SessionAgents,
     global_session_id: &Arc<RwLock<String>>,
@@ -886,6 +885,9 @@ pub(super) async fn handle_comm_spawn(
             initial_message.clone().unwrap_or_default(),
             request_nonce.clone().unwrap_or_default(),
             run_id.clone().unwrap_or_default(),
+            spawn_mode
+                .map(|mode| format!("{mode:?}"))
+                .unwrap_or_default(),
         ],
     );
     let Some(mutation_state) = begin_or_replay(
@@ -907,6 +909,7 @@ pub(super) async fn handle_comm_spawn(
         working_dir,
         initial_message,
         run_id,
+        spawn_mode,
         sessions,
         global_session_id,
         provider_template,

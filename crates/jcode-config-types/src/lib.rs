@@ -458,6 +458,8 @@ pub struct AuthConfig {
 pub struct AgentsConfig {
     /// Optional default model override for spawned swarm/subagent sessions.
     pub swarm_model: Option<String>,
+    /// Default terminal mode for swarm-created agents.
+    pub swarm_spawn_mode: SwarmSpawnMode,
     /// Deprecated simple model routing by subagent type/name, e.g. planner -> claude-opus-4-7.
     pub routing: BTreeMap<String, String>,
     /// Deprecated rich routing by subagent type/name. Prefer `profiles` for new configs.
@@ -617,6 +619,30 @@ impl Default for PromptConfig {
                 "private_instructions.md".to_string(),
                 "rules/*.md".to_string(),
             ],
+        }
+    }
+}
+
+/// How swarm-created agents should be spawned.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SwarmSpawnMode {
+    /// Open a visible/headed terminal window. This preserves historical behavior.
+    #[default]
+    Visible,
+    /// Create the worker in-process without opening a terminal window.
+    Headless,
+    /// Try visible first and fall back to headless if a window cannot be opened.
+    Auto,
+}
+
+impl SwarmSpawnMode {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "visible" | "headed" => Some(Self::Visible),
+            "headless" => Some(Self::Headless),
+            "auto" => Some(Self::Auto),
+            _ => None,
         }
     }
 }

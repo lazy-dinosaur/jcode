@@ -568,6 +568,8 @@ pub enum Request {
         /// Optional run/generation id used to group workers spawned by one orchestration run.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         run_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        spawn_mode: Option<String>,
     },
 
     /// Stop/destroy an agent session (coordinator only)

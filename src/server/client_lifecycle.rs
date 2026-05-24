@@ -44,6 +44,7 @@ use super::{
 };
 use crate::agent::Agent;
 use crate::bus::{Bus, BusEvent};
+use crate::config::SwarmSpawnMode;
 use crate::id;
 use crate::protocol::{Request, ServerEvent, decode_request, encode_event};
 use crate::provider::Provider;
@@ -68,6 +69,29 @@ type ChannelSubscriptions = Arc<RwLock<HashMap<String, HashMap<String, HashSet<S
 const RELOAD_STARTING_GUARD_MAX_AGE: Duration = Duration::from_secs(30);
 const PROCESSING_CANCEL_GRACE: Duration = Duration::from_millis(1500);
 const PROCESSING_ABORT_JOIN_GRACE: Duration = Duration::from_secs(2);
+
+fn parse_swarm_spawn_mode(
+    id: u64,
+    spawn_mode: Option<String>,
+    client_event_tx: &mpsc::UnboundedSender<ServerEvent>,
+) -> Option<Option<SwarmSpawnMode>> {
+    match spawn_mode {
+        Some(value) => match SwarmSpawnMode::parse(&value) {
+            Some(mode) => Some(Some(mode)),
+            None => {
+                let _ = client_event_tx.send(ServerEvent::Error {
+                    id,
+                    message: format!(
+                        "Invalid spawn_mode '{value}'. Expected one of: visible, headless, auto"
+                    ),
+                    retry_after_secs: None,
+                });
+                None
+            }
+        },
+        None => Some(None),
+    }
+}
 
 struct ProcessingMessage {
     id: u64,
@@ -398,7 +422,12 @@ async fn handle_lightweight_control_request(
             initial_message,
             request_nonce,
             run_id,
+            spawn_mode,
         } => {
+            let spawn_mode = match parse_swarm_spawn_mode(id, spawn_mode, &client_event_tx) {
+                Some(spawn_mode) => spawn_mode,
+                None => return Ok(()),
+            };
             handle_comm_spawn(
                 id,
                 req_session_id,
@@ -406,6 +435,7 @@ async fn handle_lightweight_control_request(
                 initial_message,
                 request_nonce,
                 run_id,
+                spawn_mode,
                 &client_event_tx,
                 sessions,
                 global_session_id,
@@ -2451,7 +2481,12 @@ pub(super) async fn handle_client(
                 initial_message,
                 request_nonce,
                 run_id,
+                spawn_mode,
             } => {
+                let spawn_mode = match parse_swarm_spawn_mode(id, spawn_mode, &client_event_tx) {
+                    Some(spawn_mode) => spawn_mode,
+                    None => return Ok(()),
+                };
                 handle_comm_spawn(
                     id,
                     req_session_id,
@@ -2459,6 +2494,7 @@ pub(super) async fn handle_client(
                     initial_message,
                     request_nonce,
                     run_id,
+                    spawn_mode,
                     &client_event_tx,
                     &sessions,
                     &global_session_id,

@@ -114,11 +114,7 @@ pub(crate) fn format_spawn_telemetry(
     active_count: Option<u32>,
     active_cap: Option<u32>,
 ) -> String {
-    let mode = if swarm_spawn_telemetry_force_headless() {
-        "headless-only"
-    } else {
-        "visible-first"
-    };
+    let mode = swarm_spawn_telemetry_mode(None);
     let cwd = requested_working_dir
         .map(|dir| dir.to_string())
         .unwrap_or_else(|| "(inherit coordinator cwd)".to_string());
@@ -136,22 +132,29 @@ pub(crate) fn format_spawn_telemetry(
     )
 }
 
-/// Mirror of `server::comm_session::swarm_force_headless_spawn` for the tool
-/// side. We re-read the same env var + config so the rendered telemetry
-/// matches whatever the server will actually do. Keeping the two helpers
-/// independent avoids leaking server internals into the tool layer.
-fn swarm_spawn_telemetry_force_headless() -> bool {
+/// Mirror of server-side swarm spawn mode resolution for telemetry. We re-read
+/// the same env var + config so the rendered message matches what the server
+/// will do without leaking server internals into the tool layer.
+fn swarm_spawn_telemetry_mode(requested: Option<&str>) -> &'static str {
+    if let Some(raw) = requested.and_then(crate::config::SwarmSpawnMode::parse) {
+        return match raw {
+            crate::config::SwarmSpawnMode::Visible => "visible-first",
+            crate::config::SwarmSpawnMode::Headless => "headless-only",
+            crate::config::SwarmSpawnMode::Auto => "auto",
+        };
+    }
     if let Ok(raw) = std::env::var("JCODE_SWARM_NO_TERMINAL") {
         match raw.trim().to_ascii_lowercase().as_str() {
-            "1" | "true" | "yes" | "on" => return true,
-            "0" | "false" | "no" | "off" | "" => return false,
+            "1" | "true" | "yes" | "on" => return "headless-only",
+            "0" | "false" | "no" | "off" => return "visible-first",
             _ => {}
         }
     }
-    matches!(
-        crate::config::config().agents.swarm_spawn_visible,
-        Some(false)
-    )
+    match crate::config::config().agents.swarm_spawn_mode {
+        crate::config::SwarmSpawnMode::Visible => "visible-first",
+        crate::config::SwarmSpawnMode::Headless => "headless-only",
+        crate::config::SwarmSpawnMode::Auto => "auto",
+    }
 }
 
 async fn fetch_plan_status(session_id: &str) -> Result<PlanGraphStatus> {
@@ -474,6 +477,7 @@ async fn spawn_assignment_session(
         initial_message: None,
         request_nonce: Some(fresh_spawn_request_nonce(ctx)),
         run_id,
+        spawn_mode: params.spawn_mode.clone(),
     };
 
     match send_spawn_request_with_coordinator_retry(
@@ -732,6 +736,8 @@ struct CommunicateInput {
     validation: Option<String>,
     #[serde(default)]
     follow_up: Option<String>,
+    #[serde(default)]
+    spawn_mode: Option<String>,
 }
 
 fn default_communicate_action() -> String {
@@ -831,6 +837,11 @@ impl Tool for CommunicateTool {
                 "prefer_spawn": {
                     "type": "boolean",
                     "description": "For assign_task without an explicit target_session: prefer a fresh spawned agent even if reusable workers are available."
+                },
+                "spawn_mode": {
+                    "type": "string",
+                    "enum": ["visible", "headless", "auto"],
+                    "description": "Per-call spawn mode for swarm-created agents. Overrides agents.swarm_spawn_mode config when set. Defaults to visible/headed behavior."
                 },
                 "session_ids": {
                     "type": "array",
@@ -1208,6 +1219,7 @@ impl Tool for CommunicateTool {
                     initial_message: params.spawn_initial_message(),
                     request_nonce: None,
                     run_id: params.run_id.clone(),
+                    spawn_mode: params.spawn_mode.clone(),
                 };
 
                 let operation = if matches!(params.action.as_str(), "spawn_now" | "swarm_now") {

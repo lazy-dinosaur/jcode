@@ -1,6 +1,6 @@
 use super::{
     AgentRouteConfig, AmbientConfig, Config, DiffDisplayMode, DisplayConfig, HookCommandConfig,
-    ProviderConfig, SessionPickerResumeAction,
+    ProviderConfig, SessionPickerResumeAction, SwarmSpawnMode,
 };
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
@@ -103,6 +103,35 @@ fn test_openai_fast_mode_defaults_to_off() {
         ProviderConfig::default().openai_service_tier.as_deref(),
         None
     );
+}
+
+#[test]
+fn swarm_spawn_mode_defaults_to_visible() {
+    assert_eq!(
+        Config::default().agents.swarm_spawn_mode,
+        SwarmSpawnMode::Visible
+    );
+}
+
+#[test]
+fn swarm_spawn_mode_parses_supported_values() {
+    let cfg: Config = toml::from_str("[agents]\nswarm_spawn_mode = \"headless\"\n")
+        .expect("headless swarm_spawn_mode should parse");
+    assert_eq!(cfg.agents.swarm_spawn_mode, SwarmSpawnMode::Headless);
+
+    let cfg: Config = toml::from_str("[agents]\nswarm_spawn_mode = \"auto\"\n")
+        .expect("auto swarm_spawn_mode should parse");
+    assert_eq!(cfg.agents.swarm_spawn_mode, SwarmSpawnMode::Auto);
+
+    let cfg: Config = toml::from_str("[agents]\nswarm_spawn_mode = \"visible\"\n")
+        .expect("visible swarm_spawn_mode should parse");
+    assert_eq!(cfg.agents.swarm_spawn_mode, SwarmSpawnMode::Visible);
+}
+
+#[test]
+fn swarm_spawn_mode_rejects_invalid_values() {
+    let result = toml::from_str::<Config>("[agents]\nswarm_spawn_mode = \"background\"\n");
+    assert!(result.is_err());
 }
 
 #[test]

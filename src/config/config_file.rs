@@ -29,6 +29,7 @@ struct PartialAgentsConfig {
     profiles: std::collections::BTreeMap<String, AgentRouteConfig>,
     memory_model: Option<String>,
     memory_sidecar_enabled: bool,
+    swarm_spawn_mode: Option<SwarmSpawnMode>,
     swarm_spawn_visible: Option<bool>,
     max_lifecycle_deny_streak: Option<u8>,
     allow_subagent_recursion: Option<bool>,
@@ -64,6 +65,15 @@ impl PartialAgentsConfig {
             agents.memory_model = Some(value);
         }
         agents.memory_sidecar_enabled = self.memory_sidecar_enabled;
+        if let Some(mode) = self.swarm_spawn_mode {
+            agents.swarm_spawn_mode = mode;
+        } else if let Some(visible) = self.swarm_spawn_visible {
+            agents.swarm_spawn_mode = if visible {
+                SwarmSpawnMode::Visible
+            } else {
+                SwarmSpawnMode::Headless
+            };
+        }
         if self.swarm_spawn_visible.is_some() {
             agents.swarm_spawn_visible = self.swarm_spawn_visible;
         }

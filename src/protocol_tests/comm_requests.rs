@@ -443,11 +443,13 @@ fn test_comm_spawn_roundtrip_with_optional_nonce() -> Result<()> {
         initial_message: Some("Start here".to_string()),
         request_nonce: Some("planner-fresh-123".to_string()),
         run_id: Some("run-spawn".to_string()),
+        spawn_mode: Some("headless".to_string()),
     };
     let json = serde_json::to_string(&req)?;
     assert!(json.contains("\"type\":\"comm_spawn\""));
     assert!(json.contains("\"request_nonce\":\"planner-fresh-123\""));
     assert!(json.contains("\"run_id\":\"run-spawn\""));
+    assert!(json.contains("\"spawn_mode\":\"headless\""));
     let decoded = parse_request_json(&json)?;
     assert_eq!(decoded.id(), 59);
     let Request::CommSpawn {
@@ -456,6 +458,7 @@ fn test_comm_spawn_roundtrip_with_optional_nonce() -> Result<()> {
         initial_message,
         request_nonce,
         run_id,
+        spawn_mode,
         ..
     } = decoded
     else {
@@ -466,5 +469,6 @@ fn test_comm_spawn_roundtrip_with_optional_nonce() -> Result<()> {
     assert_eq!(initial_message.as_deref(), Some("Start here"));
     assert_eq!(request_nonce.as_deref(), Some("planner-fresh-123"));
     assert_eq!(run_id.as_deref(), Some("run-spawn"));
+    assert_eq!(spawn_mode.as_deref(), Some("headless"));
     Ok(())
 }

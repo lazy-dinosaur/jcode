@@ -10,7 +10,8 @@ pub use jcode_config_types::{
     GatewayConfig, HookCommandConfig, HooksConfig, KeybindingsConfig, MarkdownSpacingMode,
     MermaidRendererConfig, NamedProviderAuth, NamedProviderConfig, NamedProviderModelConfig,
     NamedProviderType, NativeScrollbarConfig, PromptConfig, ProviderConfig, ReloadConfig,
-    SafetyConfig, SessionPickerResumeAction, SwarmConfig, ToolConfig, UpdateChannel,
+    SafetyConfig, SessionPickerResumeAction, SwarmConfig, SwarmSpawnMode, ToolConfig,
+    UpdateChannel,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

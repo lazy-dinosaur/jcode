@@ -420,6 +420,7 @@ async fn communicate_spawn_self_promotes_and_retries_after_coordinator_drift() {
             initial_message: None,
             request_nonce: Some("spawn-retry-after-drift".to_string()),
             run_id: None,
+            spawn_mode: None,
         },
         "spawn agent",
     )
