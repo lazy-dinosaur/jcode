@@ -238,18 +238,18 @@ fn can_use_kitty_virtual_viewport(
     scroll_x: u16,
     scroll_y: u16,
 ) -> bool {
-    if !kitty_virtual_viewport_enabled() {
+    if kitty_virtual_viewport_disabled() {
         return false;
     }
     let max_index = KITTY_DIACRITICS.len() as u16;
     full_cols < max_index && full_rows < max_index && scroll_x < max_index && scroll_y < max_index
 }
 
-fn kitty_virtual_viewport_enabled() -> bool {
+fn kitty_virtual_viewport_disabled() -> bool {
     std::env::var("JCODE_MERMAID_KITTY_VIRTUAL_VIEWPORT").is_ok_and(|raw| {
         matches!(
             raw.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
+            "0" | "false" | "no" | "off" | "disabled"
         )
     })
 }
@@ -837,5 +837,42 @@ pub(super) fn clear_image_area(area: Rect, buf: &mut Buffer) {
 pub fn invalidate_render_state(hash: u64) {
     if let Ok(mut last_render) = LAST_RENDER.lock() {
         last_render.retain(|key, _| key.hash != hash);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    #[test]
+    fn kitty_virtual_viewport_is_default_on() {
+        let _guard = env_lock();
+        unsafe {
+            std::env::remove_var("JCODE_MERMAID_KITTY_VIRTUAL_VIEWPORT");
+        }
+
+        assert!(can_use_kitty_virtual_viewport(10, 10, 0, 0));
+    }
+
+    #[test]
+    fn kitty_virtual_viewport_can_be_disabled_by_env() {
+        let _guard = env_lock();
+        unsafe {
+            std::env::set_var("JCODE_MERMAID_KITTY_VIRTUAL_VIEWPORT", "off");
+        }
+
+        assert!(!can_use_kitty_virtual_viewport(10, 10, 0, 0));
+
+        unsafe {
+            std::env::remove_var("JCODE_MERMAID_KITTY_VIRTUAL_VIEWPORT");
+        }
     }
 }
