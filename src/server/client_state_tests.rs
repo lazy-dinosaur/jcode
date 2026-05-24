@@ -345,7 +345,7 @@ fn write_pending_user_session(
 }
 
 #[test]
-fn history_reload_recovery_infers_pending_active_user_turn_during_reload() -> Result<()> {
+fn history_reload_recovery_does_not_infer_pending_user_turn_from_marker_only() -> Result<()> {
     let _lock = crate::storage::lock_test_env();
     let home = tempfile::TempDir::new()?;
     let runtime = tempfile::TempDir::new()?;
@@ -359,15 +359,33 @@ fn history_reload_recovery_infers_pending_active_user_turn_during_reload() -> Re
         Some(session_id.to_string()),
     );
 
-    let snapshot = super::history_reload_recovery_snapshot(session_id, None);
     assert!(
-        snapshot.is_some(),
-        "pending user turn during reload should get recovery directive"
+        super::history_reload_recovery_snapshot(session_id, None).is_none(),
+        "marker-only pending user turns should not be auto-replayed after reload"
     );
-    let Some(snapshot) = snapshot else {
-        return Ok(());
-    };
+    Ok(())
+}
 
+#[test]
+fn history_reload_recovery_infers_explicit_reload_interruption_marker() -> Result<()> {
+    let _lock = crate::storage::lock_test_env();
+    let home = tempfile::TempDir::new()?;
+    let runtime = tempfile::TempDir::new()?;
+    let _guard = ReloadHistoryEnvGuard::new(home.path(), runtime.path());
+    let session_id = "session_history_explicit_reload_marker";
+    let mut session = crate::session::Session::create_with_id(session_id.to_string(), None, None);
+    session.status = crate::session::SessionStatus::Active;
+    session.add_message(
+        crate::message::Role::Assistant,
+        vec![crate::message::ContentBlock::Text {
+            text: "partial answer\n\n[generation interrupted - server reloading]".to_string(),
+            cache_control: None,
+        }],
+    );
+    session.save()?;
+
+    let snapshot = super::history_reload_recovery_snapshot(session_id, None)
+        .expect("explicit reload interruption marker should get recovery directive");
     assert!(
         snapshot
             .continuation_message
