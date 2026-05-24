@@ -194,7 +194,7 @@ pub(super) async fn await_reload_signal(
         )
         .await;
 
-        graceful_shutdown_sessions(
+        let graceful_shutdown_ready = graceful_shutdown_sessions(
             &sessions,
             &swarm_members,
             &shutdown_signals,
@@ -202,6 +202,19 @@ pub(super) async fn await_reload_signal(
             signal.triggering_session.as_deref(),
         )
         .await;
+        if !graceful_shutdown_ready {
+            crate::server::write_reload_state(
+                &signal.request_id,
+                &signal.hash,
+                crate::server::ReloadPhase::Failed,
+                Some("active peer sessions are still running; reload deferred to avoid interrupting them".to_string()),
+            );
+            crate::logging::warn(&format!(
+                "Server: deferring reload request={} hash={} because peer sessions are still running",
+                signal.request_id, signal.hash
+            ));
+            continue;
+        }
         crate::logging::info(&format!(
             "Server: graceful shutdown completed for reload request={} after {}ms state={}",
             signal.request_id,
@@ -350,7 +363,7 @@ pub(super) async fn graceful_shutdown_sessions(
     shutdown_signals: &Arc<RwLock<HashMap<String, InterruptSignal>>>,
     swarm_event_tx: &broadcast::Sender<SwarmEvent>,
     triggering_session: Option<&str>,
-) {
+) -> bool {
     graceful_shutdown_sessions_with_timeout(
         _sessions,
         swarm_members,
@@ -359,7 +372,7 @@ pub(super) async fn graceful_shutdown_sessions(
         RELOAD_GRACEFUL_SHUTDOWN_TIMEOUT,
         triggering_session,
     )
-    .await;
+    .await
 }
 
 async fn graceful_shutdown_sessions_with_timeout(
@@ -369,7 +382,7 @@ async fn graceful_shutdown_sessions_with_timeout(
     swarm_event_tx: &broadcast::Sender<SwarmEvent>,
     timeout: Duration,
     triggering_session: Option<&str>,
-) {
+) -> bool {
     let actively_generating: Vec<String> = {
         let members = swarm_members.read().await;
         members
@@ -379,12 +392,34 @@ async fn graceful_shutdown_sessions_with_timeout(
             .collect()
     };
 
-    let (signalable_sessions, unsignalable_sessions) = {
+    let (mut signalable_sessions, unsignalable_sessions) = {
         let signals = shutdown_signals.read().await;
         actively_generating
+            .clone()
             .into_iter()
             .partition::<Vec<_>, _>(|session_id| signals.contains_key(session_id))
     };
+    let watched: std::collections::HashSet<String> = signalable_sessions
+        .iter()
+        .filter(|session_id| Some(session_id.as_str()) != triggering_session)
+        .cloned()
+        .collect();
+
+    // A self-dev reload restarts the shared server process, so connected peer
+    // clients will reconnect through the normal reload path. Do not proactively
+    // fire their turn interrupt signals: that makes unrelated sessions surface
+    // as aborted/tumbled before the socket handoff can recover them. Persisted
+    // reload recovery intents above are enough for peers that were running.
+    if let Some(triggering_session) = triggering_session {
+        let peer_count = watched.len();
+        signalable_sessions.retain(|session_id| session_id == triggering_session);
+        if peer_count > 0 {
+            crate::logging::info(&format!(
+                "Server: leaving {} peer session(s) un-interrupted during selfdev reload; waiting for them to become idle before restarting",
+                peer_count
+            ));
+        }
+    }
 
     if !unsignalable_sessions.is_empty() {
         crate::logging::warn(&format!(
@@ -394,18 +429,20 @@ async fn graceful_shutdown_sessions_with_timeout(
         ));
     }
 
-    if signalable_sessions.is_empty() {
+    if signalable_sessions.is_empty() && watched.is_empty() {
         crate::logging::info(
-            "Server: no sessions actively generating, proceeding with reload immediately",
+            "Server: no selfdev reload initiator requires checkpoint signaling, proceeding with reload immediately",
         );
-        return;
+        return true;
     }
 
-    crate::logging::info(&format!(
-        "Server: signaling {} actively generating session(s) to checkpoint: {:?}",
-        signalable_sessions.len(),
-        signalable_sessions
-    ));
+    if !signalable_sessions.is_empty() {
+        crate::logging::info(&format!(
+            "Server: signaling {} actively generating session(s) to checkpoint: {:?}",
+            signalable_sessions.len(),
+            signalable_sessions
+        ));
+    }
 
     {
         let signals = shutdown_signals.read().await;
@@ -425,11 +462,6 @@ async fn graceful_shutdown_sessions_with_timeout(
         }
     }
 
-    let watched: std::collections::HashSet<String> = signalable_sessions
-        .into_iter()
-        .filter(|session_id| Some(session_id.as_str()) != triggering_session)
-        .collect();
-
     if let Some(triggering_session) = triggering_session {
         crate::logging::info(&format!(
             "Server: excluding triggering session {} from reload checkpoint wait set",
@@ -441,7 +473,7 @@ async fn graceful_shutdown_sessions_with_timeout(
         crate::logging::info(
             "Server: no non-triggering running sessions remain to checkpoint, proceeding with reload",
         );
-        return;
+        return true;
     }
 
     let mut event_rx = swarm_event_tx.subscribe();
@@ -464,7 +496,7 @@ async fn graceful_shutdown_sessions_with_timeout(
 
         if still_running.is_empty() {
             crate::logging::info("Server: all sessions checkpointed, proceeding with reload");
-            break;
+            return true;
         }
 
         crate::logging::info(&format!(
@@ -476,11 +508,11 @@ async fn graceful_shutdown_sessions_with_timeout(
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             crate::logging::warn(&format!(
-                "Server: reload graceful shutdown timed out after {}ms; proceeding with still-running sessions: {:?}",
+                "Server: reload graceful shutdown timed out after {}ms; deferring reload because sessions are still running: {:?}",
                 timeout.as_millis(),
                 still_running
             ));
-            break;
+            return false;
         }
 
         match tokio::time::timeout(remaining, event_rx.recv()).await {
@@ -495,14 +527,14 @@ async fn graceful_shutdown_sessions_with_timeout(
                 crate::logging::warn(
                     "Server: swarm event channel closed while waiting for reload checkpoint",
                 );
-                break;
+                return false;
             }
             Err(_) => {
                 crate::logging::warn(&format!(
-                    "Server: reload graceful shutdown timed out after {}ms; proceeding without waiting for remaining checkpoint events",
+                    "Server: reload graceful shutdown timed out after {}ms; deferring reload without killing remaining sessions",
                     timeout.as_millis()
                 ));
-                break;
+                return false;
             }
         }
     }

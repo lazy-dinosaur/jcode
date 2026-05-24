@@ -149,7 +149,7 @@ fn persist_reload_recovery_intents_records_running_peer_recovery() -> anyhow::Re
 }
 
 #[tokio::test]
-async fn graceful_shutdown_sessions_signals_all_running_sessions_including_initiator() {
+async fn graceful_shutdown_sessions_without_trigger_signals_all_running_sessions() {
     let sessions = Arc::new(RwLock::new(HashMap::new()));
     let swarm_members = Arc::new(RwLock::new(HashMap::from([
         ("initiator".to_string(), member("initiator", "running")),
@@ -219,7 +219,7 @@ async fn graceful_shutdown_sessions_signals_all_running_sessions_including_initi
 }
 
 #[tokio::test]
-async fn graceful_shutdown_sessions_does_not_wait_for_triggering_session_checkpoint() {
+async fn graceful_shutdown_sessions_only_interrupts_triggering_session_when_present() {
     let sessions = Arc::new(RwLock::new(HashMap::new()));
     let swarm_members = Arc::new(RwLock::new(HashMap::from([
         ("initiator".to_string(), member("initiator", "running")),
@@ -274,8 +274,8 @@ async fn graceful_shutdown_sessions_does_not_wait_for_triggering_session_checkpo
         "triggering session should still receive graceful shutdown signal"
     );
     assert!(
-        peer_signal.is_set(),
-        "peer session should still receive graceful shutdown signal"
+        !peer_signal.is_set(),
+        "peer sessions should not be proactively interrupted by another session's selfdev reload"
     );
     assert_eq!(
         swarm_members
@@ -286,6 +286,42 @@ async fn graceful_shutdown_sessions_does_not_wait_for_triggering_session_checkpo
             .status,
         "running",
         "initiator may remain running without blocking reload"
+    );
+}
+
+#[tokio::test]
+async fn graceful_shutdown_sessions_defers_when_peer_remains_running() {
+    let sessions = Arc::new(RwLock::new(HashMap::new()));
+    let swarm_members = Arc::new(RwLock::new(HashMap::from([
+        ("initiator".to_string(), member("initiator", "running")),
+        ("peer".to_string(), member("peer", "running")),
+    ])));
+    let initiator_signal = InterruptSignal::new();
+    let peer_signal = InterruptSignal::new();
+    let shutdown_signals = Arc::new(RwLock::new(HashMap::from([
+        ("initiator".to_string(), initiator_signal.clone()),
+        ("peer".to_string(), peer_signal.clone()),
+    ])));
+    let (swarm_event_tx, _) = broadcast::channel(8);
+
+    let ready = graceful_shutdown_sessions_with_timeout(
+        &sessions,
+        &swarm_members,
+        &shutdown_signals,
+        &swarm_event_tx,
+        std::time::Duration::from_millis(20),
+        Some("initiator"),
+    )
+    .await;
+
+    assert!(
+        !ready,
+        "reload should be deferred while peer is still running"
+    );
+    assert!(initiator_signal.is_set(), "initiator may be signaled");
+    assert!(
+        !peer_signal.is_set(),
+        "active peer must not be interrupted by another session's reload"
     );
 }
 

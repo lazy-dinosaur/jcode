@@ -666,10 +666,31 @@ impl crate::tui::TuiState for App {
         }
 
         let mut info = self.context_info.clone();
-        if info.system_prompt_chars == 0 || info.instruction_sources.is_empty() {
+        let has_project_working_dir = self.session.working_dir.as_deref().is_some_and(|dir| {
+            let path = std::path::Path::new(dir);
+            path.join("AGENTS.md").exists() || path.join(".jcode").exists()
+        });
+        let prompt_summary_missing_project_context = has_project_working_dir
+            && !info.has_project_agents_md
+            && info.project_agents_md_chars == 0
+            && info.jcode_harness_chars == 0
+            && info.skills_chars == 0;
+        if info.system_prompt_chars == 0
+            || info.instruction_sources.is_empty()
+            || prompt_summary_missing_project_context
+        {
+            let available_skills: Vec<crate::prompt::SkillInfo> = self
+                .current_skills_snapshot()
+                .list()
+                .iter()
+                .map(|skill| crate::prompt::SkillInfo {
+                    name: skill.name.clone(),
+                    description: skill.description.clone(),
+                })
+                .collect();
             let (_, prompt_info) = crate::prompt::build_system_prompt_split(
                 None,
-                &[],
+                &available_skills,
                 self.session.is_canary,
                 None,
                 working_dir.as_deref(),

@@ -369,6 +369,63 @@ fn test_tui_system_prompt_uses_session_working_dir_for_agents_md() {
 }
 
 #[test]
+fn test_context_summary_uses_session_working_dir_for_private_harness_and_skills() {
+    let repo = tempfile::TempDir::new().expect("temp repo");
+    std::fs::write(repo.path().join("AGENTS.md"), "follow repo agents policy")
+        .expect("write AGENTS.md");
+    std::fs::create_dir_all(repo.path().join(".jcode/harness")).expect("create harness dir");
+    std::fs::write(
+        repo.path().join(".jcode/harness/10-private.md"),
+        "private harness policy",
+    )
+    .expect("write private harness");
+    std::fs::create_dir_all(repo.path().join(".jcode/skills/demo")).expect("create skill dir");
+    std::fs::write(
+        repo.path().join(".jcode/skills/demo/SKILL.md"),
+        "---\nname: demo\ndescription: demo project skill\n---\n\nDemo skill body\n",
+    )
+    .expect("write skill");
+
+    let mut app = create_test_app();
+    app.session.working_dir = Some(repo.path().display().to_string());
+    app.skills = std::sync::Arc::new(
+        crate::skill::SkillRegistry::load_for_working_dir(Some(repo.path()))
+            .expect("load project skills"),
+    );
+    app.context_info = crate::prompt::ContextInfo::default();
+
+    let info = <App as crate::tui::TuiState>::context_info(&app);
+
+    assert!(info.has_project_agents_md);
+    assert!(info.project_agents_md_chars > 0);
+    assert!(info.jcode_harness_chars > 0);
+    assert!(info.skills_chars > 0);
+    assert!(info.instruction_sources.iter().any(|source| {
+        source.status == crate::prompt::PromptInstructionStatus::Loaded
+            && source.path.ends_with(".jcode/harness/10-private.md")
+    }));
+
+    app.context_info = crate::prompt::ContextInfo {
+        system_prompt_chars: 123,
+        total_chars: 123,
+        instruction_sources: vec![crate::prompt::PromptInstructionSource {
+            label: "stale overlay".to_string(),
+            path: repo.path().join("stale.md"),
+            status: crate::prompt::PromptInstructionStatus::Loaded,
+            chars: 123,
+            private: false,
+            reason: None,
+        }],
+        ..Default::default()
+    };
+
+    let refreshed = <App as crate::tui::TuiState>::context_info(&app);
+    assert!(refreshed.has_project_agents_md);
+    assert!(refreshed.jcode_harness_chars > 0);
+    assert!(refreshed.skills_chars > 0);
+}
+
+#[test]
 fn test_recover_session_without_tools_preserves_debug_and_canary_flags() {
     let mut app = create_test_app();
     app.session.is_debug = true;

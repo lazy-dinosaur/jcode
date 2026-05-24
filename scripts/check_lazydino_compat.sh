@@ -37,9 +37,13 @@ echo "-- providers and auth"
 
 echo "-- TUI input, session picker, reload, schedule, swarm"
 "${CARGO_BIN[@]}" tui::app::tests::test_paste_expansion_on_submit
+"${CARGO_BIN[@]}" tui::app::tests::test_tui_system_prompt_uses_session_working_dir_for_agents_md
+"${CARGO_BIN[@]}" tui::app::tests::test_context_summary_uses_session_working_dir_for_private_harness_and_skills
 "${CARGO_BIN[@]}" tui::app::tests::session_picker_resume_action_keeps_overlay_open
 "${CARGO_BIN[@]}" tui::app::tests::test_remote_command_suggestions_include_mcp_reload
 "${CARGO_BIN[@]}" tui::app::remote::tests::process_remote_followups_auto_reloads_server_by_default
+"${CARGO_BIN[@]}" server::reload::reload_tests::graceful_shutdown_sessions_only_interrupts_triggering_session_when_present
+"${CARGO_BIN[@]}" server::reload::reload_tests::graceful_shutdown_sessions_defers_when_peer_remains_running
 "${CARGO_BIN[@]}" server::client_lifecycle::tests::reload_starting_rejects_new_turn_without_spawning_processing_task
 "${CARGO_BIN[@]}" tool::ambient::tests::m34_schedule_tool_input_accepts_context_alias
 "${CARGO_BIN[@]}" server::comm_session::comm_session_tests::resolve_spawn_working_dir_falls_back_to_member_dir

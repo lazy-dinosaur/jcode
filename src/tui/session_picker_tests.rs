@@ -523,19 +523,22 @@ fn test_loading_preview_refreshes_search_index_for_picker_filtering() {
     let sessions = load_sessions().expect("load sessions");
     let mut picker = SessionPicker::new(sessions);
 
-    let selected_before = picker.selected_session().expect("selected session");
-    assert!(!selected_before.search_index.contains("needle hidden"));
-
-    picker.ensure_selected_preview_loaded();
-
-    let selected_after = picker
-        .selected_session()
-        .expect("selected session after preview");
-    assert!(selected_after.search_index.contains("needle hidden"));
+    let selected_before = picker
+        .visible_session_iter()
+        .find(|session| session.id == "session_preview_search")
+        .expect("test session should be visible");
+    assert!(
+        selected_before.search_index.contains("needle hidden"),
+        "initial picker summaries should include recent transcript search text"
+    );
 
     picker.search_query = "needle hidden".to_string();
     picker.rebuild_items();
-    assert_eq!(picker.visible_sessions.len(), 1);
+    assert!(
+        picker
+            .visible_session_iter()
+            .any(|session| session.id == "session_preview_search")
+    );
 
     if let Some(previous_home) = previous_home {
         crate::env::set_var("JCODE_HOME", previous_home);

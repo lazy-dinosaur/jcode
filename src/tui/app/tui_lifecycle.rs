@@ -648,7 +648,16 @@ impl App {
             });
         }
 
-        // Pre-compute context info so it shows on startup
+        // Restore the process cwd before pre-computing prompt context. Prompt
+        // instruction discovery falls back to cwd when a caller does not pass
+        // an explicit working dir, and the startup summary must reflect the
+        // session project, not the server process launch directory.
+        sync_process_cwd_from_session(&session);
+
+        // Pre-compute context info so it shows on startup. Use the session
+        // working directory explicitly so AGENTS.md, private .jcode harness
+        // modules, project-local skills, and self-dev prompt accounting do not
+        // disappear after reload/resume.
         let available_skills: Vec<crate::prompt::SkillInfo> = skills
             .list()
             .iter()
@@ -657,10 +666,17 @@ impl App {
                 description: s.description.clone(),
             })
             .collect();
-        let (_, context_info) = crate::prompt::build_system_prompt_with_context(
+        let working_dir = session
+            .working_dir
+            .as_deref()
+            .map(std::path::PathBuf::from)
+            .or_else(|| std::env::current_dir().ok());
+        let (_, context_info) = crate::prompt::build_system_prompt_full(
             None,
             &available_skills,
             session.is_canary,
+            None,
+            working_dir.as_deref(),
         );
         let t_prompt = t0.elapsed();
         crate::logging::info(&format!(
@@ -677,8 +693,6 @@ impl App {
             session.parent_id.clone(),
             false,
         );
-        sync_process_cwd_from_session(&session);
-
         let mut app = Self {
             provider,
             registry,
