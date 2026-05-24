@@ -103,6 +103,26 @@ fn session_picker_enter_queues_current_terminal_resume_and_closes_overlay() {
 }
 
 #[test]
+fn slash_resume_aliases_open_session_picker_overlay_locally() {
+    for command in ["/resume", "/sessions", "/session"] {
+        let runtime = tokio::runtime::Runtime::new().expect("test runtime");
+        let _guard = runtime.enter();
+        let mut app = create_test_app();
+
+        app.input = command.to_string();
+        app.submit_input();
+
+        assert!(
+            app.session_picker_overlay.is_some(),
+            "{command} should open session picker"
+        );
+        assert_eq!(app.session_picker_mode, SessionPickerMode::Resume);
+        assert!(app.pending_session_picker_load.is_some());
+        assert!(app.input.is_empty());
+    }
+}
+
+#[test]
 fn test_resize_redraw_is_debounced() {
     let mut app = create_test_app();
 

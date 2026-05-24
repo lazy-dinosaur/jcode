@@ -1777,6 +1777,11 @@ pub(super) fn handle_session_command(app: &mut App, trimmed: &str) -> bool {
         return true;
     }
 
+    if trimmed == "/resume" || trimmed == "/sessions" || trimmed == "/session" {
+        app.open_session_picker();
+        return true;
+    }
+
     if let Some(command) = parse_improve_command(trimmed) {
         match command {
             Ok(command) => handle_improve_command_local(app, command),
