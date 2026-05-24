@@ -889,6 +889,44 @@ impl App {
         }
     }
 
+    pub(super) fn take_released_held_followups(&mut self) -> QueuedFollowupBatch {
+        self.ensure_queue_metadata();
+
+        let queued_count = self
+            .queued_message_meta
+            .iter()
+            .take_while(|meta| meta.status == QueuedPromptStatus::HeldAfterInterrupt)
+            .count();
+        let hidden_count = self
+            .hidden_queued_system_meta
+            .iter()
+            .take_while(|meta| meta.status == QueuedPromptStatus::HeldAfterInterrupt)
+            .count();
+
+        for meta in self
+            .queued_message_meta
+            .iter_mut()
+            .take(queued_count)
+            .chain(self.hidden_queued_system_meta.iter_mut().take(hidden_count))
+        {
+            meta.status = QueuedPromptStatus::Sending;
+            meta.attempts = meta.attempts.saturating_add(1);
+        }
+
+        QueuedFollowupBatch {
+            queued_messages: self.queued_messages.drain(..queued_count).collect(),
+            queued_meta: self.queued_message_meta.drain(..queued_count).collect(),
+            hidden_reminders: self
+                .hidden_queued_system_messages
+                .drain(..hidden_count)
+                .collect(),
+            hidden_meta: self
+                .hidden_queued_system_meta
+                .drain(..hidden_count)
+                .collect(),
+        }
+    }
+
     pub(super) fn restore_queued_followups_front(&mut self, mut batch: QueuedFollowupBatch) {
         batch.queued_messages.append(&mut self.queued_messages);
         self.queued_messages = batch.queued_messages;
@@ -956,6 +994,18 @@ impl App {
         self.interleave_message.is_some()
             || !self.queued_messages.is_empty()
             || !self.hidden_queued_system_messages.is_empty()
+    }
+
+    pub(super) fn has_released_held_followups(&self) -> bool {
+        !self.queued_messages_held_after_interrupt
+            && (self
+                .queued_message_meta
+                .first()
+                .is_some_and(|meta| meta.status == QueuedPromptStatus::HeldAfterInterrupt)
+                || self
+                    .hidden_queued_system_meta
+                    .first()
+                    .is_some_and(|meta| meta.status == QueuedPromptStatus::HeldAfterInterrupt))
     }
 
     pub(super) fn schedule_auto_poke_followup_if_needed(&mut self) -> bool {

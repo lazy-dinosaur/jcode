@@ -159,8 +159,9 @@ pub(in crate::tui::app) async fn submit_prepared_remote_input(
             app.set_status_notice("Queued messages are paused — send or edit them first");
             return Ok(());
         }
+        app.mark_queued_messages_held_after_interrupt();
         app.enqueue_queued_message(prepared.expanded);
-        app.release_held_queued_messages();
+        app.queued_messages_held_after_interrupt = false;
         app.pending_queued_dispatch = true;
         app.set_status_notice("Queued messages will send first...");
         return Ok(());

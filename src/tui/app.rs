@@ -636,6 +636,10 @@ pub struct App {
     queued_message_meta: Vec<QueuedPromptMeta>,
     hidden_queued_system_messages: Vec<String>,
     hidden_queued_system_meta: Vec<QueuedPromptMeta>,
+    // Set when a disconnect/error already recovered a local interleave into the
+    // normal queue. Pending soft interrupts should batch with that recovered
+    // queue instead of being sent as their own interleave turn.
+    batch_recovered_soft_interrupts_with_queue: bool,
     current_turn_system_reminder: Option<String>,
     // Live token usage (per turn)
     streaming_input_tokens: u64,

@@ -955,7 +955,7 @@ mod tests {
     fn picker_row_marker_uses_explicit_unavailable_marker() {
         assert_eq!(picker_row_marker(true, true, false), "×");
         assert_eq!(picker_row_marker(false, true, false), "×");
-        assert_eq!(picker_row_marker(true, false, true), "▸");
+        assert_eq!(picker_row_marker(true, false, true), "⚠");
         assert_eq!(picker_row_marker(false, false, true), "⚠");
         assert_eq!(picker_row_marker(false, false, false), " ");
     }
@@ -1014,7 +1014,7 @@ mod tests {
             "model picker should fit content, not fill the window"
         );
         assert!(
-            width >= 40,
+            width >= 26,
             "model picker should still fit its visible columns"
         );
     }

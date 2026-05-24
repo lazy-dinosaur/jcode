@@ -22,6 +22,8 @@ impl App {
             && (!self.input.is_empty() || !self.pending_images.is_empty());
         self.hidden_queued_system_messages = restored.hidden_queued_system_messages;
         self.hidden_queued_system_meta.clear();
+        let had_startup_notice = restored.startup_status_notice.is_some();
+        let had_startup_display_message = restored.startup_display_message.is_some();
         if let Some(status_notice) = restored.startup_status_notice {
             self.set_status_notice(status_notice);
         } else if self.submit_input_on_startup {
@@ -48,6 +50,8 @@ impl App {
 
         let mut queued_messages = restored.queued_messages;
         let mut recovered_followups = Vec::new();
+        let mut should_dispatch_remote_restore =
+            self.submit_input_on_startup || had_startup_notice || had_startup_display_message;
         if let Some(pending) = restored_rate_limit_pending_message
             && !pending.content.trim().is_empty()
         {
@@ -55,12 +59,14 @@ impl App {
                 self.hidden_queued_system_messages.push(pending.content);
             } else {
                 recovered_followups.push(pending.content);
+                should_dispatch_remote_restore = true;
             }
         }
         if let Some(interleave_message) = restored.interleave_message
             && !interleave_message.trim().is_empty()
         {
             recovered_followups.push(interleave_message);
+            should_dispatch_remote_restore = true;
         }
         let recovered_interrupts = restored
             .pending_soft_interrupt_resend
@@ -84,12 +90,20 @@ impl App {
         self.ensure_queue_metadata();
         if self.has_queued_followups() {
             if self.is_remote {
-                // Do not synthesize a processing turn for restored remote follow-ups.
-                // After a reload, the server may still be running the previous turn;
-                // the queue must remain a wait-until-turn-end queue until the history
-                // bootstrap/Done event proves the remote turn is idle. The remote
-                // post-connect/history/tick paths will dispatch once it is safe.
-                self.set_status_notice("Restored queued follow-up after reload");
+                if should_dispatch_remote_restore {
+                    self.is_processing = true;
+                    self.status = ProcessingStatus::Sending;
+                    if self.processing_started.is_none() {
+                        self.processing_started = Some(Instant::now());
+                    }
+                    self.pending_queued_dispatch = true;
+                } else {
+                    // Do not synthesize a processing turn for ordinary restored
+                    // remote follow-ups. After a reload, the server may still be
+                    // running the previous turn; the queue must remain paused until
+                    // bootstrap/Done proves the remote turn is idle.
+                    self.set_status_notice("Restored queued follow-up after reload");
+                }
             } else {
                 self.is_processing = true;
                 self.status = ProcessingStatus::Sending;
@@ -326,6 +340,7 @@ impl App {
             queued_message_meta: Vec::new(),
             hidden_queued_system_messages: Vec::new(),
             hidden_queued_system_meta: Vec::new(),
+            batch_recovered_soft_interrupts_with_queue: false,
             current_turn_system_reminder: None,
             streaming_input_tokens: 0,
             streaming_output_tokens: 0,
@@ -719,6 +734,7 @@ impl App {
             queued_message_meta: Vec::new(),
             hidden_queued_system_messages: Vec::new(),
             hidden_queued_system_meta: Vec::new(),
+            batch_recovered_soft_interrupts_with_queue: false,
             current_turn_system_reminder: None,
             streaming_input_tokens: 0,
             streaming_output_tokens: 0,

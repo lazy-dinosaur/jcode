@@ -888,7 +888,11 @@ pub(super) async fn process_remote_followups(app: &mut App, remote: &mut RemoteC
     } else if !app.queued_messages_held_after_interrupt
         && (!app.queued_messages.is_empty() || !app.hidden_queued_system_messages.is_empty())
     {
-        let mut queued_batch = app.take_all_queued_followups();
+        let mut queued_batch = if app.has_released_held_followups() {
+            app.take_released_held_followups()
+        } else {
+            app.take_all_queued_followups()
+        };
         if queued_batch.is_empty() {
             return;
         }

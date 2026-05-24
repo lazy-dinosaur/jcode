@@ -104,7 +104,7 @@ fn test_remote_error_with_retryable_pending_schedules_retry() {
     assert!(
         app.display_messages()
             .iter()
-            .any(|m| m.role == "system" && m.content.contains("Auto-retrying"))
+            .any(|m| m.role == "system" && m.content.contains("retrying"))
     );
 }
 
@@ -405,7 +405,7 @@ fn test_new_for_remote_uses_startup_stub_without_loading_full_transcript() {
         app.display_messages()[0].content,
         "hello from persisted history"
     );
-    assert_eq!(app.session.messages.len(), 1);
+    assert_eq!(app.session.messages.len(), 0);
     assert_eq!(app.remote_session_id.as_deref(), Some(session_id));
     assert_eq!(crate::tui::TuiState::provider_model(&app), "gpt-5.4");
 

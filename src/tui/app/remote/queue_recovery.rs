@@ -94,6 +94,7 @@ pub(super) fn recover_local_interleave_to_queue(app: &mut App, reason: &str) -> 
     let meta = QueuedPromptMeta::user(&interleave);
     app.queued_messages.insert(0, interleave);
     app.queued_message_meta.insert(0, meta);
+    app.batch_recovered_soft_interrupts_with_queue = true;
     true
 }
 
@@ -131,15 +132,29 @@ pub(super) async fn recover_stranded_soft_interrupts(
     app.pending_soft_interrupts.clear();
     app.pending_soft_interrupt_requests.clear();
 
-    let mut recovered_meta: Vec<QueuedPromptMeta> = recovered_interrupts
-        .iter()
-        .map(|_| QueuedPromptMeta::soft_interrupt())
-        .collect();
-    let mut recovered_queue = recovered_interrupts;
-    recovered_queue.append(&mut app.queued_messages);
-    app.queued_messages = recovered_queue;
-    recovered_meta.append(&mut app.queued_message_meta);
-    app.queued_message_meta = recovered_meta;
+    if app.batch_recovered_soft_interrupts_with_queue {
+        app.batch_recovered_soft_interrupts_with_queue = false;
+        let mut recovered_meta: Vec<QueuedPromptMeta> = recovered_interrupts
+            .iter()
+            .map(|_| QueuedPromptMeta::soft_interrupt())
+            .collect();
+        let mut recovered_queue = recovered_interrupts;
+        recovered_queue.append(&mut app.queued_messages);
+        app.queued_messages = recovered_queue;
+        recovered_meta.append(&mut app.queued_message_meta);
+        app.queued_message_meta = recovered_meta;
+    } else {
+        let recovered = recovered_interrupts.join("\n\n");
+        if recovered.trim().is_empty() {
+            return false;
+        }
+        app.interleave_message = Some(match app.interleave_message.take() {
+            Some(existing) if !existing.trim().is_empty() => {
+                format!("{}\n\n{}", recovered, existing)
+            }
+            _ => recovered,
+        });
+    }
     app.set_status_notice("Recovered queued interleave after turn finished");
     true
 }
