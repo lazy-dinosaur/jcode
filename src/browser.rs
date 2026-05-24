@@ -558,6 +558,8 @@ fn install_native_host_manifest() -> Result<bool> {
         && let Some(existing_path) = existing["path"].as_str()
         && std::path::Path::new(existing_path).exists()
     {
+        #[cfg(target_os = "windows")]
+        register_windows_native_host_manifest(&manifest_path)?;
         return Ok(false);
     }
 
@@ -797,7 +799,9 @@ async fn install_extension() -> Result<String> {
     }
 
     // Try to open Firefox with the XPI to trigger install prompt
-    let xpi_url = format!("file://{}", xpi.to_string_lossy());
+    let xpi_url = url::Url::from_file_path(&xpi)
+        .map_err(|_| anyhow::anyhow!("Could not convert XPI path to file URL: {}", xpi.display()))?
+        .to_string();
 
     #[cfg(target_os = "linux")]
     {
