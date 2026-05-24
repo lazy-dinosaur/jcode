@@ -81,7 +81,10 @@ pub fn activity_indicator(
     enable_decorative_animations: bool,
 ) -> &'static str {
     if enable_decorative_animations {
-        spinner_frame(elapsed, fps)
+        const PULSE: [&str; 16] = [
+            "⠋", "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", "⠏", "⠇", "⠋", "⠋", "⠋",
+        ];
+        PULSE[spinner_frame_index(elapsed, fps) % PULSE.len()]
     } else {
         STATIC_ACTIVITY_INDICATOR
     }
