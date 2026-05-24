@@ -187,6 +187,19 @@ fn side_panel_mermaid_keeps_naturally_fitting_diagrams_in_fit_mode() {
 }
 
 #[test]
+fn side_panel_mermaid_does_not_force_pane_aspect_ratio_into_renderer() {
+    let page = sample_mermaid_page(
+        "```mermaid\nflowchart LR\n    A[요청 수신] --> B[Mermaid 코드 생성]\n    B --> C{렌더링 확인}\n    C -->|성공| D[테스트 완료]\n    C -->|실패| E[문법 수정]\n    E --> B\n```",
+    );
+
+    assert_eq!(
+        side_panel_mermaid_preferred_aspect_ratio(&page, Rect::new(0, 0, 120, 60), true),
+        None,
+        "side-panel panes can be square-ish in terminal pixels; forcing that aspect into the graph layout makes wide diagrams look disconnected"
+    );
+}
+
+#[test]
 fn pinned_content_image_layout_fits_generated_wide_image_to_width() {
     let layout = pinned_content_image_layout_with_font(
         1800,

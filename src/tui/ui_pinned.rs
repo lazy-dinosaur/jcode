@@ -48,24 +48,18 @@ fn side_panel_content_area(area: Rect) -> Option<Rect> {
     })
 }
 
-fn side_panel_content_may_contain_mermaid(content: &str) -> bool {
-    content.lines().any(|line| {
-        line.trim_start()
-            .strip_prefix("```")
-            .map(|lang| mermaid::is_mermaid_lang(lang.trim()))
-            .unwrap_or(false)
-    })
-}
-
 fn side_panel_mermaid_preferred_aspect_ratio(
-    page: &crate::side_panel::SidePanelPage,
-    inner: Rect,
-    has_protocol: bool,
+    _page: &crate::side_panel::SidePanelPage,
+    _inner: Rect,
+    _has_protocol: bool,
 ) -> Option<f32> {
-    if !has_protocol || !side_panel_content_may_contain_mermaid(&page.content) {
-        return None;
-    }
-    super::diagram_pane::content_area_preferred_aspect_ratio(inner)
+    // Do not feed the current side-panel viewport aspect ratio into Mermaid's
+    // graph layout. Side panes are often close to square in terminal pixels
+    // (`cols * font_w` by `rows * font_h`), and forcing that aspect makes wide
+    // flowcharts lay themselves out as square diagrams. The image widget already
+    // preserves the generated PNG aspect ratio when fitting it into the pane;
+    // interactive aspect-aware layout belongs to the dedicated diagram pane.
+    None
 }
 
 #[path = "ui_pinned_selection.rs"]
