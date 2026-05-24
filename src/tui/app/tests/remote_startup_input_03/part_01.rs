@@ -212,7 +212,9 @@ fn test_paste_expansion_on_submit() {
     assert_eq!(app.display_messages().len(), 1);
     assert_eq!(app.display_messages()[0].content, "A: [pasted 5 lines] B");
 
-    // Model receives expanded content (actual pasted text)
+    // Model receives expanded content (actual pasted text). In the current
+    // TUI state model, submitted user messages are read through the
+    // materialized provider view rather than the raw session message cache.
     let provider_messages = app.materialized_provider_messages();
     let submitted_message = provider_messages
         .last()

@@ -150,17 +150,25 @@ fn test_gemini_3_5_flash_has_separate_gemini_and_antigravity_routes() {
         routes.iter().any(|route| {
             route.provider == "Antigravity"
                 && route.api_method == "https"
-                && route.model == "gemini-3.5-flash"
+                && route.model == "gemini-3.5-flash-low"
         }),
-        "Antigravity route missing for gemini-3.5-flash: {routes:?}"
+        "Antigravity route missing for gemini-3.5-flash-low: {routes:?}"
     );
     assert!(
         routes.iter().any(|route| {
             route.provider == "Antigravity"
                 && route.api_method == "https"
-                && route.model == "gemini-3.5-pro-low"
+                && route.model == "gemini-3-flash-agent"
         }),
-        "Antigravity route missing for gemini-3.5-pro-low: {routes:?}"
+        "Antigravity route missing for gemini-3-flash-agent: {routes:?}"
+    );
+    assert!(
+        routes.iter().any(|route| {
+            route.provider == "Antigravity"
+                && route.api_method == "https"
+                && route.model == "gemini-3.1-pro-low"
+        }),
+        "Antigravity route missing for gemini-3.1-pro-low: {routes:?}"
     );
 }
 

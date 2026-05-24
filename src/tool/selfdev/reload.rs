@@ -332,37 +332,37 @@ impl SelfDevTool {
         }
         crate::logging::info("Reload context saved successfully");
 
-        // Signal the server via in-process channel (replaces filesystem-based rebuild-signal)
-        let request_id =
-            server::send_reload_signal(hash.clone(), Some(session_id.to_string()), true);
-        crate::logging::info(&format!(
-            "selfdev reload: request={} session_id={} hash={} execution_mode={:?}",
-            request_id, session_id, hash, execution_mode
-        ));
-
-        let timeout = std::time::Duration::from_secs(SelfDevTool::reload_timeout_secs());
-        let ack_wait_started = std::time::Instant::now();
-        let ack = server::wait_for_reload_ack(&request_id, timeout)
-            .await
-            .map_err(|error| {
-                let _ = build::rollback_pending_activation_for_session(session_id);
-                anyhow::anyhow!(
-                    "Timed out waiting for the server to begin reload after {}s: {}. The reload signal may not have been picked up; check that the connected server is running a build with unified self-dev reload support and try restarting the shared server.",
-                    timeout.as_secs(),
-                    error
-                )
-            })?;
-
-        crate::logging::info(&format!(
-            "selfdev reload: acked request={} hash={} after {}ms state={}",
-            ack.request_id,
-            ack.hash,
-            ack_wait_started.elapsed().as_millis(),
-            server::reload_state_summary(std::time::Duration::from_secs(60))
-        ));
-
         match execution_mode {
             ToolExecutionMode::Direct => {
+                // Signal the server via in-process channel (replaces filesystem-based rebuild-signal)
+                let request_id =
+                    server::send_reload_signal(hash.clone(), Some(session_id.to_string()), true);
+                crate::logging::info(&format!(
+                    "selfdev reload: request={} session_id={} hash={} execution_mode={:?}",
+                    request_id, session_id, hash, execution_mode
+                ));
+
+                let timeout = std::time::Duration::from_secs(SelfDevTool::reload_timeout_secs());
+                let ack_wait_started = std::time::Instant::now();
+                let ack = server::wait_for_reload_ack(&request_id, timeout)
+                    .await
+                    .map_err(|error| {
+                        let _ = build::rollback_pending_activation_for_session(session_id);
+                        anyhow::anyhow!(
+                            "Timed out waiting for the server to begin reload after {}s: {}. The reload signal may not have been picked up; check that the connected server is running a build with unified self-dev reload support and try restarting the shared server.",
+                            timeout.as_secs(),
+                            error
+                        )
+                    })?;
+
+                crate::logging::info(&format!(
+                    "selfdev reload: acked request={} hash={} after {}ms state={}",
+                    ack.request_id,
+                    ack.hash,
+                    ack_wait_started.elapsed().as_millis(),
+                    server::reload_state_summary(std::time::Duration::from_secs(60))
+                ));
+
                 if SelfDevTool::is_test_session() {
                     return Ok(ToolOutput::new(format!(
                         "Reload acknowledged for build {}. Server is restarting now.",
@@ -398,29 +398,29 @@ impl SelfDevTool {
                 }
             }
             ToolExecutionMode::AgentTurn => {
-                let sleep_forever = async {
-                    loop {
-                        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-                    }
-                };
+                let delay = SelfDevTool::agent_turn_reload_delay();
+                let delayed_hash = hash.clone();
+                let delayed_session_id = session_id.to_string();
+                tokio::spawn(async move {
+                    tokio::time::sleep(delay).await;
+                    let request_id = server::send_reload_signal(
+                        delayed_hash.clone(),
+                        Some(delayed_session_id.clone()),
+                        true,
+                    );
+                    crate::logging::info(&format!(
+                        "selfdev reload: delayed agent-turn request={} session_id={} hash={} after {}ms",
+                        request_id,
+                        delayed_session_id,
+                        delayed_hash,
+                        delay.as_millis()
+                    ));
+                });
 
-                match tokio::time::timeout(timeout, sleep_forever).await {
-                    Ok(_) => unreachable!("infinite wait future unexpectedly completed"),
-                    Err(_) => {
-                        crate::logging::warn(&format!(
-                            "selfdev reload: request={} not interrupted after {}ms state={} ",
-                            ack.request_id,
-                            timeout.as_millis(),
-                            server::reload_state_summary(std::time::Duration::from_secs(60))
-                        ));
-                        Err(anyhow::anyhow!(
-                            "Reload was acknowledged by the server for build {}, but this tool execution was not interrupted within {}s. The server restart may be stuck; inspect logs and active sessions. Current reload state: {}",
-                            ack.hash,
-                            timeout.as_secs(),
-                            server::reload_state_summary(std::time::Duration::from_secs(60))
-                        ))
-                    }
-                }
+                Ok(ToolOutput::new(format!(
+                    "Reload scheduled for build {}. The server will restart shortly and reconnect automatically.",
+                    hash
+                )))
             }
         }
     }

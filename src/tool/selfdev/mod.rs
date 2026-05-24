@@ -508,6 +508,15 @@ impl SelfDevTool {
             .unwrap_or(15)
     }
 
+    fn agent_turn_reload_delay() -> std::time::Duration {
+        std::time::Duration::from_millis(
+            std::env::var("JCODE_SELFDEV_AGENT_RELOAD_DELAY_MS")
+                .ok()
+                .and_then(|raw| raw.trim().parse::<u64>().ok())
+                .unwrap_or(1500),
+        )
+    }
+
     fn session_is_selfdev(session_id: &str) -> bool {
         session::Session::load(session_id)
             .map(|session| session.is_canary)

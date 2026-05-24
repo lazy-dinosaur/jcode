@@ -335,6 +335,51 @@ async fn do_reload_returns_after_ack_in_direct_mode() {
     assert_eq!(ack.hash, "direct-hash");
 }
 
+#[tokio::test]
+async fn agent_turn_reload_returns_before_delayed_restart_signal() {
+    let _storage_guard = crate::storage::lock_test_env();
+    let _lock = lock_env();
+    let temp_home = tempfile::TempDir::new().expect("temp home");
+    let _home_guard = EnvVarGuard::set("JCODE_HOME", temp_home.path());
+    let _test_guard = EnvVarGuard::set("JCODE_TEST_SESSION", "1");
+    let _delay_guard = EnvVarGuard::set("JCODE_SELFDEV_AGENT_RELOAD_DELAY_MS", "1");
+    let repo = create_repo_fixture();
+    let session_id = "agent-turn-reload-session";
+
+    let mut rx = crate::server::subscribe_reload_signal_for_tests();
+    let _ = rx.borrow_and_update().clone();
+
+    let output = SelfDevTool::new()
+        .do_reload(
+            Some("continue after reload".to_string()),
+            session_id,
+            crate::tool::ToolExecutionMode::AgentTurn,
+            Some(repo.path()),
+        )
+        .await
+        .expect("agent-turn reload should return before restart signal");
+
+    assert!(
+        output.output.contains("Reload scheduled for build"),
+        "unexpected output: {}",
+        output.output
+    );
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            rx.changed().await.expect("reload signal channel open");
+            if let Some(signal) = rx.borrow_and_update().clone()
+                && signal.triggering_session.as_deref() == Some(session_id)
+            {
+                assert_eq!(signal.hash, "test-reload-hash");
+                break;
+            }
+        }
+    })
+    .await
+    .expect("delayed reload signal should be emitted");
+}
+
 #[test]
 fn reload_repo_resolver_uses_working_dir_when_primary_detection_fails() {
     let repo = create_repo_fixture();

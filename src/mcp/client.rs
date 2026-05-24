@@ -4,6 +4,7 @@ use super::protocol::*;
 use anyhow::{Context, Result};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -20,6 +21,27 @@ fn first_sse_json_data(body: &str) -> Option<&str> {
             Some(data)
         }
     })
+}
+
+fn safe_stdio_mcp_spawn_cwd() -> PathBuf {
+    if let Ok(cwd) = std::env::current_dir()
+        && cwd.is_dir()
+    {
+        return cwd;
+    }
+
+    if let Some(home) = dirs::home_dir()
+        && home.is_dir()
+    {
+        return home;
+    }
+
+    let temp = std::env::temp_dir();
+    if temp.is_dir() {
+        return temp;
+    }
+
+    PathBuf::from(std::path::MAIN_SEPARATOR.to_string())
 }
 
 async fn build_http_headers(
@@ -301,12 +323,17 @@ impl McpClient {
         let mut env: HashMap<String, String> = std::env::vars().collect();
         env.extend(config.env.clone());
 
-        let mut child = Command::new(&config.command)
+        let spawn_cwd = safe_stdio_mcp_spawn_cwd();
+        let mut command = Command::new(&config.command);
+        command
             .args(&config.args)
             .envs(&env)
+            .current_dir(&spawn_cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let mut child = command
             .spawn()
             .with_context(|| format!("Failed to spawn MCP server: {}", config.command))?;
 
@@ -671,6 +698,28 @@ mod tests {
             )
             .await?;
         Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stdio_mcp_spawn_cwd_falls_back_when_process_cwd_was_removed() {
+        let _lock = crate::storage::lock_test_env();
+        let previous = std::env::current_dir().expect("read current dir");
+        let temp = tempfile::TempDir::new().expect("tempdir");
+        let vanished = temp.path().join("vanished-cwd");
+        std::fs::create_dir(&vanished).expect("create vanished cwd");
+
+        std::env::set_current_dir(&vanished).expect("enter vanished cwd");
+        std::fs::remove_dir(&vanished).expect("remove current cwd");
+
+        let fallback = safe_stdio_mcp_spawn_cwd();
+
+        std::env::set_current_dir(previous).expect("restore current dir");
+        assert!(
+            fallback.is_dir(),
+            "fallback MCP spawn cwd should exist, got {}",
+            fallback.display()
+        );
     }
 
     #[tokio::test]
