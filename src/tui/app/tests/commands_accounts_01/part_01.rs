@@ -41,15 +41,15 @@ fn session_picker_resume_action_keeps_overlay_open() {
 
     app.handle_session_picker_key(
         crossterm::event::KeyCode::Enter,
-        crossterm::event::KeyModifiers::empty(),
+        crossterm::event::KeyModifiers::CONTROL,
     )
-    .expect("session picker enter should succeed");
+    .expect("session picker ctrl-enter should succeed");
 
     assert!(app.session_picker_overlay.is_some());
 }
 
 #[test]
-fn session_picker_ctrl_enter_queues_current_terminal_resume_and_closes_overlay() {
+fn session_picker_enter_queues_current_terminal_resume_and_closes_overlay() {
     let mut app = create_test_app();
     app.session_picker_mode = SessionPickerMode::Resume;
     app.session_picker_overlay = Some(RefCell::new(
@@ -91,9 +91,9 @@ fn session_picker_ctrl_enter_queues_current_terminal_resume_and_closes_overlay()
 
     app.handle_session_picker_key(
         crossterm::event::KeyCode::Enter,
-        crossterm::event::KeyModifiers::CONTROL,
+        crossterm::event::KeyModifiers::empty(),
     )
-    .expect("session picker ctrl-enter should succeed");
+    .expect("session picker enter should succeed");
 
     assert!(app.session_picker_overlay.is_none());
     assert_eq!(

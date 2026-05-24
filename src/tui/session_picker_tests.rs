@@ -725,8 +725,29 @@ fn test_space_selects_multiple_sessions_and_enter_returns_them() {
         .handle_overlay_key(KeyCode::Enter, KeyModifiers::empty())
         .unwrap();
 
+    let expected_current_terminal = matches!(
+        crate::config::config().keybindings.session_picker_enter,
+        crate::config::SessionPickerResumeAction::CurrentTerminal
+    );
     match action {
-        OverlayAction::Selected(PickerResult::SelectedInNewTerminal(ids)) => {
+        OverlayAction::Selected(PickerResult::SelectedInCurrentTerminal(ids))
+            if expected_current_terminal =>
+        {
+            assert_eq!(
+                ids,
+                vec![
+                    ResumeTarget::JcodeSession {
+                        session_id: "session_newer".to_string(),
+                    },
+                    ResumeTarget::JcodeSession {
+                        session_id: "session_older".to_string(),
+                    }
+                ]
+            );
+        }
+        OverlayAction::Selected(PickerResult::SelectedInNewTerminal(ids))
+            if !expected_current_terminal =>
+        {
             assert_eq!(
                 ids,
                 vec![

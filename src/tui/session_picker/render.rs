@@ -374,12 +374,15 @@ impl SessionPicker {
             ));
         }
 
-        if let Some(label) = self.filter_mode.label() {
-            title_parts.push(Span::styled(
-                format!("  {}", label),
-                Style::default().fg(rgb(255, 180, 100)),
-            ));
-        }
+        let filter_label = self.filter_mode.label().unwrap_or("all");
+        title_parts.push(Span::styled(
+            format!("  {}", filter_label),
+            Style::default().fg(rgb(255, 180, 100)),
+        ));
+        title_parts.push(Span::styled(
+            " (s/S filter)",
+            Style::default().fg(rgb(80, 80, 80)),
+        ));
 
         if self.hidden_test_count > 0 {
             title_parts.push(Span::styled(
@@ -409,7 +412,14 @@ impl SessionPicker {
         } else if self.search_active {
             " type to filter, Esc cancel "
         } else {
-            " Space select · Enter resume · s next filter · S prev · d debug · / search · h/l focus · ↑↓ · q "
+            match crate::config::config().keybindings.session_picker_enter {
+                crate::config::SessionPickerResumeAction::CurrentTerminal => {
+                    " Space select · Enter in place · Ctrl+Enter new terminal · d debug · / search · h/l focus · ↑↓ · q "
+                }
+                crate::config::SessionPickerResumeAction::NewTerminal => {
+                    " Space select · Enter new terminal · Ctrl+Enter in place · d debug · / search · h/l focus · ↑↓ · q "
+                }
+            }
         };
 
         let border_dim: Color = rgb(70, 70, 70);
@@ -446,11 +456,10 @@ impl SessionPicker {
             return;
         };
 
-        let title = if info.session_ids.len() == 1 {
-            " crashed session detected "
-        } else {
-            " crashed sessions detected "
-        };
+        let title = format!(
+            " R restore all · {} crashed session(s) detected ",
+            info.session_ids.len()
+        );
         let names = info.display_names.join(", ");
         let body = vec![
             Line::from(vec![
