@@ -480,8 +480,9 @@ impl App {
                                         StreamEvent::ToolUseEnd => {
                                             self.pause_streaming_tps(false);
                                             if let Some(mut tool) = current_tool.take() {
-                                                tool.input = serde_json::from_str(&current_tool_input)
-                                                    .unwrap_or(serde_json::Value::Null);
+                                                tool.input = crate::message::ToolCall::parse_streamed_input_to_object(
+                                                    &current_tool_input,
+                                                );
                                                 tool.refresh_intent_from_input();
                                                 if let Some(key) = Self::experimental_feature_key_for_tool(&tool) {
                                                     self.note_experimental_feature_use(key);
@@ -815,7 +816,14 @@ impl App {
                 turn_cancel_signal: None,
                                                 execution_mode: crate::tool::ToolExecutionMode::AgentTurn,
                                             };
-                                            let tool_result = self.registry.execute(&tool_name, input, ctx).await;
+                                            let tool_result = self
+                                                .registry
+                                                .execute(
+                                                    &tool_name,
+                                                    crate::message::ToolCall::normalize_input_to_object(input),
+                                                    ctx,
+                                                )
+                                                .await;
                                             crate::telemetry::record_tool_call();
                                             if tool_result.is_err() {
                                                 crate::telemetry::record_tool_failure();

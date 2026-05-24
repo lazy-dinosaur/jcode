@@ -635,6 +635,106 @@ pub(crate) async fn run_live_openai_compatible_smoke(
     Ok(())
 }
 
+pub(crate) async fn run_live_openai_compatible_tool_smoke(
+    profile: OpenAiCompatibleProfile,
+    api_key: &str,
+    model: &str,
+) -> anyhow::Result<()> {
+    let resolved = crate::provider_catalog::resolve_openai_compatible_profile(profile);
+    let url = format!(
+        "{}/chat/completions",
+        resolved.api_base.trim_end_matches('/')
+    );
+    let tool_name = "auth_tool_probe";
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [
+            {"role": "user", "content": "Call the auth_tool_probe tool now. Do not answer in text."}
+        ],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": tool_name,
+                    "description": "A no-op live auth/tool-call smoke-test tool.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": false
+                    }
+                }
+            }
+        ],
+        "tool_choice": {"type": "function", "function": {"name": tool_name}},
+        "temperature": 0,
+        "stream": false,
+        "max_tokens": 256
+    });
+    let request = crate::provider::shared_http_client()
+        .post(&url)
+        .bearer_auth(api_key)
+        .json(&body);
+    let response = tokio::time::timeout(std::time::Duration::from_secs(45), request.send())
+        .await
+        .context("timed out running live tool-call smoke completion")?
+        .with_context(|| format!("run live {} tool-call smoke", resolved.display_name))?;
+    let status = response.status();
+    let text = response.text().await.unwrap_or_default();
+    ensure!(
+        status.is_success(),
+        "{} live tool-call smoke failed (HTTP {}): {}",
+        resolved.display_name,
+        status,
+        text.trim()
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&text).with_context(|| {
+        format!(
+            "parse live {} tool-call smoke response",
+            resolved.display_name
+        )
+    })?;
+    let tool_calls = parsed
+        .get("choices")
+        .and_then(|choices| choices.get(0))
+        .and_then(|choice| choice.get("message"))
+        .and_then(|message| message.get("tool_calls"))
+        .and_then(|tool_calls| tool_calls.as_array())
+        .cloned()
+        .unwrap_or_default();
+    ensure!(
+        !tool_calls.is_empty(),
+        "{} live tool-call smoke returned no tool calls: {}",
+        resolved.display_name,
+        crate::util::truncate_str(text.trim(), 1200)
+    );
+    let function = tool_calls[0]
+        .get("function")
+        .and_then(|function| function.as_object())
+        .context("live tool-call smoke response missing function object")?;
+    let returned_name = function
+        .get("name")
+        .and_then(|name| name.as_str())
+        .unwrap_or_default();
+    ensure!(
+        returned_name == tool_name,
+        "{} live tool-call smoke returned unexpected tool name {:?}",
+        resolved.display_name,
+        returned_name
+    );
+    let arguments = function
+        .get("arguments")
+        .and_then(|arguments| arguments.as_str())
+        .context("live tool-call smoke response missing string arguments")?;
+    let parsed_arguments = crate::message::ToolCall::parse_streamed_input_to_object(arguments);
+    ensure!(
+        parsed_arguments.is_object(),
+        "{} live tool-call smoke returned non-object tool arguments: {:?}",
+        resolved.display_name,
+        arguments
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -654,6 +754,22 @@ mod tests {
             .ok()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
+    }
+
+    fn live_opencode_zen_api_key() -> Option<String> {
+        std::env::var("JCODE_AUTH_LIFECYCLE_OPENCODE_API_KEY")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                let resolved = crate::provider_catalog::resolve_openai_compatible_profile(
+                    crate::provider_catalog::OPENCODE_PROFILE,
+                );
+                crate::provider_catalog::load_api_key_from_env_or_config(
+                    &resolved.api_key_env,
+                    &resolved.env_file,
+                )
+            })
     }
 
     fn stale_openai_route(model: &str) -> ModelRoute {
@@ -1235,6 +1351,32 @@ mod tests {
             .await
             .expect("live Cerebras smoke completion");
         }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn opencode_zen_live_opt_in_tool_call_smoke() {
+        if !env_truthy("JCODE_OPENCODE_ZEN_LIVE_TOOL_TEST") {
+            eprintln!(
+                "skipping live OpenCode Zen tool-call smoke; set JCODE_OPENCODE_ZEN_LIVE_TOOL_TEST=1 and provide OPENCODE_API_KEY"
+            );
+            return;
+        }
+        let api_key = live_opencode_zen_api_key().expect(
+            "JCODE_OPENCODE_ZEN_LIVE_TOOL_TEST=1 requires OPENCODE_API_KEY or JCODE_AUTH_LIFECYCLE_OPENCODE_API_KEY",
+        );
+        let model = std::env::var("JCODE_OPENCODE_ZEN_LIVE_TOOL_MODEL")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "kimi-k2.6".to_string());
+
+        run_live_openai_compatible_tool_smoke(
+            crate::provider_catalog::OPENCODE_PROFILE,
+            &api_key,
+            &model,
+        )
+        .await
+        .expect("live OpenCode Zen tool-call smoke");
     }
 
     #[test]

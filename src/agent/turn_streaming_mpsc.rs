@@ -367,8 +367,7 @@ impl Agent {
                     StreamEvent::ToolUseEnd => {
                         if let Some(mut tool) = current_tool.take() {
                             tool.input =
-                                serde_json::from_str::<serde_json::Value>(&current_tool_input)
-                                    .unwrap_or(serde_json::Value::Null);
+                                ToolCall::parse_streamed_input_to_object(&current_tool_input);
                             tool.refresh_intent_from_input();
 
                             let _ = event_tx.send(ServerEvent::ToolExec {
@@ -529,7 +528,10 @@ impl Agent {
                             execution_mode: ToolExecutionMode::AgentTurn,
                         };
                         crate::telemetry::record_tool_call();
-                        let tool_result = self.registry.execute(&tool_name, input, ctx).await;
+                        let tool_result = self
+                            .registry
+                            .execute(&tool_name, ToolCall::normalize_input_to_object(input), ctx)
+                            .await;
                         if tool_result.is_err() {
                             crate::telemetry::record_tool_failure();
                         }
