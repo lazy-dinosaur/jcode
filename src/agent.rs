@@ -20,7 +20,10 @@ use self::streaming::{
     format_text_delta_after_thinking, format_thinking_delta_for_display,
     send_stream_keepalive_broadcast, send_stream_keepalive_mpsc, stream_keepalive_ticker,
 };
-use self::tools::{print_tool_summary, tool_output_to_content_blocks};
+use self::tools::{
+    cap_sdk_tool_content_for_history, cap_tool_output_for_history, print_tool_summary,
+    tool_output_to_content_blocks,
+};
 use self::utils::trace_enabled;
 use crate::build;
 use crate::bus::{Bus, BusEvent, SubagentStatus, ToolEvent, ToolStatus};

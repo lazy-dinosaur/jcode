@@ -1175,6 +1175,7 @@ impl Agent {
                                 };
                                 println!("{}", preview.lines().next().unwrap_or("(done via SDK)"));
                             }
+                            let content = cap_sdk_tool_content_for_history(&tc.name, content);
                             Bus::global().publish(BusEvent::ToolUpdated(ToolEvent {
                                 session_id: self.session.id.clone(),
                                 message_id: message_id.clone(),
@@ -1214,6 +1215,7 @@ impl Agent {
 
                 match result.result {
                     Ok(output) => {
+                        let output = cap_tool_output_for_history(&tc.name, output);
                         Bus::global().publish(BusEvent::ToolUpdated(ToolEvent {
                             session_id: self.session.id.clone(),
                             message_id: message_id.clone(),

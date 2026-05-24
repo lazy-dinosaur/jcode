@@ -1094,6 +1094,7 @@ impl Agent {
                             tool_results_dirty = true;
                         }
                         PresetToolResult::SdkProvided { content, is_error } => {
+                            let content = cap_sdk_tool_content_for_history(&tc.name, content);
                             self.add_message(
                                 Role::User,
                                 vec![ContentBlock::ToolResult {
@@ -1121,6 +1122,7 @@ impl Agent {
 
                 match result.result {
                     Ok(output) => {
+                        let output = cap_tool_output_for_history(&result.tc.name, output);
                         let _ = event_tx.send(ServerEvent::ToolDone {
                             id: result.tc.id.clone(),
                             name: result.tc.name.clone(),
