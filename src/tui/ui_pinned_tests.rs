@@ -135,41 +135,26 @@ fn estimate_side_panel_image_rows_uses_actual_inner_width() {
 }
 
 #[test]
-fn side_panel_mermaid_switches_to_scrollable_viewport_when_fit_would_be_too_small() {
+fn side_panel_mermaid_keeps_huge_diagrams_in_fit_mode() {
     let layout =
         estimate_side_panel_image_layout_with_font(4000, 2000, 24, 20, 0, false, Some((8, 16)));
 
-    assert_eq!(
-        layout.render_mode,
-        SidePanelImageRenderMode::ScrollableViewport {
-            zoom_percent: SIDE_PANEL_INLINE_IMAGE_MIN_ZOOM_PERCENT,
-        }
-    );
-    assert!(layout.rows > 20, "expected tall scrollable diagram rows");
-    assert!(layout.render_mode.is_scrollable());
+    assert_eq!(layout.render_mode, SidePanelImageRenderMode::Fit);
+    assert_eq!(layout.rows, 6);
+    assert!(!layout.render_mode.is_scrollable());
 }
 
 #[test]
-fn side_panel_mermaid_fit_fill_allows_wide_short_diagrams_above_200_percent() {
-    // A left-to-right flowchart can be very wide and short. Capping automatic
-    // fill at 200% leaves it as a thin strip with most of the pane blank.
+fn side_panel_mermaid_keeps_wide_short_diagrams_in_fit_mode() {
+    // A left-to-right flowchart can be very wide and short. Do not upscale it to
+    // fill the whole pane: that creates a near-square viewport and makes arrows
+    // look disconnected from nodes. Keep the full image visible in fit mode.
     let layout =
         estimate_side_panel_image_layout_with_font(1440, 110, 118, 70, 0, false, Some((8, 16)));
 
-    match layout.render_mode {
-        SidePanelImageRenderMode::ScrollableViewport { zoom_percent } => {
-            assert!(
-                zoom_percent >= 700,
-                "wide short side-panel diagrams need high fit-fill zoom, got {zoom_percent}%"
-            );
-        }
-        other => panic!("expected scrollable viewport for wide short diagram, got {other:?}"),
-    }
-    assert!(
-        layout.rows >= 70,
-        "high fill zoom should reserve enough rows to fill the pane, got {}",
-        layout.rows
-    );
+    assert_eq!(layout.render_mode, SidePanelImageRenderMode::Fit);
+    assert_eq!(layout.rows, 5);
+    assert!(!layout.render_mode.is_scrollable());
 }
 
 #[test]

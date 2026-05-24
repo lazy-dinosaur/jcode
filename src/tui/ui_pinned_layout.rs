@@ -1,11 +1,10 @@
 use super::{
-    FitImageRenderPlan, SIDE_PANEL_INLINE_IMAGE_MIN_ROWS, SIDE_PANEL_INLINE_IMAGE_MIN_ZOOM_PERCENT,
-    SidePanelImageLayout, SidePanelImageRenderMode,
+    FitImageRenderPlan, SIDE_PANEL_INLINE_IMAGE_MIN_ROWS, SidePanelImageLayout,
+    SidePanelImageRenderMode,
 };
 use crate::tui::mermaid;
 use ratatui::prelude::Rect;
 
-const SIDE_PANEL_INLINE_IMAGE_TARGET_UTILIZATION_PERCENT: u16 = 85;
 const SIDE_PANEL_INLINE_IMAGE_MAX_AUTO_FILL_ZOOM_PERCENT: u16 = 1000;
 
 pub(super) fn estimate_side_panel_image_layout(
@@ -104,21 +103,11 @@ fn estimate_side_panel_image_layout_with_font_inner(
     let (cell_w, cell_h) = font_size.unwrap_or((8, 16));
     let cell_w = cell_w.max(1) as u32;
     let cell_h = cell_h.max(1) as u32;
-    let image_w_cells = super::diagram_pane::div_ceil_u32(width.max(1), cell_w).max(1);
     let image_h_cells = super::diagram_pane::div_ceil_u32(height.max(1), cell_h).max(1);
     let available_width = available_width.max(1) as u32;
     let inner_height = inner_height.max(1);
     let fit_area = Rect::new(0, 0, available_width as u16, inner_height);
 
-    let mut fit_zoom = fit_zoom_percent_for_area(
-        fit_area,
-        width,
-        height,
-        Some((cell_w as u16, cell_h as u16)),
-    ) as u16;
-    if !allow_auto_upscale {
-        fit_zoom = fit_zoom.min(100);
-    }
     let fit_rect = fit_image_area_with_font(
         fit_area,
         width,
@@ -127,10 +116,13 @@ fn estimate_side_panel_image_layout_with_font_inner(
         true,
         false,
     );
-    if allow_auto_upscale
-        && image_w_cells <= available_width
-        && image_h_cells <= inner_height as u32
-    {
+    if allow_auto_upscale {
+        // Mermaid diagrams in the side panel should default to showing the whole
+        // generated image. Earlier auto-fill logic switched wide/short diagrams
+        // to a scrollable viewport so they used most of the pane height; on
+        // terminals that produced a near-square image area and made flowchart
+        // nodes/arrows appear disconnected. The dedicated diagram pane remains
+        // the interactive place for zoom/pan; inline side-panel Mermaid stays Fit.
         let needed = fit_rect.height.max(SIDE_PANEL_INLINE_IMAGE_MIN_ROWS);
         return SidePanelImageLayout {
             rows: clamp_side_panel_image_rows(
@@ -142,54 +134,15 @@ fn estimate_side_panel_image_layout_with_font_inner(
             render_mode: SidePanelImageRenderMode::Fit,
         };
     }
+
+    // For pinned/read image artifacts, default to seeing the whole image. Use
+    // the limiting axis: wide images are width-limited, tall images are
+    // height-limited, and mixed cases pick whichever zoom is smaller. This may
+    // leave unused space, but avoids surprising default cropping.
     let width_fill_zoom = axis_fill_zoom_percent(available_width, width, cell_w);
     let height_fill_zoom = axis_fill_zoom_percent(inner_height as u32, height, cell_h);
-    if !allow_auto_upscale {
-        // For pinned/read image artifacts, default to seeing the whole image.
-        // Use the limiting axis: wide images are width-limited, tall images are
-        // height-limited, and mixed cases pick whichever zoom is smaller. This
-        // may leave unused space, but avoids surprising default cropping.
-        let whole_image_zoom = width_fill_zoom.min(height_fill_zoom).clamp(1, 100);
-        let needed = scaled_image_rows(image_h_cells, whole_image_zoom);
-        return SidePanelImageLayout {
-            rows: clamp_side_panel_image_rows(
-                needed
-                    .max(SIDE_PANEL_INLINE_IMAGE_MIN_ROWS)
-                    .min(inner_height.max(SIDE_PANEL_INLINE_IMAGE_MIN_ROWS)),
-                inner_height,
-                lines_before_image,
-                has_following_content,
-            ),
-            render_mode: SidePanelImageRenderMode::ScrollableViewport {
-                zoom_percent: whole_image_zoom,
-            },
-        };
-    }
-    let max_auto_fill_zoom = if allow_auto_upscale {
-        SIDE_PANEL_INLINE_IMAGE_MAX_AUTO_FILL_ZOOM_PERCENT
-    } else {
-        100
-    };
-    let preferred_viewport_zoom = width_fill_zoom
-        .max(height_fill_zoom)
-        .clamp(SIDE_PANEL_INLINE_IMAGE_MIN_ZOOM_PERCENT, max_auto_fill_zoom);
-    let fit_underutilized = rect_utilization_percent(fit_rect.width, fit_area.width)
-        < SIDE_PANEL_INLINE_IMAGE_TARGET_UTILIZATION_PERCENT
-        || rect_utilization_percent(fit_rect.height, fit_area.height)
-            < SIDE_PANEL_INLINE_IMAGE_TARGET_UTILIZATION_PERCENT
-        || area_utilization_percent(fit_rect, fit_area)
-            < SIDE_PANEL_INLINE_IMAGE_TARGET_UTILIZATION_PERCENT;
-
-    if fit_underutilized && preferred_viewport_zoom > fit_zoom {
-        let zoom_percent = preferred_viewport_zoom;
-        return SidePanelImageLayout {
-            rows: scaled_image_rows(image_h_cells, zoom_percent)
-                .max(SIDE_PANEL_INLINE_IMAGE_MIN_ROWS),
-            render_mode: SidePanelImageRenderMode::ScrollableViewport { zoom_percent },
-        };
-    }
-
-    let needed = scaled_image_rows(image_h_cells, fit_zoom);
+    let whole_image_zoom = width_fill_zoom.min(height_fill_zoom).clamp(1, 100);
+    let needed = scaled_image_rows(image_h_cells, whole_image_zoom);
     SidePanelImageLayout {
         rows: clamp_side_panel_image_rows(
             needed
@@ -199,7 +152,9 @@ fn estimate_side_panel_image_layout_with_font_inner(
             lines_before_image,
             has_following_content,
         ),
-        render_mode: SidePanelImageRenderMode::Fit,
+        render_mode: SidePanelImageRenderMode::ScrollableViewport {
+            zoom_percent: whole_image_zoom,
+        },
     }
 }
 
@@ -214,22 +169,6 @@ fn axis_fill_zoom_percent(available_cells: u32, image_px: u32, cell_px: u32) -> 
         .checked_div(image_px.max(1))
         .unwrap_or(100)
         .clamp(1, SIDE_PANEL_INLINE_IMAGE_MAX_AUTO_FILL_ZOOM_PERCENT as u32) as u16
-}
-
-fn rect_utilization_percent(used: u16, total: u16) -> u16 {
-    if total == 0 {
-        return 0;
-    }
-    ((used as u32).saturating_mul(100) / total as u32) as u16
-}
-
-fn area_utilization_percent(used: Rect, total: Rect) -> u16 {
-    let used_area = (used.width as u32).saturating_mul(used.height as u32);
-    let total_area = (total.width as u32).saturating_mul(total.height as u32);
-    if total_area == 0 {
-        return 0;
-    }
-    (used_area.saturating_mul(100) / total_area) as u16
 }
 
 pub(super) fn scaled_image_rows(image_h_cells: u32, zoom_percent: u16) -> u16 {

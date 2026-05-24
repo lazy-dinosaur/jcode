@@ -410,7 +410,6 @@ enum FitImageRenderPlan {
 }
 
 const SIDE_PANEL_INLINE_IMAGE_MIN_ROWS: u16 = 4;
-const SIDE_PANEL_INLINE_IMAGE_MIN_ZOOM_PERCENT: u16 = 70;
 
 fn pinned_content_image_layout_with_font(
     width: u32,
@@ -1208,10 +1207,11 @@ pub(super) fn draw_pinned_content_cached(
                         ) {
                             match plan {
                                 FitImageRenderPlan::Full { area } => {
-                                    mermaid::render_image_widget_scale(
+                                    mermaid::render_image_widget_fit(
                                         placement.hash,
                                         area,
                                         frame.buffer_mut(),
+                                        false,
                                         false,
                                     );
                                 }
@@ -1233,10 +1233,11 @@ pub(super) fn draw_pinned_content_cached(
                             }
                         }
                     } else {
-                        mermaid::render_image_widget_scale(
+                        mermaid::render_image_widget_fit(
                             placement.hash,
                             img_area,
                             frame.buffer_mut(),
+                            false,
                             false,
                         );
                     }
@@ -1465,10 +1466,11 @@ pub(super) fn draw_side_panel_markdown(
                             ) {
                                 let visible_widget_rect = match plan {
                                     FitImageRenderPlan::Full { area } => {
-                                        mermaid::render_image_widget_scale(
+                                        mermaid::render_image_widget_fit(
                                             placement.hash,
                                             area,
                                             frame.buffer_mut(),
+                                            false,
                                             false,
                                         );
                                         area
@@ -1530,10 +1532,11 @@ pub(super) fn draw_side_panel_markdown(
                                 });
                             }
                         } else {
-                            mermaid::render_image_widget_scale(
+                            mermaid::render_image_widget_fit(
                                 placement.hash,
                                 img_area,
                                 frame.buffer_mut(),
+                                false,
                                 false,
                             );
                         }
