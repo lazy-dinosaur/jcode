@@ -173,6 +173,20 @@ fn side_panel_mermaid_fit_fill_allows_wide_short_diagrams_above_200_percent() {
 }
 
 #[test]
+fn side_panel_mermaid_keeps_naturally_fitting_diagrams_in_fit_mode() {
+    // The Rust Mermaid renderer commonly produces compact flowcharts around
+    // this size. In a 120x60 side pane the full image already fits at natural
+    // scale (104x19 cells with an 8x16 font), so auto fit-fill must not crop it
+    // to fill the pane. Cropping made nodes and arrows appear disconnected.
+    let layout =
+        estimate_side_panel_image_layout_with_font(832, 293, 120, 60, 0, false, Some((8, 16)));
+
+    assert_eq!(layout.render_mode, SidePanelImageRenderMode::Fit);
+    assert_eq!(layout.rows, 22);
+    assert!(!layout.render_mode.is_scrollable());
+}
+
+#[test]
 fn pinned_content_image_layout_fits_generated_wide_image_to_width() {
     let layout = pinned_content_image_layout_with_font(
         1800,

@@ -104,6 +104,7 @@ fn estimate_side_panel_image_layout_with_font_inner(
     let (cell_w, cell_h) = font_size.unwrap_or((8, 16));
     let cell_w = cell_w.max(1) as u32;
     let cell_h = cell_h.max(1) as u32;
+    let image_w_cells = super::diagram_pane::div_ceil_u32(width.max(1), cell_w).max(1);
     let image_h_cells = super::diagram_pane::div_ceil_u32(height.max(1), cell_h).max(1);
     let available_width = available_width.max(1) as u32;
     let inner_height = inner_height.max(1);
@@ -126,6 +127,21 @@ fn estimate_side_panel_image_layout_with_font_inner(
         true,
         false,
     );
+    if allow_auto_upscale
+        && image_w_cells <= available_width
+        && image_h_cells <= inner_height as u32
+    {
+        let needed = fit_rect.height.max(SIDE_PANEL_INLINE_IMAGE_MIN_ROWS);
+        return SidePanelImageLayout {
+            rows: clamp_side_panel_image_rows(
+                needed.min(inner_height.max(SIDE_PANEL_INLINE_IMAGE_MIN_ROWS)),
+                inner_height,
+                lines_before_image,
+                has_following_content,
+            ),
+            render_mode: SidePanelImageRenderMode::Fit,
+        };
+    }
     let width_fill_zoom = axis_fill_zoom_percent(available_width, width, cell_w);
     let height_fill_zoom = axis_fill_zoom_percent(inner_height as u32, height, cell_h);
     if !allow_auto_upscale {
