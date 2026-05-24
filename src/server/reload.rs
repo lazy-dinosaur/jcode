@@ -399,7 +399,7 @@ async fn graceful_shutdown_sessions_with_timeout(
             .into_iter()
             .partition::<Vec<_>, _>(|session_id| signals.contains_key(session_id))
     };
-    let watched: std::collections::HashSet<String> = signalable_sessions
+    let mut watched: std::collections::HashSet<String> = signalable_sessions
         .iter()
         .filter(|session_id| Some(session_id.as_str()) != triggering_session)
         .cloned()
@@ -407,15 +407,18 @@ async fn graceful_shutdown_sessions_with_timeout(
 
     // A self-dev reload restarts the shared server process, so connected peer
     // clients will reconnect through the normal reload path. Do not proactively
-    // fire their turn interrupt signals: that makes unrelated sessions surface
-    // as aborted/tumbled before the socket handoff can recover them. Persisted
-    // reload recovery intents above are enough for peers that were running.
+    // fire their turn interrupt signals and do not wait for them to become idle:
+    // in practice peer sessions can remain `running` for a long time, which leaves
+    // the reload marker in Starting and makes clients appear stuck at the reload
+    // handoff screen. Persisted reload recovery intents above are enough for peers
+    // that were running when the server execs.
     if let Some(triggering_session) = triggering_session {
         let peer_count = watched.len();
         signalable_sessions.retain(|session_id| session_id == triggering_session);
+        watched.clear();
         if peer_count > 0 {
             crate::logging::info(&format!(
-                "Server: leaving {} peer session(s) un-interrupted during selfdev reload; waiting for them to become idle before restarting",
+                "Server: leaving {} peer session(s) un-interrupted during selfdev reload; proceeding without waiting for them to become idle",
                 peer_count
             ));
         }

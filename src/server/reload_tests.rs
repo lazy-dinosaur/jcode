@@ -290,7 +290,7 @@ async fn graceful_shutdown_sessions_only_interrupts_triggering_session_when_pres
 }
 
 #[tokio::test]
-async fn graceful_shutdown_sessions_defers_when_peer_remains_running() {
+async fn graceful_shutdown_sessions_with_trigger_does_not_wait_for_running_peer() {
     let sessions = Arc::new(RwLock::new(HashMap::new()));
     let swarm_members = Arc::new(RwLock::new(HashMap::from([
         ("initiator".to_string(), member("initiator", "running")),
@@ -315,8 +315,8 @@ async fn graceful_shutdown_sessions_defers_when_peer_remains_running() {
     .await;
 
     assert!(
-        !ready,
-        "reload should be deferred while peer is still running"
+        ready,
+        "selfdev reload should proceed without waiting for unrelated running peers"
     );
     assert!(initiator_signal.is_set(), "initiator may be signaled");
     assert!(
