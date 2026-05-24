@@ -336,6 +336,75 @@ fn build_contents_replays_matching_tool_call_thought_signatures() {
 }
 
 #[test]
+fn build_contents_mirrors_system_instruction_as_first_user_reminder() {
+    let messages = vec![Message::user("hello")];
+
+    let contents = build_contents_with_system_instruction_mirror(
+        &messages,
+        &HashMap::new(),
+        "You are the Jcode Agent.\nFollow AGENTS.md.",
+    );
+
+    assert_eq!(contents.len(), 2);
+    assert_eq!(contents[0].role, "user");
+    let mirrored = contents[0].parts[0].text.as_deref().unwrap();
+    assert!(mirrored.starts_with("<system-reminder>\n# Jcode Harness Instructions"));
+    assert!(mirrored.contains("You are the Jcode Agent."));
+    assert!(mirrored.contains("Follow AGENTS.md."));
+    assert!(mirrored.ends_with("</system-reminder>"));
+    assert_eq!(contents[1].role, "user");
+    assert_eq!(contents[1].parts[0].text.as_deref(), Some("hello"));
+}
+
+#[test]
+fn build_contents_system_instruction_mirror_preserves_tool_thought_signatures() {
+    let messages = vec![Message {
+        role: Role::Assistant,
+        content: vec![ContentBlock::ToolUse {
+            id: "call_signed".to_string(),
+            name: "read".to_string(),
+            input: json!({"path":"README.md"}),
+        }],
+        timestamp: None,
+        tool_duration_ms: None,
+    }];
+    let thought_signatures =
+        HashMap::from([("call_signed".to_string(), "opaque-signature".to_string())]);
+
+    let contents = build_contents_with_system_instruction_mirror(
+        &messages,
+        &thought_signatures,
+        "system prompt",
+    );
+
+    assert_eq!(contents.len(), 2);
+    assert!(
+        contents[0].parts[0]
+            .text
+            .as_deref()
+            .unwrap()
+            .contains("system prompt")
+    );
+    assert_eq!(contents[1].role, "model");
+    assert_eq!(
+        contents[1].parts[0].thought_signature.as_deref(),
+        Some("opaque-signature")
+    );
+}
+
+#[test]
+fn build_contents_system_instruction_mirror_skips_empty_system() {
+    let messages = vec![Message::user("hello")];
+
+    let mirrored =
+        build_contents_with_system_instruction_mirror(&messages, &HashMap::new(), "  \n  ");
+    let plain = build_contents(&messages);
+
+    assert_eq!(mirrored.len(), plain.len());
+    assert_eq!(mirrored[0].parts[0].text, plain[0].parts[0].text);
+}
+
+#[test]
 fn normalize_gemini_function_name_strips_antigravity_default_api_namespace() {
     assert_eq!(normalize_gemini_function_name("default_api:batch"), "batch");
     assert_eq!(

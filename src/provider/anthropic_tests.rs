@@ -87,14 +87,8 @@ fn test_oauth_schedule_tool_advertised_schema_matches_dispatch() {
 
     let dispatch_schema = ScheduleTool::new().parameters_schema();
     assert_eq!(
-        dispatch_schema["required"],
-        serde_json::json!(["task"]),
-        "ScheduleTool dispatch schema invariant changed; update advertised schema too"
-    );
-    assert_eq!(
-        schedule.input_schema["required"],
-        serde_json::json!(["task"]),
-        "Advertised schedule schema must require `task` to match dispatch (was the M13 bug — required `delaySeconds`)"
+        schedule.input_schema, dispatch_schema,
+        "Advertised schedule schema must match ScheduleTool dispatch schema"
     );
     assert!(
         schedule.input_schema["properties"]["task"].is_object(),

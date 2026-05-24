@@ -383,15 +383,18 @@ impl GeminiProvider {
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone();
+        let contents = build_contents_with_system_instruction_mirror(
+            messages,
+            &tool_thought_signatures,
+            system,
+        );
+
         let request = CodeAssistGenerateRequest {
             model: api_model.clone(),
             project: state.project_id.clone(),
             user_prompt_id: Uuid::new_v4().to_string(),
             request: VertexGenerateContentRequest {
-                contents: build_contents_with_thought_signatures(
-                    messages,
-                    &tool_thought_signatures,
-                ),
+                contents,
                 system_instruction: build_system_instruction(system),
                 generation_config,
                 tools: build_tools(tools),
@@ -1008,6 +1011,37 @@ pub(crate) fn build_contents_with_thought_signatures(
             }
         })
         .collect()
+}
+
+pub(crate) fn build_contents_with_system_instruction_mirror(
+    messages: &[Message],
+    thought_signatures: &HashMap<String, String>,
+    system: &str,
+) -> Vec<GeminiContent> {
+    let mut contents = build_contents_with_thought_signatures(messages, thought_signatures);
+    let trimmed = system.trim();
+    if !trimmed.is_empty() {
+        // Gemini/Antigravity Gemini 3.x Code Assist endpoints sometimes appear
+        // to underweight or ignore `systemInstruction`. Keep the native field
+        // for providers that honor it, but also mirror the harness prompt as the
+        // first provider-visible user reminder so Jcode's identity, tool rules,
+        // AGENTS/.jcode instructions, and project harness modules are always in
+        // the conversational context.
+        contents.insert(
+            0,
+            GeminiContent {
+                role: "user".to_string(),
+                parts: vec![GeminiPart {
+                    text: Some(format!(
+                        "<system-reminder>\n# Jcode Harness Instructions\n\n{}\n</system-reminder>",
+                        trimmed
+                    )),
+                    ..Default::default()
+                }],
+            },
+        );
+    }
+    contents
 }
 
 fn tool_name_from_tool_result(tool_use_id: &str, messages: &[Message]) -> String {

@@ -638,15 +638,18 @@ impl AntigravityProvider {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone();
 
+        let contents = super::gemini::build_contents_with_system_instruction_mirror(
+            messages,
+            &tool_thought_signatures,
+            system,
+        );
+
         let request = CodeAssistGenerateRequest {
             model: api_model.model.clone(),
             project,
             user_prompt_id: Uuid::new_v4().to_string(),
             request: VertexGenerateContentRequest {
-                contents: super::gemini::build_contents_with_thought_signatures(
-                    messages,
-                    &tool_thought_signatures,
-                ),
+                contents,
                 system_instruction: super::gemini::build_system_instruction(system),
                 generation_config,
                 tools: super::gemini::build_tools_with_schema_mode(tools, tool_schema_mode),

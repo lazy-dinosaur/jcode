@@ -7,6 +7,7 @@ use super::{EventStream, NativeToolResultSender, Provider};
 use crate::auth;
 use crate::auth::oauth;
 use crate::message::{ContentBlock, Message, Role, StreamEvent, ToolDefinition};
+use crate::tool::Tool;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -191,25 +192,7 @@ fn oauth_known_tool_schema(name: &str) -> Option<ApiTool> {
             description:
                 "Schedule a task for future execution (requires wake_in_minutes or wake_at)."
                     .to_string(),
-            input_schema: json!({
-                "type": "object",
-                "required": ["task"],
-                "properties": {
-                    "task": {"type": "string", "description": "Task description for the scheduled run."},
-                    "wake_in_minutes": {"type": "integer", "description": "Wake N minutes from now."},
-                    "wake_at": {"type": "string", "description": "RFC3339 timestamp for absolute scheduling."},
-                    "priority": {"type": "string", "enum": ["low", "normal", "high"]},
-                    "relevant_files": {"type": "array", "items": {"type": "string"}},
-                    "background_context": {"type": "string"},
-                    "success_criteria": {"type": "string"},
-                    "target": {
-                        "type": "string",
-                        "enum": ["resume", "spawn", "ambient"],
-                        "description": "Delivery target. Defaults to resuming the originating session."
-                    }
-                },
-                "additionalProperties": false
-            }),
+            input_schema: crate::tool::ambient::ScheduleTool::new().parameters_schema(),
             cache_control: None,
         }),
         "Skill" => Some(ApiTool {
