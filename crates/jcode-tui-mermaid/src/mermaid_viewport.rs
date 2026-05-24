@@ -762,16 +762,18 @@ pub fn render_image_widget_viewport_precise(
         if let Some(img_state) = state.get_mut(hash)
             && img_state.last_viewport == Some(viewport)
         {
+            let same_area = img_state.last_area == Some(image_area);
             if let Ok(mut dbg) = MERMAID_DEBUG.lock() {
                 dbg.stats.viewport_state_reuse_hits += 1;
             }
-            if !render_stateful_image_safe(
-                hash,
-                image_area,
-                buf,
-                &mut img_state.protocol,
-                viewport_resize(),
-            ) {
+            let resize = viewport_resize();
+            if !same_area {
+                // The cropped source did not change, but StatefulProtocol's
+                // encoded terminal payload is still tied to the destination
+                // cell rectangle. Refresh it when the pane moves or resizes.
+                img_state.protocol.resize_encode(&resize, image_area);
+            }
+            if !render_stateful_image_safe(hash, image_area, buf, &mut img_state.protocol, resize) {
                 return 0;
             }
             img_state.last_area = Some(image_area);

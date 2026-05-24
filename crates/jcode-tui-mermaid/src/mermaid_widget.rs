@@ -181,16 +181,21 @@ pub fn render_image_widget(
                 clip_left: false,
             };
 
-            // If crop direction changed, force a re-encode so we don't reuse stale data
-            if img_state.last_crop_top != crop_top {
+            // Track whether this is a geometry-identical frame (for skipped_renders stat).
+            let same_area = img_state.last_area == Some(render_area);
+            // StatefulProtocol encodes image payloads for a concrete terminal
+            // cell area.  The same Mermaid hash can move between inline chat,
+            // side-panel fit, and pinned/zoomed panes while keeping the same
+            // source PNG.  Reusing the protocol without re-encoding after an
+            // area or crop-direction change can leave the terminal image layer
+            // momentarily using the previous geometry, which shows up as a
+            // diagram that is aligned for one frame and then appears detached.
+            if !same_area || img_state.last_crop_top != crop_top {
                 img_state
                     .protocol
                     .resize_encode(&Resize::Crop(Some(crop_opts)), render_area);
                 img_state.last_crop_top = crop_top;
             }
-
-            // Track whether this is a geometry-identical frame (for skipped_renders stat).
-            let same_area = img_state.last_area == Some(render_area);
             let state_key = LastRenderState {
                 area: render_area,
                 crop_top,
@@ -448,8 +453,17 @@ fn render_image_widget_fit_inner(
         if let Some(img_state) = state.get_mut(hash) {
             img_state.resize_mode = target_mode;
             img_state.last_viewport = None;
-            // Track identical-geometry frames for skipped_renders stat.
             let same_area = img_state.last_area == Some(render_area);
+            // StatefulProtocol output is area-specific.  Fit/Scale renders are
+            // reused across redraws for performance, but a resize, side-panel
+            // width change, or switching the same diagram between panes must
+            // refresh the encoded payload before rendering into the new cell
+            // rectangle; otherwise stale geometry can make edge labels/arrows
+            // visually drift or leave remnants from the previous placement.
+            if !same_area {
+                img_state.protocol.resize_encode(&resize, render_area);
+            }
+            // Track identical-geometry frames for skipped_renders stat.
             let state_key = LastRenderState {
                 area: render_area,
                 crop_top: false,
