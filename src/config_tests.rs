@@ -212,6 +212,33 @@ fn config_save_invalidates_global_config_cache() {
 }
 
 #[test]
+fn config_env_fingerprint_tracks_every_apply_env_override_var() {
+    let override_source = include_str!("config/env_overrides.rs");
+    let mut missing = Vec::new();
+
+    for line in override_source.lines() {
+        let Some(start) = line.find("std::env::var(\"") else {
+            continue;
+        };
+        let rest = &line[start + "std::env::var(\"".len()..];
+        let Some(end) = rest.find('"') else {
+            continue;
+        };
+        let key = &rest[..end];
+        if !key.starts_with("JCODE_") {
+            missing.push(key.to_string());
+        }
+    }
+
+    missing.sort();
+    missing.dedup();
+    assert!(
+        missing.is_empty(),
+        "config_env_fingerprint tracks JCODE_* env vars, so Config::apply_env_overrides must not read non-JCODE env vars without adding an explicit fingerprint entry; missing: {missing:?}"
+    );
+}
+
+#[test]
 fn cached_external_auth_trust_observes_manual_revocation() {
     let _guard = crate::storage::lock_test_env();
     let prev_home = std::env::var_os("JCODE_HOME");
