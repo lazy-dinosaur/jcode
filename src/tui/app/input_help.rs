@@ -49,6 +49,9 @@ impl App {
             "git" => {
                 "`/git`\nShow `git status --short --branch` for the current session working directory.\n\n`/git status`\nAlias for `/git`."
             }
+            "commit" => {
+                "`/commit`\nAsk the agent to inspect current uncommitted changes and create interactive, logical commits.\n\nThe agent should group related files or hunks, preserve unrelated work, validate as appropriate, and report the commits created plus anything left uncommitted."
+            }
             "lazygit" | "lg" => {
                 "`/lazygit`\nOpen `lazygit` in an embedded async scratchpad at the session working directory. Jcode continues streaming and accepting interrupts while it is open. Ctrl+G hides the scratchpad; `/scratchpad` shows it again.\n\n`/lg`\nAlias for `/lazygit`."
             }

@@ -1718,6 +1718,38 @@ pub(super) fn handle_git_status_completed(app: &mut App, completed: GitStatusCom
     }
 }
 
+pub(super) fn build_commit_prompt() -> String {
+    "Make interactive, logical commits for the current uncommitted work. Inspect the git state first, including unstaged and staged changes. Group related changes into small coherent commits, staging only the files or hunks that belong together. Preserve unrelated user or agent work, do not discard changes, and do not amend existing commits unless clearly necessary. For each commit, use a concise conventional-style message when possible. Validate as appropriate for the changed files before committing, and report the commits created plus any remaining uncommitted changes.".to_string()
+}
+
+pub(super) fn commit_launch_notice(interrupted: bool) -> String {
+    if interrupted {
+        "👉 Interrupting and starting logical commits...".to_string()
+    } else {
+        "🚀 Starting logical commits...".to_string()
+    }
+}
+
+fn handle_commit_command_local(app: &mut App, trimmed: &str) -> bool {
+    if trimmed != "/commit" {
+        return false;
+    }
+
+    let prompt = build_commit_prompt();
+    if app.is_processing {
+        super::commands_improve::interrupt_and_queue_synthetic_message(
+            app,
+            prompt,
+            "Interrupting for /commit...",
+            commit_launch_notice(true),
+        );
+    } else {
+        app.push_display_message(DisplayMessage::system(commit_launch_notice(false)));
+        super::commands_improve::start_synthetic_user_turn(app, prompt);
+    }
+    true
+}
+
 pub(super) fn handle_session_command(app: &mut App, trimmed: &str) -> bool {
     if handle_subagent_model_command(app, trimmed)
         || handle_subagent_command(app, trimmed)
@@ -1729,6 +1761,7 @@ pub(super) fn handle_session_command(app: &mut App, trimmed: &str) -> bool {
         || handle_swarm_now_command(app, trimmed)
         || handle_transcript_command(app, trimmed)
         || handle_git_command(app, trimmed)
+        || handle_commit_command_local(app, trimmed)
         || handle_lazygit_command(app, trimmed)
         || handle_scratchpad_command(app, trimmed)
         || handle_nvim_command(app, trimmed)
