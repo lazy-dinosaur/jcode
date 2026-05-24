@@ -20,7 +20,10 @@ Do not run a blind merge or a long cherry-pick chain onto `deploy/m9-m27-catchup
 
 1. Upstream intent
 2. Lazydino/custom intent
-3. Decision: `KEEP_OURS`, `PORT_UPSTREAM`, `CHERRY_PICK_OK`, `SKIP_UPSTREAM`, or `NEEDS_REVIEW`
+3. Required behavior and extension points
+4. Decision: `ADOPT_UPSTREAM`, `HYBRID_REFACTOR`, `PORT_UPSTREAM`, `KEEP_OURS`, `CHERRY_PICK_OK`, `SKIP_UPSTREAM`, or `NEEDS_REVIEW`
+
+Protected areas are not automatic `KEEP_OURS` zones. They mean automatic overwrite is forbidden. Choose the best design: adopt upstream if better, port selectively, or build a hybrid/refactored version that preserves Lazydino requirements.
 
 ## Branching strategy
 
@@ -73,8 +76,10 @@ B01-B13 are all high-risk by overlap. Do not apply each 20-commit batch as a sin
 1. Split into 5-10 commit sub-batches by theme.
 2. For each sub-batch, classify every commit.
 3. Cherry-pick only `CHERRY_PICK_OK`.
-4. Manually port `PORT_UPSTREAM` commits.
-5. Record `KEEP_OURS` and `SKIP_UPSTREAM` in a batch note.
+4. Use `ADOPT_UPSTREAM` when upstream is the better base and reapply Lazydino semantics.
+5. Use `HYBRID_REFACTOR` when combining or redesigning both sides is better than choosing one.
+6. Manually port `PORT_UPSTREAM` commits.
+7. Record `KEEP_OURS`, `SKIP_UPSTREAM`, and `NEEDS_REVIEW` in a batch note.
 
 Sub-batch commit message pattern:
 
@@ -82,7 +87,7 @@ Sub-batch commit message pattern:
 Catch up upstream B03 provider picker slice
 
 Upstream range: <sha>..<sha>
-Decisions: CHERRY_PICK_OK=3 PORT_UPSTREAM=2 KEEP_OURS=1 SKIP_UPSTREAM=0
+Decisions: CHERRY_PICK_OK=3 ADOPT_UPSTREAM=1 HYBRID_REFACTOR=1 PORT_UPSTREAM=2 KEEP_OURS=1 SKIP_UPSTREAM=0
 Validation: cargo check -p jcode; cargo test ...
 ```
 
@@ -337,9 +342,11 @@ Before applying a batch:
 During application:
 
 - [ ] Cherry-pick only clean `CHERRY_PICK_OK` commits
+- [ ] Adopt upstream directly only when marked `ADOPT_UPSTREAM`, then restore required custom semantics
+- [ ] Create a hybrid/refactored implementation when marked `HYBRID_REFACTOR`
 - [ ] Manually port `PORT_UPSTREAM` commits
 - [ ] Preserve explicit `KEEP_OURS` behavior
-- [ ] Record `SKIP_UPSTREAM` rationale
+- [ ] Record `SKIP_UPSTREAM` and `NEEDS_REVIEW` rationale
 
 After application:
 

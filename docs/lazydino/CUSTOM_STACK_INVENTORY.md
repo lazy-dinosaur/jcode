@@ -21,9 +21,10 @@ For every upstream batch, use a 3-way intent review:
 
 1. What did upstream change and why?
 2. What did Lazydino/Jcode already change in the same area?
-3. Should we keep ours, port upstream manually, cherry-pick, or skip?
+3. What behavior, UX, and extension points must be preserved?
+4. Should we adopt upstream, port upstream manually, keep ours, hybrid-refactor both, cherry-pick, or skip?
 
-Never blindly overwrite the protected areas below.
+Protected areas are review gates, not mandates to keep the current code. Prefer the best long-term design. If upstream has a cleaner structure, adopt it and reinsert Lazydino requirements. If both sides have useful pieces, create a hybrid/refactored implementation and validate behavior with tests. Never blindly overwrite the protected areas below.
 
 ## Protected custom areas
 
@@ -426,8 +427,10 @@ Additional targeted gates by touched area:
 
 Use these labels in batch notes:
 
-- `KEEP_OURS`: upstream conflicts with custom behavior, keep Lazydino code.
-- `PORT_UPSTREAM`: upstream behavior is desirable but must be adapted manually.
+- `ADOPT_UPSTREAM`: upstream has the better structure or behavior. Replace the Lazydino implementation, then reapply any required custom semantics.
+- `HYBRID_REFACTOR`: neither side should win as-is. Combine both designs or create a third implementation that preserves required behavior with better maintainability.
+- `PORT_UPSTREAM`: upstream behavior is desirable but must be adapted manually into the Lazydino structure.
+- `KEEP_OURS`: upstream conflicts with required custom behavior and does not offer a better structure. Keep Lazydino code.
 - `CHERRY_PICK_OK`: upstream commit applies cleanly and does not touch protected behavior.
 - `SKIP_UPSTREAM`: upstream commit is irrelevant or superseded by Lazydino implementation.
 - `NEEDS_REVIEW`: cannot decide without deeper runtime or product judgment.
@@ -439,8 +442,10 @@ Use these labels in batch notes:
    - Generate commit list and changed file list.
    - Mark protected overlaps.
    - Apply `CHERRY_PICK_OK` commits only.
+   - Use `ADOPT_UPSTREAM` when upstream is clearly better, then restore Lazydino-required semantics.
+   - Use `HYBRID_REFACTOR` when combining or restructuring both implementations is the best option.
    - Manually port `PORT_UPSTREAM` changes.
-   - Keep explicit notes for `KEEP_OURS` and `SKIP_UPSTREAM`.
+   - Keep explicit notes for `KEEP_OURS`, `SKIP_UPSTREAM`, and `NEEDS_REVIEW`.
    - Run gates and commit the batch.
    - Push after each successful batch.
 3. After all batches, selfdev build/reload and run smoke tests.
