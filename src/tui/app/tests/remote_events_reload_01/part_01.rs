@@ -1005,3 +1005,40 @@ fn test_remote_done_auto_pokes_again_when_todos_remain() {
         assert!(app.queued_messages()[0].contains("Continue working, or update the todo tool."));
     });
 }
+
+#[test]
+fn test_auto_poke_pauses_when_assistant_waits_for_user_choice() {
+    with_temp_jcode_home(|| {
+        let mut app = create_test_app();
+
+        crate::todo::save_todos(
+            &app.session.id,
+            &[crate::todo::TodoItem {
+                id: "todo-1".to_string(),
+                content: "Continue working".to_string(),
+                status: "pending".to_string(),
+                priority: "high".to_string(),
+                blocked_by: Vec::new(),
+                assigned_to: None,
+            }],
+        )
+        .expect("save todos");
+
+        app.auto_poke_incomplete_todos = true;
+        app.push_display_message(DisplayMessage::assistant(
+            "현재는 강제 게이트 대기 상태입니다. 답변 형식: A, B\n선택해주세요."
+        ));
+
+        assert!(!app.schedule_auto_poke_followup_if_needed());
+        assert!(!app.auto_poke_incomplete_todos);
+        assert!(!app.pending_queued_dispatch);
+        assert!(app.queued_messages().is_empty());
+        assert_eq!(
+            app.status_notice(),
+            Some("Auto-poke paused: waiting for user choice".to_string())
+        );
+        assert!(app.display_messages().iter().any(|message| {
+            message.role == "system" && message.content.contains("Auto-poke paused")
+        }));
+    });
+}

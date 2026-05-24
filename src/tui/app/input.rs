@@ -19,6 +19,44 @@ use std::time::{Duration, Instant};
 const INPUT_SHELL_MAX_OUTPUT_LEN: usize = 30_000;
 const ESC_INTERRUPT_CONFIRM_WINDOW: Duration = Duration::from_secs(2);
 
+fn assistant_message_waits_for_user_choice(content: &str) -> bool {
+    let lower = content.to_ascii_lowercase();
+    let has_choice_marker = lower.contains("needs-option-gate")
+        || lower.contains("required answer")
+        || lower.contains("answer format")
+        || content.contains("답변 형식")
+        || content.contains("필요한 답변")
+        || content.contains("선택해주세요")
+        || content.contains("사용자 선택")
+        || content.contains("사용자 확인")
+        || content.contains("대기 상태")
+        || content.contains("선택 없이는")
+        || content.contains("선택이 필요")
+        || content.contains("선택을 기다")
+        || content.contains("입력해주세요")
+        || content.contains("답해주세요");
+    let has_option_shape = lower.contains("option")
+        || lower.contains("gate")
+        || lower.contains("a, b")
+        || lower.contains("a/b")
+        || content.contains("A, B")
+        || content.contains("A/B")
+        || content.contains("게이트")
+        || content.contains("추천 답")
+        || content.contains("후보")
+        || content.contains("진행하려면");
+
+    has_choice_marker && has_option_shape
+}
+
+fn last_assistant_message_waits_for_user_choice(app: &App) -> bool {
+    app.display_messages
+        .iter()
+        .rev()
+        .find(|message| message.role == "assistant")
+        .is_some_and(|message| assistant_message_waits_for_user_choice(&message.content))
+}
+
 pub(super) fn clear_escape_interrupt_arm(app: &mut App) {
     app.escape_interrupt_armed_until = None;
 }
@@ -1014,6 +1052,16 @@ impl App {
             || self.pending_turn
             || self.has_queued_followups()
         {
+            return false;
+        }
+
+        if last_assistant_message_waits_for_user_choice(self) {
+            self.auto_poke_incomplete_todos = false;
+            self.push_display_message(DisplayMessage::system(
+                "⏸️ Auto-poke paused because the assistant is waiting for an explicit user choice. Reply to the gate, then run `/poke on` if you want auto-poke to resume."
+                    .to_string(),
+            ));
+            self.set_status_notice("Auto-poke paused: waiting for user choice");
             return false;
         }
 
