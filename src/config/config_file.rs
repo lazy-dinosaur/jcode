@@ -136,52 +136,49 @@ impl Config {
         config
     }
 
-    /// M19: like [`Self::load`] but propagates parse errors instead of falling
-    /// back to default. Used by hot-reload (`force_reload_config` /
-    /// `maybe_reload`) so a transiently invalid TOML file (e.g. mid-edit save)
-    /// does not silently wipe the user's effective config back to defaults —
-    /// callers can keep the previous snapshot instead.
-    ///
-    /// Behaviour:
-    /// - returns `Ok(default + env overrides)` if no config file exists
-    ///   (matches `load()` for that case).
-    /// - returns `Ok(parsed + env overrides)` on successful parse.
-    /// - returns `Err(...)` on read or parse failure.
+    /// Like [`Self::load`] but propagates read/parse errors instead of falling
+    /// back to default. Used by hot-reload and provider profile setup so a
+    /// malformed config is reported to the caller. Missing config files still
+    /// produce defaults, matching `load()`.
     pub fn try_load() -> anyhow::Result<Self> {
-        let path = Self::path();
-        let mut config = match path {
-            Some(ref p) if p.exists() => {
-                let content = std::fs::read_to_string(p)
-                    .map_err(|e| anyhow::anyhow!("failed to read {}: {}", p.display(), e))?;
-                let mut parsed: Self = toml::from_str(&content)
-                    .map_err(|e| anyhow::anyhow!("failed to parse {}: {}", p.display(), e))?;
-                parsed.display.apply_legacy_compat();
-                parsed
-            }
-            _ => Self::default(),
-        };
+        let mut config = Self::load_from_file_strict()?.unwrap_or_default();
         config.apply_env_overrides();
         Ok(config)
     }
 
+    /// Load config from file, with environment variable overrides, preserving
+    /// TOML/read errors for callers that need diagnostics.
+    pub fn load_strict() -> anyhow::Result<Self> {
+        Self::try_load()
+    }
+
     /// Load config from file only (no env overrides)
     fn load_from_file() -> Option<Self> {
-        let path = Self::path()?;
-        if !path.exists() {
-            return None;
-        }
-
-        let content = std::fs::read_to_string(&path).ok()?;
-        match toml::from_str::<Self>(&content) {
-            Ok(mut config) => {
-                config.display.apply_legacy_compat();
-                Some(config)
-            }
+        match Self::load_from_file_strict() {
+            Ok(config) => config,
             Err(e) => {
                 crate::logging::error(&format!("Failed to parse config file: {}", e));
                 None
             }
         }
+    }
+
+    /// Load config from file only (no env overrides), preserving parse/read errors.
+    fn load_from_file_strict() -> anyhow::Result<Option<Self>> {
+        let Some(path) = Self::path() else {
+            return Ok(None);
+        };
+        if !path.exists() {
+            return Ok(None);
+        }
+
+        let content = std::fs::read_to_string(&path)
+            .map_err(|e| anyhow::anyhow!("Failed to read config file {}: {}", path.display(), e))?;
+        let mut config = toml::from_str::<Self>(&content).map_err(|e| {
+            anyhow::anyhow!("Failed to parse config file {}: {}", path.display(), e)
+        })?;
+        config.display.apply_legacy_compat();
+        Ok(Some(config))
     }
 
     /// Build the hook config effective for a working directory.
