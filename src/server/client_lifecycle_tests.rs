@@ -51,6 +51,52 @@ async fn session_control_handle_does_not_wait_for_busy_agent_lock() {
 }
 
 #[tokio::test]
+async fn refreshed_session_control_handle_does_not_wait_for_busy_agent_lock() {
+    let provider: Arc<dyn Provider> = Arc::new(PanicOnForkProvider {
+        forked: Arc::new(AtomicBool::new(false)),
+    });
+    let registry = Registry::new(Arc::clone(&provider)).await;
+    let mut session = crate::session::Session::create_with_id(
+        "session_busy_control_refresh".to_string(),
+        None,
+        None,
+    );
+    session.model = Some("panic-on-fork".to_string());
+    let agent = Arc::new(Mutex::new(Agent::new_with_session(
+        provider, registry, session, None,
+    )));
+
+    let turn_control = TurnControl::new();
+    let stop_signal = turn_control.stop_signal();
+    let soft_interrupt_queue = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let soft_interrupt_queues: SessionInterruptQueues = Arc::new(RwLock::new(HashMap::from([(
+        "session_busy_control_refresh".to_string(),
+        soft_interrupt_queue,
+    )])));
+    let turn_controls: SessionTurnControls = Arc::new(RwLock::new(HashMap::from([(
+        "session_busy_control_refresh".to_string(),
+        turn_control,
+    )])));
+
+    let _busy_agent_lock = agent.lock().await;
+
+    tokio::time::timeout(Duration::from_millis(100), async {
+        let control = refresh_session_control_handle(
+            "session_busy_control_refresh",
+            &agent,
+            &soft_interrupt_queues,
+            &turn_controls,
+        )
+        .await;
+        control.request_cancel();
+    })
+    .await
+    .expect("refreshing a session control handle must not wait for the busy agent mutex");
+
+    assert!(stop_signal.is_set());
+}
+
+#[tokio::test]
 async fn session_control_interrupt_diagnostics_report_signal_state() {
     let queue = Arc::new(std::sync::Mutex::new(Vec::new()));
     let background_signal = InterruptSignal::new();

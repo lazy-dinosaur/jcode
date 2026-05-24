@@ -806,8 +806,43 @@ async fn handle_lightweight_control_request(
 async fn refresh_session_control_handle(
     session_id: &str,
     agent: &Arc<Mutex<Agent>>,
+    soft_interrupt_queues: &SessionInterruptQueues,
+    turn_controls: &SessionTurnControls,
 ) -> SessionControlHandle {
-    let agent_guard = agent.lock().await;
+    let started = Instant::now();
+    let agent_guard = match agent.try_lock() {
+        Ok(agent_guard) => agent_guard,
+        Err(_) => {
+            crate::logging::warn(&format!(
+                "refresh_session_control_handle: waiting for busy agent lock for session {}; cancel/control requests on this connection may be delayed",
+                session_id
+            ));
+            let fallback_soft_interrupt_queue =
+                soft_interrupt_queues.read().await.get(session_id).cloned();
+            let fallback_turn_control = turn_controls.read().await.get(session_id).cloned();
+            if let (Some(soft_interrupt_queue), Some(turn_control)) =
+                (fallback_soft_interrupt_queue, fallback_turn_control)
+            {
+                crate::logging::warn(&format!(
+                    "refresh_session_control_handle: using lock-free cancel-only control handle for busy session {} after {}ms",
+                    session_id,
+                    started.elapsed().as_millis()
+                ));
+                return SessionControlHandle::cancel_only(
+                    session_id,
+                    soft_interrupt_queue,
+                    turn_control,
+                );
+            }
+            let agent_guard = agent.lock().await;
+            crate::logging::warn(&format!(
+                "refresh_session_control_handle: acquired agent lock for session {} after {}ms",
+                session_id,
+                started.elapsed().as_millis()
+            ));
+            agent_guard
+        }
+    };
     SessionControlHandle::new(
         session_id,
         agent_guard.soft_interrupt_queue(),
@@ -1615,7 +1650,13 @@ pub(super) async fn handle_client(
                     &client_event_tx,
                 )
                 .await;
-                session_control = refresh_session_control_handle(&client_session_id, &agent).await;
+                session_control = refresh_session_control_handle(
+                    &client_session_id,
+                    &agent,
+                    &soft_interrupt_queues,
+                    &turn_controls,
+                )
+                .await;
                 if previous_session_id != client_session_id {
                     unregister_bg_completion_receiver(&previous_session_id);
                     bg_completion_rx = match register_bg_completion_receiver(&client_session_id) {
@@ -1812,8 +1853,13 @@ pub(super) async fn handle_client(
                             &swarm_event_tx,
                         )
                         .await?;
-                        session_control =
-                            refresh_session_control_handle(&client_session_id, &agent).await;
+                        session_control = refresh_session_control_handle(
+                            &client_session_id,
+                            &agent,
+                            &soft_interrupt_queues,
+                            &turn_controls,
+                        )
+                        .await;
                         if client_session_id == target_session_id {
                             handle_subscribe(
                                 id,
@@ -2018,7 +2064,13 @@ pub(super) async fn handle_client(
                     &swarm_event_tx,
                 )
                 .await?;
-                session_control = refresh_session_control_handle(&client_session_id, &agent).await;
+                session_control = refresh_session_control_handle(
+                    &client_session_id,
+                    &agent,
+                    &soft_interrupt_queues,
+                    &turn_controls,
+                )
+                .await;
                 if let Some(snapshot) = try_available_models_snapshot(&agent) {
                     last_available_models_snapshot = Some(snapshot);
                 }
