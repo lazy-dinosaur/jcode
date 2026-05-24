@@ -56,7 +56,7 @@ fn test_tool_side_panel_focus_supports_horizontal_pan_keys() {
 }
 
 #[test]
-fn test_tool_side_panel_focus_supports_image_zoom_keys() {
+fn test_tool_side_panel_focus_does_not_zoom_inline_images() {
     let mut app = create_test_app();
     app.diff_mode = crate::config::DiffDisplayMode::Inline;
     app.side_panel = crate::side_panel::SidePanelSnapshot {
@@ -77,7 +77,7 @@ fn test_tool_side_panel_focus_supports_image_zoom_keys() {
 
     app.handle_key(KeyCode::Char('+'), KeyModifiers::empty())
         .unwrap();
-    assert_eq!(app.side_panel_image_zoom_percent, 110);
+    assert_eq!(app.side_panel_image_zoom_percent, 100);
 
     app.handle_key(KeyCode::Char('-'), KeyModifiers::empty())
         .unwrap();
@@ -91,7 +91,7 @@ fn test_tool_side_panel_focus_supports_image_zoom_keys() {
 }
 
 #[test]
-fn test_pinned_image_side_pane_focus_supports_pan_and_zoom_keys() {
+fn test_pinned_image_side_pane_focus_supports_pan_but_not_inline_zoom_keys() {
     let mut app = create_test_app();
     app.diff_mode = crate::config::DiffDisplayMode::Inline;
     app.is_remote = true;
@@ -115,7 +115,7 @@ fn test_pinned_image_side_pane_focus_supports_pan_and_zoom_keys() {
 
     app.handle_key(KeyCode::Char('+'), KeyModifiers::empty())
         .unwrap();
-    assert_eq!(app.side_panel_image_zoom_percent, 110);
+    assert_eq!(app.side_panel_image_zoom_percent, 100);
 
     app.handle_key(KeyCode::Char('-'), KeyModifiers::empty())
         .unwrap();
@@ -164,7 +164,7 @@ fn test_mouse_horizontal_scroll_over_tool_side_panel_pans_without_focus_change()
 }
 
 #[test]
-fn test_ctrl_mouse_scroll_over_tool_side_panel_zooms_images() {
+fn test_ctrl_mouse_scroll_over_tool_side_panel_scrolls_without_inline_zoom() {
     let mut app = create_test_app();
     app.diff_mode = crate::config::DiffDisplayMode::Inline;
     app.side_panel_image_zoom_percent = 100;
@@ -198,9 +198,9 @@ fn test_ctrl_mouse_scroll_over_tool_side_panel_zooms_images() {
 
     assert!(
         !scroll_only,
-        "side-panel image zoom should request an immediate redraw"
+        "side-panel scroll should request an immediate redraw"
     );
-    assert_eq!(app.side_panel_image_zoom_percent, 110);
+    assert_eq!(app.side_panel_image_zoom_percent, 100);
     assert!(!app.diff_pane_focus);
 }
 

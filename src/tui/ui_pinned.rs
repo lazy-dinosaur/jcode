@@ -918,7 +918,11 @@ pub(super) fn draw_pinned_content_cached(
         return;
     }
 
-    let image_zoom_percent = app.side_panel_image_zoom_percent();
+    // Match upstream/original behavior: inline side-panel diagrams are rendered
+    // as static fit/readable images. Interactive pan/zoom belongs to the
+    // dedicated diagram pane; using viewport zoom inline causes terminal image
+    // protocol state to alternate after idle redraws in Kitty.
+    let image_zoom_percent = 100;
     let needs_rebuild = match &cache.rendered_lines {
         Some(rendered) => {
             rendered.inner_width != inner.width
@@ -1302,7 +1306,9 @@ pub(super) fn draw_side_panel_markdown(
         return;
     };
     let has_protocol = mermaid::protocol_type().is_some();
-    let image_zoom_percent = app.side_panel_image_zoom_percent();
+    // Side-panel inline diagrams stay at their planned fit/readable size.
+    // Original jcode keeps interactive +/- zoom in the dedicated diagram pane.
+    let image_zoom_percent = 100;
     let rendered_full_width = render_side_panel_markdown_cached_with_zoom(
         page,
         content_shell_area,
@@ -1347,19 +1353,9 @@ pub(super) fn draw_side_panel_markdown(
         ));
         title_parts.push(Span::styled(" scroll ", Style::default().fg(dim_color())));
         if focused {
-            title_parts.push(Span::styled(
-                " h/l pan +/- zoom ",
-                Style::default().fg(dim_color()),
-            ));
+            title_parts.push(Span::styled(" h/l pan ", Style::default().fg(dim_color())));
         }
     }
-    if image_zoom_percent != 100 {
-        title_parts.push(Span::styled(
-            format!(" zoom {}% ", image_zoom_percent),
-            Style::default().fg(accent_color()),
-        ));
-    }
-
     let Some(content_shell_area) =
         super::draw_right_rail_chrome(frame, area, Line::from(title_parts), border_style)
     else {
