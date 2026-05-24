@@ -11,7 +11,7 @@ pub use jcode_config_types::{
     MermaidRendererConfig, NamedProviderAuth, NamedProviderConfig, NamedProviderModelConfig,
     NamedProviderType, NativeScrollbarConfig, PromptConfig, ProviderConfig, ReloadConfig,
     SafetyConfig, SessionPickerResumeAction, SwarmConfig, SwarmSpawnMode, ToolConfig,
-    UpdateChannel,
+    UpdateChannel, WebSearchConfig, WebSearchEngine,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -281,6 +281,9 @@ pub struct Config {
 
     /// Feature toggles
     pub features: FeatureConfig,
+
+    /// Web search tool configuration
+    pub websearch: WebSearchConfig,
 
     /// Auth trust / consent configuration
     pub auth: AuthConfig,
