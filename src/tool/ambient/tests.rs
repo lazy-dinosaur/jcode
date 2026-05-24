@@ -285,7 +285,12 @@ fn test_schedule_tool_input_deserialization() {
     });
 
     let parsed: ScheduleToolInput = serde_json::from_value(input).unwrap();
-    assert_eq!(parsed.task, "Run the full test suite and report results");
+    assert_eq!(
+        parsed.task.as_deref(),
+        Some("Run the full test suite and report results")
+    );
+    assert!(parsed.action.is_none());
+    assert!(parsed.schedule_id.is_none());
     assert_eq!(parsed.wake_in_minutes, Some(120));
     assert!(parsed.wake_at.is_none());
     assert_eq!(parsed.priority.as_deref(), Some("high"));
@@ -332,11 +337,24 @@ fn test_schedule_tool_input_minimal() {
     });
 
     let parsed: ScheduleToolInput = serde_json::from_value(input).unwrap();
-    assert_eq!(parsed.task, "Check CI");
+    assert_eq!(parsed.task.as_deref(), Some("Check CI"));
     assert_eq!(parsed.wake_in_minutes, Some(30));
     assert!(parsed.relevant_files.is_empty());
     assert!(parsed.background_context.is_none());
     assert!(parsed.success_criteria.is_none());
+}
+
+#[test]
+fn test_schedule_tool_input_cancel_action() {
+    let input = json!({
+        "action": "cancel",
+        "schedule_id": "sched_abc123"
+    });
+
+    let parsed: ScheduleToolInput = serde_json::from_value(input).unwrap();
+    assert_eq!(parsed.action.as_deref(), Some("cancel"));
+    assert_eq!(parsed.schedule_id.as_deref(), Some("sched_abc123"));
+    assert!(parsed.task.is_none());
 }
 
 #[test]
@@ -479,12 +497,12 @@ fn m34_schedule_tool_input_accepts_context_alias() {
     // Canonical `task` field still works.
     let canonical: ScheduleToolInput =
         serde_json::from_value(json!({"task": "do thing"})).expect("canonical task field");
-    assert_eq!(canonical.task, "do thing");
+    assert_eq!(canonical.task.as_deref(), Some("do thing"));
 
     // `context` (sibling of schedule_ambient) is accepted as an alias.
     let aliased: ScheduleToolInput =
         serde_json::from_value(json!({"context": "do other thing"})).expect("context alias");
-    assert_eq!(aliased.task, "do other thing");
+    assert_eq!(aliased.task.as_deref(), Some("do other thing"));
 }
 
 #[test]
