@@ -320,11 +320,17 @@ pub fn current_unix_secs() -> Option<u64> {
 }
 
 fn configured_cache_namespace() -> String {
-    let raw = std::env::var("JCODE_OPENROUTER_CACHE_NAMESPACE")
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| DEFAULT_CACHE_NAMESPACE.to_string());
+    sanitize_cache_namespace(
+        std::env::var("JCODE_OPENROUTER_CACHE_NAMESPACE")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| DEFAULT_CACHE_NAMESPACE.to_string()),
+    )
+}
+
+fn sanitize_cache_namespace(raw: impl AsRef<str>) -> String {
+    let raw = raw.as_ref().trim();
     let sanitized: String = raw
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
@@ -337,12 +343,21 @@ fn configured_cache_namespace() -> String {
 }
 
 fn cache_path() -> PathBuf {
-    let namespace = configured_cache_namespace();
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".jcode")
-        .join("cache")
-        .join(format!("{}_models.json", namespace))
+    cache_path_for_namespace(&configured_cache_namespace())
+}
+
+fn cache_path_for_namespace(namespace: &str) -> PathBuf {
+    let root = std::env::var_os("JCODE_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".jcode")
+        });
+    root.join("cache").join(format!(
+        "{}_models.json",
+        sanitize_cache_namespace(namespace)
+    ))
 }
 
 fn disk_cache_modified_at(path: &PathBuf) -> Option<SystemTime> {
@@ -360,7 +375,14 @@ fn fresh_disk_cache(cache: Option<DiskCache>) -> Option<DiskCache> {
 }
 
 pub fn load_disk_cache_entry() -> Option<DiskCache> {
-    let path = cache_path();
+    load_disk_cache_entry_from_path(cache_path())
+}
+
+pub fn load_disk_cache_entry_for_namespace(namespace: &str) -> Option<DiskCache> {
+    load_disk_cache_entry_from_path(cache_path_for_namespace(namespace))
+}
+
+fn load_disk_cache_entry_from_path(path: PathBuf) -> Option<DiskCache> {
     let modified_at = disk_cache_modified_at(&path);
 
     if let Ok(memo) = DISK_CACHE_MEMO.lock()
