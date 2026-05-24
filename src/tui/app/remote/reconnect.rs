@@ -210,6 +210,7 @@ async fn wait_for_reload_handoff_before_reconnect(
     terminal: &mut DefaultTerminal,
     event_stream: &mut EventStream,
     state: &mut RemoteRunState,
+    session_to_resume: Option<&str>,
 ) -> Result<Option<ConnectOutcome>> {
     if !reload_handoff_active(state) {
         return Ok(None);
@@ -238,6 +239,16 @@ async fn wait_for_reload_handoff_before_reconnect(
                 "Reconnect reload handoff: ready before next connect attempt (state={})",
                 crate::server::reload_state_summary(RELOAD_MARKER_MAX_AGE)
             ));
+            if app.has_newer_binary()
+                && let Some(session_id) = session_to_resume
+            {
+                crate::logging::info(&format!(
+                    "Reconnect reload handoff: client binary is stale; re-execing before server history attach session={}",
+                    session_id
+                ));
+                request_client_binary_reload(app, terminal, session_id)?;
+                return Ok(Some(ConnectOutcome::Quit));
+            }
             Ok(None)
         }
         crate::server::ReloadWaitStatus::Failed(detail) => {
@@ -364,8 +375,14 @@ pub(in crate::tui::app) async fn connect_with_retry(
     state: &mut RemoteRunState,
     session_to_resume: Option<&str>,
 ) -> Result<ConnectOutcome> {
-    if let Some(outcome) =
-        wait_for_reload_handoff_before_reconnect(app, terminal, event_stream, state).await?
+    if let Some(outcome) = wait_for_reload_handoff_before_reconnect(
+        app,
+        terminal,
+        event_stream,
+        state,
+        session_to_resume,
+    )
+    .await?
     {
         return Ok(outcome);
     }
@@ -601,34 +618,14 @@ pub(in crate::tui::app) async fn handle_post_connect<B: ratatui::backend::Backen
         let must_reload_client = state.server_reload_in_progress || app.has_newer_binary();
 
         if must_reload_client {
-            app.push_display_message(DisplayMessage::system(
-                "Server reloaded. Reloading client binary...".to_string(),
-            ));
-            terminal
-                .draw(|frame| crate::tui::ui::draw(frame, app))
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
             let session_id = app
                 .remote_session_id
                 .clone()
                 .unwrap_or_else(|| crate::id::new_id("ses"));
-            if (has_reload_ctx_for_session || !app.reload_info.is_empty())
-                && let Ok(jcode_dir) = crate::storage::jcode_dir()
-            {
-                let marker = jcode_dir.join(format!("client-reload-pending-{}", session_id));
-                let info = if app.reload_info.is_empty() {
-                    "reload".to_string()
-                } else {
-                    app.reload_info.join("\n")
-                };
-                let _ = std::fs::write(&marker, &info);
-                crate::logging::info(&format!(
-                    "Wrote client-reload-pending marker for {} before re-exec",
-                    session_id
-                ));
+            if has_reload_ctx_for_session || !app.reload_info.is_empty() {
+                write_client_reload_pending_marker(app, &session_id);
             }
-            app.save_input_for_reload(&session_id);
-            app.reload_requested = Some(session_id);
-            app.should_quit = true;
+            request_client_binary_reload(app, terminal, &session_id)?;
             return Ok(PostConnectOutcome::Quit);
         }
 
@@ -724,6 +721,40 @@ pub(in crate::tui::app) async fn handle_post_connect<B: ratatui::backend::Backen
     }
 
     Ok(PostConnectOutcome::Ready)
+}
+
+fn write_client_reload_pending_marker(app: &App, session_id: &str) {
+    let Ok(jcode_dir) = crate::storage::jcode_dir() else {
+        return;
+    };
+    let marker = jcode_dir.join(format!("client-reload-pending-{}", session_id));
+    let info = if app.reload_info.is_empty() {
+        "reload".to_string()
+    } else {
+        app.reload_info.join("\n")
+    };
+    let _ = std::fs::write(&marker, &info);
+    crate::logging::info(&format!(
+        "Wrote client-reload-pending marker for {} before re-exec",
+        session_id
+    ));
+}
+
+fn request_client_binary_reload<B: ratatui::backend::Backend>(
+    app: &mut App,
+    terminal: &mut ratatui::Terminal<B>,
+    session_id: &str,
+) -> Result<()> {
+    app.push_display_message(DisplayMessage::system(
+        "Server reloaded. Reloading client binary...".to_string(),
+    ));
+    terminal
+        .draw(|frame| crate::tui::ui::draw(frame, app))
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    app.save_input_for_reload(session_id);
+    app.reload_requested = Some(session_id.to_string());
+    app.should_quit = true;
+    Ok(())
 }
 
 pub(super) fn load_reload_reconnect_hints(
