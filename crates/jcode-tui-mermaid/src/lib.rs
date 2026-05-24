@@ -48,7 +48,7 @@ use mermaid_rs_renderer::{
 use ratatui::prelude::*;
 use ratatui::widgets::StatefulWidget;
 use ratatui_image::{
-    CropOptions, Resize, ResizeEncodeRender, StatefulImage,
+    CropOptions, Resize, StatefulImage,
     picker::{Picker, ProtocolType, cap_parser::Parser},
     protocol::StatefulProtocol,
 };

@@ -183,19 +183,16 @@ pub fn render_image_widget(
 
             // Track whether this is a geometry-identical frame (for skipped_renders stat).
             let same_area = img_state.last_area == Some(render_area);
-            // StatefulProtocol encodes image payloads for a concrete terminal
-            // cell area.  The same Mermaid hash can move between inline chat,
-            // side-panel fit, and pinned/zoomed panes while keeping the same
-            // source PNG.  Reusing the protocol without re-encoding after an
-            // area or crop-direction change can leave the terminal image layer
-            // momentarily using the previous geometry, which shows up as a
-            // diagram that is aligned for one frame and then appears detached.
-            if !same_area || img_state.last_crop_top != crop_top {
-                img_state
-                    .protocol
-                    .resize_encode(&Resize::Crop(Some(crop_opts)), render_area);
-                img_state.last_crop_top = crop_top;
+            // StatefulImage performs resize/encode lazily inside render. Do not
+            // pre-encode here, since pane drag/resizes can change the area every
+            // frame and synchronous resize_encode is expensive. When the image
+            // moves or changes size, cheaply clear the old terminal-graphics
+            // cells first so stale Kitty/Sixel placeholders do not look like the
+            // diagram drifted away from its arrows.
+            if !same_area && let Some(old_area) = img_state.last_area {
+                clear_image_area(old_area, buf);
             }
+            img_state.last_crop_top = crop_top;
             let state_key = LastRenderState {
                 area: render_area,
                 crop_top,
@@ -454,14 +451,13 @@ fn render_image_widget_fit_inner(
             img_state.resize_mode = target_mode;
             img_state.last_viewport = None;
             let same_area = img_state.last_area == Some(render_area);
-            // StatefulProtocol output is area-specific.  Fit/Scale renders are
-            // reused across redraws for performance, but a resize, side-panel
-            // width change, or switching the same diagram between panes must
-            // refresh the encoded payload before rendering into the new cell
-            // rectangle; otherwise stale geometry can make edge labels/arrows
-            // visually drift or leave remnants from the previous placement.
-            if !same_area {
-                img_state.protocol.resize_encode(&resize, render_area);
+            // StatefulImage performs resize/encode lazily inside render. Keep
+            // that original fast path so pane drag/resizes are not forced to do
+            // an extra synchronous encode each frame. Clearing the previous cell
+            // area is enough to prevent stale terminal-graphics remnants when
+            // the same Mermaid hash is reused in a different pane geometry.
+            if !same_area && let Some(old_area) = img_state.last_area {
+                clear_image_area(old_area, buf);
             }
             // Track identical-geometry frames for skipped_renders stat.
             let state_key = LastRenderState {
