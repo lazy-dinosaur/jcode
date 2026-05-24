@@ -1,5 +1,19 @@
 {
-  "total": 0,
-  "tracked_files": {},
+  "total": 26,
+  "tracked_files": {
+    "crates/jcode-compaction-core/src/lib.rs": 1,
+    "crates/jcode-desktop/src/main.rs": 10,
+    "crates/jcode-protocol/src/lib.rs": 1,
+    "crates/jcode-provider-core/src/lib.rs": 1,
+    "src/agent/turn_streaming_mpsc.rs": 1,
+    "src/auth/lifecycle.rs": 1,
+    "src/auth/lifecycle_driver.rs": 2,
+    "src/auth/oauth.rs": 3,
+    "src/background.rs": 1,
+    "src/cli/commands/provider_setup.rs": 2,
+    "src/doctor.rs": 1,
+    "src/provider/fingerprint.rs": 1,
+    "src/session.rs": 1
+  },
   "version": 1
 }

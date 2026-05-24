@@ -1,7 +1,13 @@
 {
   "threshold_loc": 1200,
   "tracked_files": {
-    "crates/jcode-desktop/src/main_tests.rs": 1583,
+    "crates/jcode-desktop/src/main_tests.rs": 3721,
+    "src/agent_tests.rs": 2313,
+    "src/compaction_tests.rs": 1315,
+    "src/config_tests.rs": 1476,
+    "src/provider/openrouter_tests.rs": 1264,
+    "src/session_tests/cases.rs": 1992,
+    "src/tui/app/tests/state_model_poke_03.rs": 2179,
     "tests/e2e/test_support/mod.rs": 1325
   },
   "version": 1
