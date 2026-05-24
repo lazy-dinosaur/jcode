@@ -23,8 +23,19 @@ pub(super) fn viewport_crop_should_scale_to_area(
     crop_w == view_w_px && crop_h == view_h_px
 }
 
-fn kitty_viewport_unique_id(hash: u64) -> u32 {
-    let mixed = (hash as u32) ^ ((hash >> 32) as u32) ^ 0x4B49_5459;
+fn kitty_viewport_unique_id(hash: u64, zoom_percent: u8, font_size: (u16, u16)) -> u32 {
+    // Kitty graphic IDs are global within the terminal. Reusing the same ID
+    // while rapidly changing zoom can let an older async transmission finish
+    // after the latest placeholders were drawn, making arrows/text appear to
+    // separate once input stops. Derive the ID from every source dimension that
+    // changes the transmitted virtual image so late packets cannot overwrite
+    // the currently referenced image.
+    let mixed = (hash as u32)
+        ^ ((hash >> 32) as u32)
+        ^ ((zoom_percent as u32) << 24)
+        ^ ((font_size.0 as u32) << 12)
+        ^ (font_size.1 as u32)
+        ^ 0x4B49_5459;
     mixed.max(1)
 }
 
@@ -125,10 +136,7 @@ pub(super) fn ensure_kitty_viewport_state(
         return None;
     }
 
-    let unique_id = cache
-        .get_mut(hash)
-        .map(|state| state.unique_id)
-        .unwrap_or_else(|| kitty_viewport_unique_id(hash));
+    let unique_id = kitty_viewport_unique_id(hash, zoom_percent, font_size);
 
     cache.insert(
         hash,
@@ -874,5 +882,15 @@ mod tests {
         unsafe {
             std::env::remove_var("JCODE_MERMAID_KITTY_VIRTUAL_VIEWPORT");
         }
+    }
+
+    #[test]
+    fn kitty_virtual_viewport_id_changes_with_zoom_and_font() {
+        let hash = 0x1234_5678_9abc_def0;
+        let base = kitty_viewport_unique_id(hash, 100, (8, 16));
+
+        assert_ne!(base, kitty_viewport_unique_id(hash, 110, (8, 16)));
+        assert_ne!(base, kitty_viewport_unique_id(hash, 100, (9, 16)));
+        assert_ne!(base, kitty_viewport_unique_id(hash, 100, (8, 17)));
     }
 }
