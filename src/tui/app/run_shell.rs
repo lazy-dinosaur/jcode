@@ -1,6 +1,68 @@
 use super::*;
+use crate::tui::TuiState;
+use crossterm::{
+    cursor::{MoveTo, RestorePosition, SavePosition},
+    style::{Color as CrosstermColor, Print, ResetColor, SetForegroundColor},
+};
 use std::io::Write as _;
 use std::process::Command;
+
+pub(super) const STATUS_SPINNER_ONLY_INTERVAL: Duration = Duration::from_millis(80);
+
+pub(super) fn status_spinner_only_symbol(app: &App) -> Option<&'static str> {
+    let policy = crate::perf::tui_policy();
+    if !policy.enable_decorative_animations
+        || !app.is_processing
+        || !app.streaming_text.is_empty()
+        || app.centered_mode()
+        || app.has_pending_mouse_scroll_animation()
+        || app.remote_startup_phase_active()
+    {
+        return None;
+    }
+
+    match app.status {
+        ProcessingStatus::Sending
+        | ProcessingStatus::Connecting(_)
+        | ProcessingStatus::Thinking(_)
+        | ProcessingStatus::Streaming => Some(jcode_tui_style::theme::activity_indicator(
+            app.animation_elapsed(),
+            12.5,
+            true,
+        )),
+        ProcessingStatus::Idle
+        | ProcessingStatus::WaitingForNetwork { .. }
+        | ProcessingStatus::RunningTool(_) => None,
+    }
+}
+
+pub(super) fn draw_status_spinner_only(app: &App, terminal: &mut DefaultTerminal) -> Result<bool> {
+    let Some(symbol) = status_spinner_only_symbol(app) else {
+        return Ok(false);
+    };
+    let Some(area) = crate::tui::ui::last_status_area() else {
+        return Ok(false);
+    };
+    if area.width == 0 || area.height == 0 {
+        return Ok(false);
+    }
+
+    crossterm::queue!(
+        terminal.backend_mut(),
+        SavePosition,
+        MoveTo(area.x, area.y),
+        SetForegroundColor(CrosstermColor::Rgb {
+            r: 129,
+            g: 199,
+            b: 132,
+        }),
+        Print(symbol),
+        ResetColor,
+        RestorePosition,
+    )?;
+    terminal.backend_mut().flush()?;
+    Ok(true)
+}
 
 impl App {
     pub(super) fn run_borrowed_terminal_command(
@@ -57,6 +119,7 @@ impl App {
         let mut event_stream = EventStream::new();
         let mut redraw_period = crate::tui::redraw_interval(&self);
         let mut redraw_interval = interval(redraw_period);
+        let mut status_spinner_interval = interval(STATUS_SPINNER_ONLY_INTERVAL);
         let mut needs_redraw = true;
         let mut handterm_native_scroll =
             super::handterm_native_scroll::HandtermNativeScrollClient::connect_from_env();
@@ -108,6 +171,11 @@ impl App {
             } else {
                 // Wait for input or redraw tick
                 tokio::select! {
+                    _ = status_spinner_interval.tick(), if status_spinner_only_symbol(&self).is_some() => {
+                        if !draw_status_spinner_only(&self, &mut terminal)? {
+                            needs_redraw = true;
+                        }
+                    }
                     _ = redraw_interval.tick() => {
                         needs_redraw |= local::handle_tick(&mut self);
                     }
@@ -153,6 +221,7 @@ impl App {
         let mut event_stream = EventStream::new();
         let mut redraw_period = crate::tui::redraw_interval(&self);
         let mut redraw_interval = interval(redraw_period);
+        let mut status_spinner_interval = interval(STATUS_SPINNER_ONLY_INTERVAL);
         let mut needs_redraw = true;
         let mut handterm_native_scroll =
             super::handterm_native_scroll::HandtermNativeScrollClient::connect_from_env();
@@ -244,6 +313,11 @@ impl App {
                 }
 
                 tokio::select! {
+                    _ = status_spinner_interval.tick(), if status_spinner_only_symbol(&self).is_some() => {
+                        if !draw_status_spinner_only(&self, &mut terminal)? {
+                            needs_redraw = true;
+                        }
+                    }
                     _ = redraw_interval.tick() => {
                         needs_redraw |= remote::handle_tick(&mut self, &mut remote_conn).await;
                     }
@@ -281,8 +355,7 @@ impl App {
                         }
                     }
                     bus_event = bus_receiver_remote.recv() => {
-                        remote::handle_bus_event(&mut self, &mut remote_conn, bus_event).await;
-                        needs_redraw = true;
+                        needs_redraw |= remote::handle_bus_event(&mut self, &mut remote_conn, bus_event).await;
                     }
                 }
             }

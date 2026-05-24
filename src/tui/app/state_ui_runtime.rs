@@ -215,7 +215,11 @@ impl App {
 
     /// Time since last streaming event (for detecting stale connections)
     pub fn time_since_activity(&self) -> Option<Duration> {
-        self.last_stream_activity.map(|t| t.elapsed())
+        Some(
+            self.last_stream_activity
+                .unwrap_or(self.app_started)
+                .elapsed(),
+        )
     }
 
     pub(super) fn split_launch_in_flight(&self) -> bool {

@@ -32,6 +32,7 @@ impl App {
         let eager_stream_redraw = !crate::perf::tui_policy().enable_decorative_animations;
         let mut redraw_period = crate::tui::redraw_interval(self);
         let mut redraw_interval = interval(redraw_period);
+        let mut status_spinner_interval = interval(super::run_shell::STATUS_SPINNER_ONLY_INTERVAL);
 
         'turn_loop: loop {
             let desired_redraw = crate::tui::redraw_interval(self);
@@ -162,6 +163,11 @@ impl App {
                         }
                     }
                     // Redraw periodically
+                    _ = status_spinner_interval.tick(), if super::run_shell::status_spinner_only_symbol(self).is_some() => {
+                        if !super::run_shell::draw_status_spinner_only(self, terminal)? {
+                            terminal.draw(|frame| crate::tui::ui::draw(frame, self))?;
+                        }
+                    }
                     _ = redraw_interval.tick() => {
                         terminal.draw(|frame| crate::tui::ui::draw(frame, self))?;
                     }

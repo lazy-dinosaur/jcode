@@ -1441,6 +1441,7 @@ pub(super) fn handle_visible_copy_shortcut(
         } else {
             crate::config::DiffDisplayMode::FullInline
         };
+        app.record_copy_badge_key_press('e');
         let action = if app.diff_mode.is_full_inline() {
             "Expanded edit diffs"
         } else {

@@ -492,17 +492,42 @@ pub(super) fn draw_messages(
                 let max_content_width = (content_area.width as usize).saturating_sub(reserved);
                 truncate_line_in_place_to_width(line, max_content_width);
 
+                let alt_style = if copy_badge_ui.alt_is_active(copy_badge_now) {
+                    Style::default().fg(queued_color()).bold()
+                } else {
+                    Style::default().fg(dim_color())
+                };
+                let shift_style = if copy_badge_ui.shift_is_active(copy_badge_now) {
+                    Style::default().fg(queued_color()).bold()
+                } else {
+                    Style::default().fg(dim_color())
+                };
+                let key_style = if copy_badge_ui.key_is_active('e', copy_badge_now) {
+                    Style::default().fg(accent_color()).bold()
+                } else {
+                    Style::default().fg(dim_color())
+                };
+                if let Some(success) = copy_badge_ui.feedback_for_key('e', copy_badge_now) {
+                    let feedback_style = if success {
+                        Style::default().fg(ai_color()).bold()
+                    } else {
+                        Style::default().fg(Color::Red).bold()
+                    };
+                    let feedback_text = if success {
+                        " ✓ Updated"
+                    } else {
+                        " ✗ Failed"
+                    };
+                    line.spans.push(Span::styled(feedback_text, feedback_style));
+                    line.spans.push(Span::raw(" "));
+                }
+
                 line.spans.push(Span::raw(" "));
-                line.spans
-                    .push(Span::styled("[Alt]", Style::default().fg(dim_color())));
+                line.spans.push(Span::styled("[Alt]", alt_style));
                 line.spans.push(Span::raw(" "));
-                line.spans
-                    .push(Span::styled("[⇧]", Style::default().fg(dim_color())));
+                line.spans.push(Span::styled("[⇧]", shift_style));
                 line.spans.push(Span::raw(" "));
-                line.spans.push(Span::styled(
-                    "[E]",
-                    Style::default().fg(accent_color()).bold(),
-                ));
+                line.spans.push(Span::styled("[E]", key_style));
                 line.spans
                     .push(Span::styled(badge_text, Style::default().fg(dim_color())));
             }

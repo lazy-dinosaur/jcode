@@ -413,26 +413,28 @@ pub(super) async fn handle_bus_event(
     app: &mut App,
     remote: &mut RemoteConnection,
     bus_event: std::result::Result<BusEvent, tokio::sync::broadcast::error::RecvError>,
-) {
+) -> bool {
     match bus_event {
         Ok(BusEvent::UsageReport(results)) => {
             app.handle_usage_report(results);
+            true
         }
         Ok(BusEvent::ClipboardPasteCompleted(result)) => {
-            app.handle_clipboard_paste_completed(result);
+            app.handle_clipboard_paste_completed(result)
         }
         Ok(BusEvent::ModelRefreshCompleted(result)) => {
             app.handle_model_refresh_completed(result);
+            true
         }
-        Ok(BusEvent::UiActivity(activity)) => {
-            super::local::handle_ui_activity(app, activity);
-        }
+        Ok(BusEvent::UiActivity(activity)) => super::local::handle_ui_activity(app, activity),
         Ok(BusEvent::GitStatusCompleted(result)) => {
             super::commands::handle_git_status_completed(app, result);
+            true
         }
-        Ok(BusEvent::MermaidRenderCompleted) => {}
+        Ok(BusEvent::MermaidRenderCompleted) => true,
         Ok(BusEvent::UsageReportProgress(progress)) => {
             app.handle_usage_report_progress(progress);
+            true
         }
         Ok(BusEvent::LoginCompleted(login)) => {
             let success = login.success && login.provider != "copilot_code";
@@ -442,12 +444,15 @@ pub(super) async fn handle_bus_event(
             if success {
                 remote.notify_auth_changed_detached_event(provider_hint, auth);
             }
+            true
         }
         Ok(BusEvent::UpdateStatus(status)) => {
             app.handle_update_status(status);
+            true
         }
         Ok(BusEvent::SessionUpdateStatus(status)) => {
             app.handle_session_update_status(status);
+            true
         }
         Ok(BusEvent::DictationCompleted {
             dictation_id,
@@ -456,12 +461,13 @@ pub(super) async fn handle_bus_event(
             mode,
         }) => {
             if !app.owns_dictation_event(&dictation_id, session_id.as_deref()) {
-                return;
+                return false;
             }
             match remote.send_transcript(text, mode).await {
                 Ok(()) => app.mark_dictation_delivered(),
                 Err(error) => app.handle_dictation_failure(error.to_string()),
             }
+            true
         }
         Ok(BusEvent::DictationFailed {
             dictation_id,
@@ -469,11 +475,12 @@ pub(super) async fn handle_bus_event(
             message,
         }) => {
             if !app.owns_dictation_event(&dictation_id, session_id.as_deref()) {
-                return;
+                return false;
             }
             app.handle_dictation_failure(message);
+            true
         }
-        _ => {}
+        _ => false,
     }
 }
 
