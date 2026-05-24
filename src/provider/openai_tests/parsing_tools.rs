@@ -583,16 +583,3 @@ fn test_build_responses_input_rewrites_orphan_tool_output_as_user_message() {
 
     assert!(saw_rewritten_message);
 }
-
-#[test]
-fn test_chatgpt_instructions_with_selfdev_appends_selfdev_block() {
-    let system = "# Environment\nDate: 2026-01-01\n\n# Project Instructions (AGENTS.md)\nFollow repo rules\n\n# Private Jcode Harness (.jcode/AGENTS.md)\nFollow private rules\n\n# Self-Development Mode\nUse selfdev tool\n\n# Available Skills\n- test";
-
-    let instructions = OpenAIProvider::chatgpt_instructions_with_selfdev(system);
-    assert!(instructions.contains("# Project Instructions (AGENTS.md)"));
-    assert!(instructions.contains("Follow repo rules"));
-    assert!(instructions.contains("# Private Jcode Harness (.jcode/AGENTS.md)"));
-    assert!(instructions.contains("Follow private rules"));
-    assert!(instructions.contains("# Self-Development Mode"));
-    assert!(instructions.contains("Use selfdev tool"));
-}

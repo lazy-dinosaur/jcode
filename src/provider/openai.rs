@@ -30,7 +30,6 @@ const CHATGPT_API_BASE: &str = "https://chatgpt.com/backend-api/codex";
 const RESPONSES_PATH: &str = "responses";
 const DEFAULT_MODEL: &str = "gpt-5.5";
 const ORIGINATOR: &str = "codex_cli_rs";
-const CHATGPT_INSTRUCTIONS: &str = include_str!("../prompt/system_prompt.md");
 
 /// Maximum number of retries for transient errors
 const MAX_RETRIES: u32 = 3;
@@ -571,22 +570,6 @@ impl OpenAIProvider {
         }
 
         crate::provider::context_limit_for_model_with_provider(model, Some("openai"))
-    }
-
-    fn chatgpt_instructions_with_selfdev(system: &str) -> String {
-        let system = system.trim();
-        if system.is_empty() {
-            return CHATGPT_INSTRUCTIONS.to_string();
-        }
-
-        // ChatGPT/Codex OAuth still uses the Responses `instructions` field as
-        // the real system prompt. Do not replace jcode's composed prompt here:
-        // it contains project AGENTS.md, private .jcode/* instructions, memory,
-        // skills, and self-dev sections. The previous implementation kept only
-        // the baked-in base prompt plus self-dev, which made private instruction
-        // loading appear to pass prompt-builder tests while disappearing from
-        // the actual OpenAI request.
-        system.to_string()
     }
 
     fn should_prefer_websocket(model: &str) -> bool {
