@@ -601,6 +601,11 @@ pub(super) struct OvernightAutoPokeState {
     pub final_wrap_poked: bool,
 }
 
+#[derive(Clone, Debug, Default)]
+struct CommandCandidatesCache {
+    candidates: Vec<(String, &'static str)>,
+}
+
 /// State for an in-progress OAuth/API-key login flow triggered by `/login`.
 /// TUI Application state
 pub struct App {
@@ -617,6 +622,7 @@ pub struct App {
     display_edit_tool_message_count: usize,
     compacted_history_lazy: CompactedHistoryLazyState,
     input: String,
+    command_candidates_cache: RefCell<Option<CommandCandidatesCache>>,
     cursor_pos: usize,
     scroll_offset: usize,
     /// Pauses auto-scroll when user scrolls up during streaming
