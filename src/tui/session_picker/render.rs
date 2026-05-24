@@ -456,9 +456,15 @@ impl SessionPicker {
             return;
         };
 
+        let omitted = if info.omitted_crashed_count > 0 {
+            format!(" · {} older skipped", info.omitted_crashed_count)
+        } else {
+            String::new()
+        };
         let title = format!(
-            " R restore all · {} crashed session(s) detected ",
-            info.session_ids.len()
+            " R restore group · {} crashed session(s) detected{} ",
+            info.session_ids.len(),
+            omitted
         );
         let names = info.display_names.join(", ");
         let body = vec![
@@ -467,7 +473,7 @@ impl SessionPicker {
                 Span::styled(names, Style::default().fg(Color::White)),
             ]),
             Line::from(vec![Span::styled(
-                "Press B to restore all from the last crash window.",
+                "Press B to restore the relevant crash group.",
                 Style::default().fg(rgb(180, 180, 180)),
             )]),
         ];

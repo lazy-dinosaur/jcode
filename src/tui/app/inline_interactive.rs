@@ -1628,8 +1628,8 @@ impl App {
         self.set_status_notice(format!("Switching → {}", name));
     }
 
-    pub(super) fn handle_batch_crash_restore(&mut self) {
-        let recovered = match crate::session::recover_crashed_sessions() {
+    pub(super) fn handle_batch_crash_restore(&mut self, session_ids: &[String]) {
+        let recovered = match crate::session::recover_crashed_sessions_by_ids(session_ids) {
             Ok(ids) => ids,
             Err(e) => {
                 self.push_display_message(DisplayMessage::error(format!(
@@ -1732,8 +1732,8 @@ impl App {
             OverlayAction::Selected(PickerResult::SelectedInCurrentTerminal(ids)) => {
                 self.handle_session_picker_current_terminal_selection(&ids);
             }
-            OverlayAction::Selected(PickerResult::RestoreAllCrashed) => {
-                self.handle_batch_crash_restore();
+            OverlayAction::Selected(PickerResult::RestoreCrashedGroup(session_ids)) => {
+                self.handle_batch_crash_restore(&session_ids);
             }
         }
         Ok(())
