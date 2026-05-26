@@ -6,6 +6,7 @@ use crate::tool::{Tool, ToolContext, ToolOutput};
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{Value, json};
+use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -34,21 +35,62 @@ impl McpTool {
         text.contains("unknowntool") || text.contains("unknown tool")
     }
 
-    fn normalize_input(&self, input: Value) -> Value {
-        normalize_mcp_input(&self.server_name, &self.tool_def.name, input)
+    fn normalize_input(&self, input: Value, ctx: &ToolContext) -> Value {
+        normalize_mcp_input(&self.server_name, &self.tool_def.name, input, ctx)
     }
 }
 
-fn normalize_mcp_input(server_name: &str, tool_name: &str, input: Value) -> Value {
+fn normalize_filesystem_path_value(value: Value, ctx: &ToolContext) -> Value {
+    let Value::String(path) = value else {
+        return value;
+    };
+    if path.trim().is_empty() {
+        return Value::String(path);
+    }
+    let resolved = ctx.resolve_path(Path::new(&path));
+    Value::String(resolved.to_string_lossy().into_owned())
+}
+
+fn normalize_filesystem_paths_in_object(
+    obj: &mut serde_json::Map<String, Value>,
+    ctx: &ToolContext,
+) {
+    if let Some(path) = obj.remove("path") {
+        obj.insert(
+            "path".to_string(),
+            normalize_filesystem_path_value(path, ctx),
+        );
+    }
+
+    if let Some(Value::Array(paths)) = obj.get_mut("paths") {
+        for path in paths {
+            let current = std::mem::take(path);
+            *path = normalize_filesystem_path_value(current, ctx);
+        }
+    }
+}
+
+fn normalize_mcp_input(
+    server_name: &str,
+    tool_name: &str,
+    input: Value,
+    ctx: &ToolContext,
+) -> Value {
     if server_name != "filesystem" {
         return input;
     }
 
     match input {
         Value::String(value) if tool_name == "search_files" => {
-            json!({ "path": ".", "pattern": value })
+            let mut obj = serde_json::Map::new();
+            obj.insert("path".to_string(), Value::String(".".to_string()));
+            obj.insert("pattern".to_string(), Value::String(value));
+            normalize_filesystem_paths_in_object(&mut obj, ctx);
+            Value::Object(obj)
         }
-        Value::String(value) => json!({ "path": value }),
+        Value::String(value) => {
+            json!({ "path": normalize_filesystem_path_value(Value::String(value), ctx) })
+        }
         Value::Object(mut obj) => {
             if !obj.contains_key("path") {
                 for alias in ["file_path", "file", "filename", "dir", "directory"] {
@@ -69,6 +111,7 @@ fn normalize_mcp_input(server_name: &str, tool_name: &str, input: Value) -> Valu
             if tool_name == "search_files" && !obj.contains_key("path") {
                 obj.insert("path".to_string(), Value::String(".".to_string()));
             }
+            normalize_filesystem_paths_in_object(&mut obj, ctx);
             Value::Object(obj)
         }
         other => other,
@@ -90,13 +133,13 @@ impl Tool for McpTool {
         self.tool_def.input_schema.clone()
     }
 
-    async fn execute(&self, input: Value, _ctx: ToolContext) -> Result<ToolOutput> {
+    async fn execute(&self, input: Value, ctx: ToolContext) -> Result<ToolOutput> {
         let input = if input.is_null() {
             Value::Object(serde_json::Map::new())
         } else {
             input
         };
-        let input = self.normalize_input(input);
+        let input = self.normalize_input(input, &ctx);
         let manager = self.manager.read().await;
         let result = match manager
             .call_tool(&self.server_name, &self.tool_def.name, input.clone())
@@ -203,6 +246,21 @@ pub async fn create_mcp_tools(manager: Arc<RwLock<McpManager>>) -> Vec<(String, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use jcode_tool_core::ToolExecutionMode;
+    use std::path::PathBuf;
+
+    fn test_ctx() -> ToolContext {
+        ToolContext {
+            session_id: "session".to_string(),
+            message_id: "message".to_string(),
+            tool_call_id: "tool".to_string(),
+            working_dir: Some(PathBuf::from("/workspace/project")),
+            stdin_request_tx: None,
+            graceful_shutdown_signal: None,
+            turn_cancel_signal: None,
+            execution_mode: ToolExecutionMode::Direct,
+        }
+    }
 
     #[test]
     fn detects_common_unknown_tool_errors() {
@@ -223,25 +281,44 @@ mod tests {
             normalize_mcp_input(
                 "filesystem",
                 "read_text_file",
-                json!({"file_path": "README.md"})
+                json!({"file_path": "README.md"}),
+                &test_ctx(),
             ),
-            json!({"path": "README.md"})
+            json!({"path": "/workspace/project/README.md"})
         );
         assert_eq!(
-            normalize_mcp_input("filesystem", "list_directory", json!("src")),
-            json!({"path": "src"})
+            normalize_mcp_input("filesystem", "list_directory", json!("src"), &test_ctx()),
+            json!({"path": "/workspace/project/src"})
         );
     }
 
     #[test]
     fn normalizes_filesystem_search_aliases() {
         assert_eq!(
-            normalize_mcp_input("filesystem", "search_files", json!("*.tsx")),
-            json!({"path": ".", "pattern": "*.tsx"})
+            normalize_mcp_input("filesystem", "search_files", json!("*.tsx"), &test_ctx()),
+            json!({"path": "/workspace/project/.", "pattern": "*.tsx"})
         );
         assert_eq!(
-            normalize_mcp_input("filesystem", "search_files", json!({"query": "*.md"})),
-            json!({"path": ".", "pattern": "*.md"})
+            normalize_mcp_input(
+                "filesystem",
+                "search_files",
+                json!({"query": "*.md"}),
+                &test_ctx(),
+            ),
+            json!({"path": "/workspace/project/.", "pattern": "*.md"})
+        );
+    }
+
+    #[test]
+    fn normalizes_filesystem_paths_array() {
+        assert_eq!(
+            normalize_mcp_input(
+                "filesystem",
+                "read_multiple_files",
+                json!({"paths": ["README.md", "/tmp/absolute.md"]}),
+                &test_ctx(),
+            ),
+            json!({"paths": ["/workspace/project/README.md", "/tmp/absolute.md"]})
         );
     }
 }

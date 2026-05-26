@@ -326,10 +326,14 @@ fn execute_linked_agentgrep(
                 run_grep(&root, &args).map_err(anyhow::Error::msg)?,
                 exact_file.as_deref(),
             );
-            Ok(
-                ToolOutput::new(render_grep_output(&result, &args, params.max_regions))
-                    .with_title("agentgrep grep"),
-            )
+            let mut output = render_grep_output(&result, &args, params.max_regions);
+            if result.total_matches == 0 && looks_like_accidental_or_regex(&args.query, args.regex)
+            {
+                output.push_str(
+                    "\n\nHint: this grep query contains `|`, but agentgrep treats queries as literal text unless `regex=true`. If you intended OR matching, retry with `regex: true`, or run separate literal searches.",
+                );
+            }
+            Ok(ToolOutput::new(output).with_title("agentgrep grep"))
         }
         "find" => {
             let args = build_find_args(params, ctx)?;
@@ -359,6 +363,16 @@ fn execute_linked_agentgrep(
             params.mode
         )),
     }
+}
+
+fn looks_like_accidental_or_regex(query: &str, regex: bool) -> bool {
+    !regex
+        && query.contains('|')
+        && query
+            .split('|')
+            .filter(|part| !part.trim().is_empty())
+            .count()
+            >= 2
 }
 
 fn resolve_path_arg(ctx: &ToolContext, path: &str) -> PathBuf {

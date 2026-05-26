@@ -46,6 +46,20 @@ fn grep_input(query: &str, max_regions: Option<usize>) -> AgentGrepInput {
 }
 
 #[test]
+fn detects_accidental_literal_or_regex_queries() {
+    assert!(looks_like_accidental_or_regex(
+        "리마인드|remind|notification|알림",
+        false
+    ));
+    assert!(!looks_like_accidental_or_regex(
+        "리마인드|remind|notification|알림",
+        true
+    ));
+    assert!(!looks_like_accidental_or_regex("plain", false));
+    assert!(!looks_like_accidental_or_regex("literal|", false));
+}
+
+#[test]
 fn render_compacts_huge_grep_match_lines() {
     let args = GrepArgs {
         query: "set_status_notice".to_string(),
