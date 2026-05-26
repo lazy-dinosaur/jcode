@@ -2164,6 +2164,29 @@ fn test_cwd_command_updates_session_working_dir_and_preserves_context() {
 }
 
 #[test]
+fn test_info_command_reports_session_working_dir_after_cwd_switch() {
+    with_temp_jcode_home(|| {
+        let original_process_cwd = std::env::current_dir().expect("process cwd");
+        let session_dir = tempfile::tempdir().expect("session dir");
+        let session_dir = session_dir.path().canonicalize().expect("canonical session dir");
+        let mut app = create_test_app();
+        app.session.working_dir = Some(session_dir.display().to_string());
+
+        assert!(super::state_ui::handle_info_command(&mut app, "/info"));
+
+        let msg = app.display_messages().last().expect("missing info message");
+        assert_eq!(msg.role, "system");
+        assert!(
+            msg.content
+                .contains(&format!("**CWD:** {}", session_dir.display())),
+            "info should report session cwd, not process cwd `{}`:\n{}",
+            original_process_cwd.display(),
+            msg.content
+        );
+    });
+}
+
+#[test]
 fn test_cwd_command_rejects_remote_sessions() {
     let mut app = create_test_app();
     app.is_remote = true;

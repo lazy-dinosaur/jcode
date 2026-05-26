@@ -1321,9 +1321,16 @@ pub(super) fn handle_info_command(app: &mut App, trimmed: &str) -> bool {
         let terminal_size = crossterm::terminal::size()
             .map(|(w, h)| format!("{}x{}", w, h))
             .unwrap_or_else(|_| "unknown".to_string());
-        let cwd = std::env::current_dir()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|_| "unknown".to_string());
+        let cwd = app
+            .session
+            .working_dir
+            .clone()
+            .or_else(|| {
+                std::env::current_dir()
+                    .ok()
+                    .map(|p| p.display().to_string())
+            })
+            .unwrap_or_else(|| "unknown".to_string());
 
         let turn_count = app
             .display_messages
@@ -1407,9 +1414,16 @@ pub(super) fn handle_info_command(app: &mut App, trimmed: &str) -> bool {
     }
 
     if trimmed == "/context" {
-        let cwd = std::env::current_dir()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|_| "unknown".to_string());
+        let cwd = app
+            .session
+            .working_dir
+            .clone()
+            .or_else(|| {
+                std::env::current_dir()
+                    .ok()
+                    .map(|p| p.display().to_string())
+            })
+            .unwrap_or_else(|| "unknown".to_string());
         let terminal_size = crossterm::terminal::size()
             .map(|(w, h)| format!("{}x{}", w, h))
             .unwrap_or_else(|_| "unknown".to_string());
