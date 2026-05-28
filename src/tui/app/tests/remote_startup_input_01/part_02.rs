@@ -358,8 +358,8 @@ fn test_model_picker_preserves_recommendation_priority_order() {
     let claude_opus = picker
         .entries
         .iter()
-        .position(|model| model.name == "claude-opus-4-7")
-        .expect("claude-opus-4-7 should be present");
+        .position(|model| model.name == "claude-opus-4-8")
+        .expect("claude-opus-4-8 should be present");
     let spark = picker
         .entries
         .iter()
@@ -373,17 +373,17 @@ fn test_model_picker_preserves_recommendation_priority_order() {
 
     assert!(
         gpt55 < claude_opus,
-        "gpt-5.5 should rank ahead of claude-opus-4-7, got {:?}",
+        "gpt-5.5 should rank ahead of claude-opus-4-8, got {:?}",
         model_names
     );
     assert!(
         claude_opus < gpt54,
-        "claude-opus-4-7 should rank ahead of unrecommended gpt-5.4, got {:?}",
+        "claude-opus-4-8 should rank ahead of unrecommended gpt-5.4, got {:?}",
         model_names
     );
     assert!(
         claude_opus < gpt54_pro,
-        "claude-opus-4-7 should rank ahead of unrecommended gpt-5.4-pro, got {:?}",
+        "claude-opus-4-8 should rank ahead of unrecommended gpt-5.4-pro, got {:?}",
         model_names
     );
     assert!(
@@ -392,7 +392,7 @@ fn test_model_picker_preserves_recommendation_priority_order() {
     );
     assert!(
         picker.entries[claude_opus].recommended,
-        "claude-opus-4-7 should be recommended"
+        "claude-opus-4-8 should be recommended"
     );
     assert!(
         !picker.entries[gpt54].recommended,

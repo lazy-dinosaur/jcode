@@ -776,7 +776,7 @@ fn configure_test_remote_models_with_openai_recommendations(app: &mut App) {
         "gpt-5.4-pro".to_string(),
         "gpt-5.3-codex-spark".to_string(),
         "gpt-5.3-codex".to_string(),
-        "claude-opus-4-7".to_string(),
+        "claude-opus-4-8".to_string(),
     ];
     app.remote_model_options = app
         .remote_available_entries

@@ -15,30 +15,32 @@ pub fn anthropic_api_pricing(model: &str) -> Option<RouteCheapnessEstimate> {
     let base = model.strip_suffix("[1m]").unwrap_or(model);
     let long_context = model.ends_with("[1m]");
     match base {
-        "claude-opus-4-7" | "claude-opus-4-6" => Some(RouteCheapnessEstimate::metered(
-            RouteCostSource::PublicApiPricing,
-            if base == "claude-opus-4-7" {
-                RouteCostConfidence::Medium
-            } else {
-                RouteCostConfidence::Exact
-            },
-            usd_to_micros(if long_context { 10.0 } else { 5.0 }),
-            usd_to_micros(if long_context { 37.5 } else { 25.0 }),
-            Some(usd_to_micros(if long_context { 1.0 } else { 0.5 })),
-            Some(if long_context {
-                if base == "claude-opus-4-7" {
-                    "Estimated from Opus 4.6 long-context API pricing".to_string()
+        "claude-opus-4-8" | "claude-opus-4-7" | "claude-opus-4-6" => {
+            Some(RouteCheapnessEstimate::metered(
+                RouteCostSource::PublicApiPricing,
+                if matches!(base, "claude-opus-4-8" | "claude-opus-4-7") {
+                    RouteCostConfidence::Medium
                 } else {
-                    "Anthropic API long-context pricing".to_string()
-                }
-            } else {
-                if base == "claude-opus-4-7" {
-                    "Estimated from Opus 4.6 API pricing".to_string()
+                    RouteCostConfidence::Exact
+                },
+                usd_to_micros(if long_context { 10.0 } else { 5.0 }),
+                usd_to_micros(if long_context { 37.5 } else { 25.0 }),
+                Some(usd_to_micros(if long_context { 1.0 } else { 0.5 })),
+                Some(if long_context {
+                    if matches!(base, "claude-opus-4-8" | "claude-opus-4-7") {
+                        "Estimated from Opus 4.6/4.7 long-context API pricing".to_string()
+                    } else {
+                        "Anthropic API long-context pricing".to_string()
+                    }
                 } else {
-                    "Anthropic API pricing".to_string()
-                }
-            }),
-        )),
+                    if matches!(base, "claude-opus-4-8" | "claude-opus-4-7") {
+                        "Estimated from Opus 4.6/4.7 API pricing".to_string()
+                    } else {
+                        "Anthropic API pricing".to_string()
+                    }
+                }),
+            ))
+        }
         "claude-sonnet-4-6" => Some(RouteCheapnessEstimate::metered(
             RouteCostSource::PublicApiPricing,
             RouteCostConfidence::Exact,
@@ -264,6 +266,20 @@ mod tests {
         assert_eq!(estimate.input_price_per_mtok_micros, Some(10_000_000));
         assert_eq!(estimate.output_price_per_mtok_micros, Some(37_500_000));
         assert_eq!(estimate.cache_read_price_per_mtok_micros, Some(1_000_000));
+    }
+
+    #[test]
+    fn anthropic_api_pricing_estimates_new_opus_family() {
+        let estimate = anthropic_api_pricing("claude-opus-4-8").expect("priced model");
+        assert_eq!(estimate.billing_kind, RouteBillingKind::Metered);
+        assert_eq!(estimate.source, RouteCostSource::PublicApiPricing);
+        assert_eq!(estimate.confidence, RouteCostConfidence::Medium);
+        assert_eq!(estimate.input_price_per_mtok_micros, Some(5_000_000));
+        assert_eq!(estimate.output_price_per_mtok_micros, Some(25_000_000));
+
+        let long_context = anthropic_api_pricing("claude-opus-4-8[1m]").expect("priced model");
+        assert_eq!(long_context.input_price_per_mtok_micros, Some(10_000_000));
+        assert_eq!(long_context.output_price_per_mtok_micros, Some(37_500_000));
     }
 
     #[test]

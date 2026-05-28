@@ -163,7 +163,7 @@ bing_market = "en-US"
 [provider]
 # Default model (optional, uses provider default if not set)
 # Set via /model picker with Ctrl+D to save as default
-# default_model = "claude-opus-4-7"
+# default_model = "claude-opus-4-8"
 # Default provider (optional: claude|openai|copilot|openrouter)
 # When set, this provider is preferred on startup if available
 # default_provider = "copilot"
@@ -326,7 +326,7 @@ memory_sidecar_enabled = false
 # Gemini routes currently ignore variant.
 #
 # [agents.profiles.planner]
-# model = "claude-opus-4-7"
+# model = "claude-opus-4-8"
 # variant = "max"
 # description = "Planning and architecture agent for ambiguous or multi-step work."
 # when = ["the request needs decomposition", "architecture or sequencing decisions matter"]
@@ -344,7 +344,7 @@ memory_sidecar_enabled = false
 # description = "Codebase research agent for finding files, symbols, and implementation patterns."
 #
 # [agents.profiles.reviewer]
-# model = "claude-opus-4-7"
+# model = "claude-opus-4-8"
 # variant = "max"
 # description = "Review and risk analysis agent."
 #

@@ -655,13 +655,13 @@ impl App {
         }
 
         const RECOMMENDED_MODELS: &[&str] =
-            &["gpt-5.5", "claude-opus-4-7", "deepseek/deepseek-v4-pro"];
+            &["gpt-5.5", "claude-opus-4-8", "deepseek/deepseek-v4-pro"];
 
-        const CLAUDE_OAUTH_ONLY_MODELS: &[&str] = &["claude-opus-4-7"];
+        const CLAUDE_OAUTH_ONLY_MODELS: &[&str] = &["claude-opus-4-8", "claude-opus-4-7"];
 
         const OPENAI_OAUTH_ONLY_MODELS: &[&str] =
             &["gpt-5.5", "gpt-5.4", "gpt-5.4[1m]", "gpt-5.4-pro"];
-        const COPILOT_OAUTH_MODELS: &[&str] = &["claude-opus-4.7", "gpt-5.5", "gpt-5.4"];
+        const COPILOT_OAUTH_MODELS: &[&str] = &["claude-opus-4.8", "gpt-5.5", "gpt-5.4"];
         const OPENROUTER_AUTO_ONLY_MODELS: &[&str] = &["deepseek/deepseek-v4-pro"];
 
         fn recommendation_rank(name: &str, recommended_models: &[&str]) -> usize {

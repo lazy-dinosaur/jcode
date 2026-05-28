@@ -453,7 +453,7 @@ exit 0
 
 const SAMPLE_AGENT_CLAUDE_STRATEGIST_MD: &str = r#"---
 name: claude-strategist
-model: claude-opus-4-7
+model: claude-opus-4-8
 variant: max
 description: Strategy and architecture lead — multi-step planning, user-intent inference, large-context reasoning.
 when:
@@ -588,7 +588,7 @@ mod tests {
         let strategist = by_name
             .get("claude-strategist")
             .expect("claude-strategist sample loaded");
-        assert_eq!(strategist.model.as_deref(), Some("claude-opus-4-7"));
+        assert_eq!(strategist.model.as_deref(), Some("claude-opus-4-8"));
         assert_eq!(strategist.variant.as_deref(), Some("max"));
 
         let coder = by_name.get("gpt-coder").expect("gpt-coder sample loaded");

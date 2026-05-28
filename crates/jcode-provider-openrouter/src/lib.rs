@@ -788,11 +788,16 @@ mod tests {
     #[test]
     fn model_created_timestamp_from_index_handles_provider_aliases() {
         let timestamps = ModelTimestampIndex::from([
+            ("anthropic/claude-opus-4.8".to_string(), 90),
             ("anthropic/claude-opus-4.7".to_string(), 100),
             ("openai/gpt-5.4".to_string(), 200),
             ("moonshotai/kimi-k2.6".to_string(), 300),
         ]);
 
+        assert_eq!(
+            model_created_timestamp_from_index("claude-opus-4-8", &timestamps),
+            Some(90)
+        );
         assert_eq!(
             model_created_timestamp_from_index("claude-opus-4-7", &timestamps),
             Some(100)

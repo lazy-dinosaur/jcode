@@ -1,5 +1,7 @@
 /// Available Claude models used by model lists and provider routing.
 pub const ALL_CLAUDE_MODELS: &[&str] = &[
+    "claude-opus-4-8",
+    "claude-opus-4-8[1m]",
     "claude-opus-4-7",
     "claude-opus-4-7[1m]",
     "claude-opus-4-6",
@@ -90,7 +92,9 @@ fn model_id_for_capability_lookup(model: &str, provider: Option<&str>) -> (Strin
 fn copilot_context_limit_for_model(model: &str) -> usize {
     match model {
         "claude-sonnet-4" | "claude-sonnet-4-6" | "claude-sonnet-4.6" => 128_000,
-        "claude-opus-4-7"
+        "claude-opus-4-8"
+        | "claude-opus-4.8"
+        | "claude-opus-4-7"
         | "claude-opus-4.7"
         | "claude-opus-4-6"
         | "claude-opus-4.6"
@@ -188,7 +192,9 @@ pub fn context_limit_for_model_with_provider_and_cache(
         return Some(272_000);
     }
 
-    if model.starts_with("claude-opus-4-7")
+    if model.starts_with("claude-opus-4-8")
+        || model.starts_with("claude-opus-4.8")
+        || model.starts_with("claude-opus-4-7")
         || model.starts_with("claude-opus-4.7")
         || model.starts_with("claude-opus-4-6")
         || model.starts_with("claude-opus-4.6")
@@ -254,6 +260,14 @@ mod tests {
     #[test]
     fn context_limit_handles_claude_1m_aliases() {
         assert_eq!(
+            context_limit_for_model_with_provider("claude-opus-4-8[1m]", Some("claude")),
+            Some(1_048_576)
+        );
+        assert_eq!(
+            context_limit_for_model_with_provider("claude-opus-4.8", Some("claude")),
+            Some(200_000)
+        );
+        assert_eq!(
             context_limit_for_model_with_provider("claude-opus-4-6[1m]", Some("claude")),
             Some(1_048_576)
         );
@@ -287,6 +301,10 @@ mod tests {
 
     #[test]
     fn normalizes_copilot_model_names() {
+        assert_eq!(
+            normalize_copilot_model_name("claude-opus-4.8"),
+            Some("claude-opus-4-8")
+        );
         assert_eq!(
             normalize_copilot_model_name("claude-opus-4.7"),
             Some("claude-opus-4-7")

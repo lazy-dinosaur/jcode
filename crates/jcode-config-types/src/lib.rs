@@ -460,7 +460,7 @@ pub struct AgentsConfig {
     pub swarm_model: Option<String>,
     /// Default terminal mode for swarm-created agents.
     pub swarm_spawn_mode: SwarmSpawnMode,
-    /// Deprecated simple model routing by subagent type/name, e.g. planner -> claude-opus-4-7.
+    /// Deprecated simple model routing by subagent type/name, e.g. planner -> claude-opus-4-8.
     pub routing: BTreeMap<String, String>,
     /// Deprecated rich routing by subagent type/name. Prefer `profiles` for new configs.
     pub routes: BTreeMap<String, AgentRouteConfig>,
@@ -982,7 +982,7 @@ impl Default for WebSearchConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ProviderConfig {
-    /// Default model to use (e.g. "claude-opus-4-7", "copilot:claude-opus-4.6")
+    /// Default model to use (e.g. "claude-opus-4-8", "copilot:claude-opus-4.8")
     pub default_model: Option<String>,
     /// Default provider to use (claude|openai|copilot|openrouter)
     pub default_provider: Option<String>,
