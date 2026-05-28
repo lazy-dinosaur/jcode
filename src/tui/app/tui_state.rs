@@ -1176,7 +1176,14 @@ impl crate::tui::TuiState for App {
             diagrams,
             workspace_rows,
             workspace_animation_tick,
-            ambient_info: gather_ambient_info(crate::config::config().ambient.enabled),
+            ambient_info: gather_ambient_info(
+                crate::config::config().ambient.enabled,
+                if self.is_remote {
+                    self.remote_session_id.as_deref()
+                } else {
+                    Some(self.session.id.as_str())
+                },
+            ),
             observed_context_tokens: self.current_stream_context_tokens(),
             cache_hit_info,
             compaction_info,

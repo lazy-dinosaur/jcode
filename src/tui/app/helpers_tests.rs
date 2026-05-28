@@ -261,11 +261,28 @@ fn gather_ambient_info_filters_to_session_reminders_when_ambient_disabled() {
             additional_context: None,
         })
         .expect("schedule second reminder");
+    manager
+        .schedule(ScheduleRequest {
+            wake_in_minutes: None,
+            wake_at: Some(first_due),
+            context: "other context".to_string(),
+            priority: Priority::Normal,
+            target: ScheduleTarget::Session {
+                session_id: "session_2".to_string(),
+            },
+            created_by_session: "session_2".to_string(),
+            working_dir: None,
+            task_description: Some("other reminder".to_string()),
+            relevant_files: Vec::new(),
+            git_branch: None,
+            additional_context: None,
+        })
+        .expect("schedule other-session reminder");
 
     clear_ambient_info_cache_for_tests();
     let info = (0..20)
         .find_map(|_| {
-            let info = gather_ambient_info(false);
+            let info = gather_ambient_info(false, Some("session_1"));
             if info.is_none() {
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
@@ -273,7 +290,7 @@ fn gather_ambient_info_filters_to_session_reminders_when_ambient_disabled() {
         })
         .expect("ambient info");
     assert!(info.show_widget);
-    assert_eq!(info.queue_count, 3);
+    assert_eq!(info.queue_count, 4);
     assert_eq!(info.reminder_count, 2);
     assert_eq!(
         info.next_reminder_preview.as_deref(),
@@ -284,4 +301,31 @@ fn gather_ambient_info_filters_to_session_reminders_when_ambient_disabled() {
             .as_deref()
             .is_some_and(|text| text.starts_with("in 4m") || text.starts_with("in 5m"))
     );
+
+    clear_ambient_info_cache_for_tests();
+    let other_info = (0..20)
+        .find_map(|_| {
+            let info = gather_ambient_info(false, Some("session_2"));
+            if info.is_none() {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            info
+        })
+        .expect("other-session ambient info");
+    assert_eq!(other_info.queue_count, 4);
+    assert_eq!(other_info.reminder_count, 1);
+    assert_eq!(
+        other_info.next_reminder_preview.as_deref(),
+        Some("other reminder")
+    );
+
+    clear_ambient_info_cache_for_tests();
+    let missing_info = (0..20).find_map(|_| {
+        let info = gather_ambient_info(false, Some("session_3"));
+        if info.is_none() {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        info
+    });
+    assert!(missing_info.is_none());
 }

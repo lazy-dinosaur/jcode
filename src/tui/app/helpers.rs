@@ -8,7 +8,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
-type AmbientInfoCacheEntry = (std::time::Instant, bool, Option<AmbientWidgetData>, bool);
+type AmbientInfoCacheEntry = (
+    std::time::Instant,
+    bool,
+    Option<String>,
+    Option<AmbientWidgetData>,
+    bool,
+);
 
 static AMBIENT_INFO_CACHE: Mutex<Option<AmbientInfoCacheEntry>> = Mutex::new(None);
 
@@ -982,29 +988,42 @@ fn gather_memory_info_inner() -> Option<MemoryInfo> {
     }
 }
 
-pub(super) fn gather_ambient_info(ambient_enabled: bool) -> Option<AmbientWidgetData> {
+pub(super) fn gather_ambient_info(
+    ambient_enabled: bool,
+    current_session_id: Option<&str>,
+) -> Option<AmbientWidgetData> {
     use std::time::Instant;
     const TTL: Duration = Duration::from_secs(2);
+    let current_session_id = current_session_id.map(str::to_string);
 
     if let Ok(mut guard) = AMBIENT_INFO_CACHE.lock() {
-        if let Some((ts, cached_enabled, cached, refreshing)) = guard.as_mut() {
-            if *cached_enabled == ambient_enabled && ts.elapsed() < TTL {
+        if let Some((ts, cached_enabled, cached_session_id, cached, refreshing)) = guard.as_mut() {
+            let same_scope = *cached_enabled == ambient_enabled
+                && cached_session_id.as_deref() == current_session_id.as_deref();
+            if same_scope && ts.elapsed() < TTL {
                 return cached.clone();
             }
-            if *cached_enabled == ambient_enabled && *refreshing {
+            if same_scope && *refreshing {
                 return cached.clone();
             }
-            let stale = if *cached_enabled == ambient_enabled {
-                cached.clone()
-            } else {
-                None
-            };
+            let stale = if same_scope { cached.clone() } else { None };
             *refreshing = true;
             *cached_enabled = ambient_enabled;
-            std::thread::spawn(move || {
-                let result = gather_ambient_info_inner(ambient_enabled);
-                if let Ok(mut guard) = AMBIENT_INFO_CACHE.lock() {
-                    *guard = Some((Instant::now(), ambient_enabled, result, false));
+            *cached_session_id = current_session_id.clone();
+            std::thread::spawn({
+                let current_session_id = current_session_id.clone();
+                move || {
+                    let result =
+                        gather_ambient_info_inner(ambient_enabled, current_session_id.as_deref());
+                    if let Ok(mut guard) = AMBIENT_INFO_CACHE.lock() {
+                        *guard = Some((
+                            Instant::now(),
+                            ambient_enabled,
+                            current_session_id,
+                            result,
+                            false,
+                        ));
+                    }
                 }
             });
             return stale;
@@ -1013,13 +1032,20 @@ pub(super) fn gather_ambient_info(ambient_enabled: bool) -> Option<AmbientWidget
         *guard = Some((
             Instant::now() - TTL - Duration::from_secs(1),
             ambient_enabled,
+            current_session_id.clone(),
             None,
             true,
         ));
         std::thread::spawn(move || {
-            let result = gather_ambient_info_inner(ambient_enabled);
+            let result = gather_ambient_info_inner(ambient_enabled, current_session_id.as_deref());
             if let Ok(mut guard) = AMBIENT_INFO_CACHE.lock() {
-                *guard = Some((Instant::now(), ambient_enabled, result, false));
+                *guard = Some((
+                    Instant::now(),
+                    ambient_enabled,
+                    current_session_id,
+                    result,
+                    false,
+                ));
             }
         });
     }
@@ -1027,7 +1053,26 @@ pub(super) fn gather_ambient_info(ambient_enabled: bool) -> Option<AmbientWidget
     None
 }
 
-fn gather_ambient_info_inner(ambient_enabled: bool) -> Option<AmbientWidgetData> {
+fn schedule_item_targets_session(
+    item: &crate::ambient::ScheduledItem,
+    current_session_id: Option<&str>,
+) -> bool {
+    let Some(current_session_id) = current_session_id else {
+        return false;
+    };
+    match &item.target {
+        crate::ambient::ScheduleTarget::Session { session_id } => session_id == current_session_id,
+        crate::ambient::ScheduleTarget::Spawn { parent_session_id } => {
+            parent_session_id == current_session_id
+        }
+        crate::ambient::ScheduleTarget::Ambient => false,
+    }
+}
+
+fn gather_ambient_info_inner(
+    ambient_enabled: bool,
+    current_session_id: Option<&str>,
+) -> Option<AmbientWidgetData> {
     let state = crate::ambient::AmbientState::load().unwrap_or_default();
     let manager = crate::ambient::AmbientManager::new().ok();
     let queue_items: Vec<_> = manager
@@ -1038,7 +1083,7 @@ fn gather_ambient_info_inner(ambient_enabled: bool) -> Option<AmbientWidgetData>
     let next_queue_item = queue_items.iter().min_by_key(|item| item.scheduled_for);
     let reminder_items: Vec<_> = queue_items
         .iter()
-        .filter(|item| item.target.is_direct_delivery())
+        .filter(|item| schedule_item_targets_session(item, current_session_id))
         .collect();
     let reminder_count = reminder_items.len();
     let next_reminder_item = reminder_items
@@ -1093,7 +1138,6 @@ fn gather_ambient_info_inner(ambient_enabled: bool) -> Option<AmbientWidgetData>
         budget_percent: None,
     })
 }
-
 #[cfg(test)]
 pub(crate) fn clear_ambient_info_cache_for_tests() {
     if let Ok(mut guard) = AMBIENT_INFO_CACHE.lock() {
