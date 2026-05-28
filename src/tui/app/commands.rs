@@ -2222,7 +2222,7 @@ fn handle_cwd_command(app: &mut App, trimmed: &str) -> bool {
                 Ok(dir) => match set_session_working_dir(app, dir.clone()) {
                     Ok(()) => {
                         app.push_display_message(DisplayMessage::system(format!(
-                            "✓ Session and terminal cwd switched to `{}`. Conversation context was preserved.",
+                            "✓ Session cwd switched to `{}`. Terminal cwd also switched. Conversation context was preserved.",
                             dir.display()
                         )));
                         app.set_status_notice("Cwd switched");

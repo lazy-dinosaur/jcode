@@ -264,7 +264,9 @@ pub(in crate::tui::app) fn handle_server_event(
             app.session.working_dir = working_dir;
             app.session.refresh_initial_session_context_message();
             crate::tui::session_picker::invalidate_session_list_cache();
-            app.push_display_message(DisplayMessage::system(message));
+            if !message.trim().is_empty() {
+                app.push_display_message(DisplayMessage::system(message));
+            }
             app.set_status_notice("Session cwd");
             false
         }

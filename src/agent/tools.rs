@@ -3,6 +3,11 @@ use crate::message::{ContentBlock, ToolCall};
 use crate::tool::ToolOutput;
 use std::path::PathBuf;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ToolSessionCwdSideEffect {
+    pub working_dir: String,
+}
+
 pub(super) const MAX_TOOL_OUTPUT_CHARS_FOR_HISTORY: usize = 512 * 1024;
 
 pub(super) fn cap_tool_output_for_history(tool_name: &str, mut output: ToolOutput) -> ToolOutput {
@@ -109,9 +114,9 @@ impl Agent {
         &mut self,
         tool_name: &str,
         output: &ToolOutput,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Option<ToolSessionCwdSideEffect>> {
         if !matches!(tool_name, "cwd" | "pwd" | "cd") {
-            return Ok(());
+            return Ok(None);
         }
 
         let Some(session_cwd) = output
@@ -119,13 +124,13 @@ impl Agent {
             .as_ref()
             .and_then(|metadata| metadata.get("session_cwd"))
         else {
-            return Ok(());
+            return Ok(None);
         };
         let Some(working_dir) = session_cwd
             .get("working_dir")
             .and_then(|value| value.as_str())
         else {
-            return Ok(());
+            return Ok(None);
         };
 
         self.set_working_dir_and_save(working_dir)?;
@@ -137,7 +142,9 @@ impl Agent {
             let _ = self.refresh_skills_for_working_dir()?;
         }
         crate::tui::session_picker::invalidate_session_list_cache();
-        Ok(())
+        Ok(Some(ToolSessionCwdSideEffect {
+            working_dir: working_dir.to_string(),
+        }))
     }
 
     pub(super) fn inject_nested_instructions_for_tool_calls(

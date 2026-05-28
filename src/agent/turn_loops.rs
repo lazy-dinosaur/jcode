@@ -1242,7 +1242,7 @@ impl Agent {
                             println!("{}", preview.lines().next().unwrap_or("(done)"));
                         }
 
-                        self.apply_tool_output_side_effects(&result.tc.name, &output)?;
+                        let _ = self.apply_tool_output_side_effects(&result.tc.name, &output)?;
                         let blocks = tool_output_to_content_blocks(result.tc.id.clone(), output);
                         self.add_message_with_duration(
                             Role::User,

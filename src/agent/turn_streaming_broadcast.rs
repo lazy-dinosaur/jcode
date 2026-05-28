@@ -838,7 +838,15 @@ impl Agent {
                             error: None,
                         });
 
-                        self.apply_tool_output_side_effects(&result.tc.name, &output)?;
+                        if let Some(side_effect) =
+                            self.apply_tool_output_side_effects(&result.tc.name, &output)?
+                        {
+                            let _ = event_tx.send(ServerEvent::SessionCwd {
+                                id: 0,
+                                working_dir: Some(side_effect.working_dir),
+                                message: String::new(),
+                            });
+                        }
                         let blocks = tool_output_to_content_blocks(result.tc.id.clone(), output);
                         self.add_message_with_duration(
                             Role::User,

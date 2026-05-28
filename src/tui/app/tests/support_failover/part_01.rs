@@ -311,6 +311,7 @@ fn with_temp_jcode_home<T>(f: impl FnOnce() -> T) -> T {
     let _guard = crate::storage::lock_test_env();
     let temp = tempfile::tempdir().expect("tempdir");
     let prev_home = std::env::var_os("JCODE_HOME");
+    let prev_cwd = std::env::current_dir().ok();
     crate::env::set_var("JCODE_HOME", temp.path());
     crate::auth::claude::set_active_account_override(None);
     crate::auth::codex::set_active_account_override(None);
@@ -327,6 +328,9 @@ fn with_temp_jcode_home<T>(f: impl FnOnce() -> T) -> T {
         crate::env::set_var("JCODE_HOME", prev_home);
     } else {
         crate::env::remove_var("JCODE_HOME");
+    }
+    if let Some(prev_cwd) = prev_cwd {
+        let _ = std::env::set_current_dir(prev_cwd);
     }
     result
 }

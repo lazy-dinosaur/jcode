@@ -390,7 +390,7 @@ pub(super) fn handle_run_subagent(
                     output: output_text,
                     error: None,
                 });
-                let persist = {
+                let cwd_side_effect = {
                     let mut agent_guard = agent.lock().await;
                     agent_guard.add_manual_tool_result(
                         tool_call_id,
@@ -399,13 +399,23 @@ pub(super) fn handle_run_subagent(
                         duration_ms,
                     )
                 };
-                if let Err(error) = persist {
-                    let _ = tx.send(ServerEvent::Error {
-                        id,
-                        message: crate::util::format_error_chain(&error),
-                        retry_after_secs: None,
+                let cwd_side_effect = match cwd_side_effect {
+                    Ok(side_effect) => side_effect,
+                    Err(error) => {
+                        let _ = tx.send(ServerEvent::Error {
+                            id,
+                            message: crate::util::format_error_chain(&error),
+                            retry_after_secs: None,
+                        });
+                        return;
+                    }
+                };
+                if let Some(side_effect) = cwd_side_effect {
+                    let _ = tx.send(ServerEvent::SessionCwd {
+                        id: 0,
+                        working_dir: Some(side_effect.working_dir),
+                        message: String::new(),
                     });
-                    return;
                 }
                 let _ = tx.send(ServerEvent::Done { id });
             }
@@ -525,7 +535,7 @@ pub(super) fn handle_run_swarm_now(
                     output: output_text,
                     error: None,
                 });
-                let persist = {
+                let cwd_side_effect = {
                     let mut agent_guard = agent.lock().await;
                     agent_guard.add_manual_tool_result(
                         tool_call_id,
@@ -534,13 +544,23 @@ pub(super) fn handle_run_swarm_now(
                         duration_ms,
                     )
                 };
-                if let Err(error) = persist {
-                    let _ = tx.send(ServerEvent::Error {
-                        id,
-                        message: crate::util::format_error_chain(&error),
-                        retry_after_secs: None,
+                let cwd_side_effect = match cwd_side_effect {
+                    Ok(side_effect) => side_effect,
+                    Err(error) => {
+                        let _ = tx.send(ServerEvent::Error {
+                            id,
+                            message: crate::util::format_error_chain(&error),
+                            retry_after_secs: None,
+                        });
+                        return;
+                    }
+                };
+                if let Some(side_effect) = cwd_side_effect {
+                    let _ = tx.send(ServerEvent::SessionCwd {
+                        id: 0,
+                        working_dir: Some(side_effect.working_dir),
+                        message: String::new(),
                     });
-                    return;
                 }
                 let _ = tx.send(ServerEvent::Done { id });
             }
