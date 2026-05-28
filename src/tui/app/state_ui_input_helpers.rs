@@ -140,6 +140,46 @@ pub(crate) fn registered_command_names() -> Vec<&'static str> {
 }
 
 impl App {
+    pub(super) fn active_reasoning_efforts(&self) -> Vec<&'static str> {
+        if !self.is_remote {
+            return self.provider.available_efforts();
+        }
+
+        let provider = self
+            .remote_provider_name
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+        let model = self
+            .remote_provider_model
+            .as_deref()
+            .or(self.session.model.as_deref())
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+
+        if provider.contains("claude")
+            || provider.contains("anthropic")
+            || model.starts_with("claude-")
+            || model.starts_with("anthropic/")
+        {
+            return Vec::new();
+        }
+
+        if provider.contains("deepseek") || model.contains("deepseek") {
+            return vec!["none", "low", "medium", "high", "max"];
+        }
+
+        if provider.contains("openai") || model.starts_with("gpt-") || model.starts_with("o") {
+            return vec!["none", "low", "medium", "high", "xhigh"];
+        }
+
+        // Remote startup may not have sent provider metadata yet. Preserve the
+        // historical OpenAI-style fallback until a concrete provider/model is known.
+        vec!["none", "low", "medium", "high", "xhigh"]
+    }
+
     /// Find word boundary going backward (for Ctrl+W, Alt+B)
     pub(super) fn find_word_boundary_back(&self) -> usize {
         if self.cursor_pos == 0 {
@@ -712,11 +752,11 @@ impl App {
         }
 
         if prefix.starts_with("/effort ") {
-            let efforts = ["none", "low", "medium", "high", "xhigh"];
+            let efforts = self.active_reasoning_efforts();
             return self.rank_suggestions(
                 input,
                 efforts
-                    .iter()
+                    .into_iter()
                     .map(|e| (format!("/effort {}", e), effort_display_label(e)))
                     .collect(),
             );

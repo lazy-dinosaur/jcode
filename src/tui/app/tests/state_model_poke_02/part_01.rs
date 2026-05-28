@@ -541,6 +541,43 @@ fn test_remote_command_suggestions_include_mcp_reload() {
 }
 
 #[test]
+fn test_effort_suggestions_are_provider_aware_for_remote_models() {
+    let mut app = create_test_app();
+    app.is_remote = true;
+
+    app.remote_provider_name = Some("claude".to_string());
+    app.remote_provider_model = Some("claude-opus-4-8".to_string());
+    let claude_suggestions = app.get_suggestions_for("/effort x");
+    assert!(
+        claude_suggestions.is_empty(),
+        "Claude should not suggest OpenAI xhigh effort: {:?}",
+        claude_suggestions
+    );
+
+    app.remote_provider_name = Some("openai".to_string());
+    app.remote_provider_model = Some("gpt-5.5".to_string());
+    let openai_suggestions = app.get_suggestions_for("/effort x");
+    assert!(
+        openai_suggestions
+            .iter()
+            .any(|(cmd, label)| cmd == "/effort xhigh" && *label == "Max"),
+        "OpenAI should still suggest xhigh/Max effort: {:?}",
+        openai_suggestions
+    );
+
+    app.remote_provider_name = Some("deepseek".to_string());
+    app.remote_provider_model = Some("deepseek/deepseek-v4-pro".to_string());
+    let deepseek_suggestions = app.get_suggestions_for("/effort m");
+    assert!(
+        deepseek_suggestions
+            .iter()
+            .any(|(cmd, label)| cmd == "/effort max" && *label == "Max"),
+        "DeepSeek should suggest max effort rather than xhigh: {:?}",
+        deepseek_suggestions
+    );
+}
+
+#[test]
 fn test_auth_doctor_command_suggestion_is_not_shadowed_by_provider_suggestions() {
     let app = create_test_app();
     let suggestions = app.get_suggestions_for("/auth d");

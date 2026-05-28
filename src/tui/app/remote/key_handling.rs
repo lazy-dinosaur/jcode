@@ -991,7 +991,13 @@ async fn handle_remote_key_internal(
                     let label = current
                         .map(app_mod::effort_display_label)
                         .unwrap_or("default");
-                    let efforts = ["none", "low", "medium", "high", "xhigh"];
+                    let efforts = app.active_reasoning_efforts();
+                    if efforts.is_empty() {
+                        app.push_display_message(DisplayMessage::system(
+                            "Reasoning effort not available for this provider. For Claude Max, use a `[1m]` model such as `/model claude-opus-4-8[1m]`.".to_string(),
+                        ));
+                        return Ok(());
+                    }
                     let list: Vec<String> = efforts
                         .iter()
                         .map(|e| {
@@ -1016,15 +1022,25 @@ async fn handle_remote_key_internal(
                         app.push_display_message(DisplayMessage::error("Usage: /effort <level>"));
                         return Ok(());
                     }
-                    const EFFORTS: [&str; 5] = ["none", "low", "medium", "high", "xhigh"];
-                    if EFFORTS.contains(&level) {
-                        app.remote_reasoning_effort = Some(level.to_string());
-                        app.invalidate_model_picker_cache();
-                        app.set_status_notice(format!(
-                            "Effort: {} (will apply to next request)",
-                            app_mod::effort_display_label(level)
-                        ));
+                    let efforts = app.active_reasoning_efforts();
+                    if !efforts.contains(&level) {
+                        let available = if efforts.is_empty() {
+                            "not available for this provider".to_string()
+                        } else {
+                            efforts.join("|")
+                        };
+                        app.push_display_message(DisplayMessage::error(format!(
+                            "Failed to set effort: `{}` is {}. For Claude Max, use `/model claude-opus-4-8[1m]`.",
+                            level, available
+                        )));
+                        return Ok(());
                     }
+                    app.remote_reasoning_effort = Some(level.to_string());
+                    app.invalidate_model_picker_cache();
+                    app.set_status_notice(format!(
+                        "Effort: {} (will apply to next request)",
+                        app_mod::effort_display_label(level)
+                    ));
                     remote.set_reasoning_effort(level).await?;
                     return Ok(());
                 }

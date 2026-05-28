@@ -1109,10 +1109,10 @@ pub(super) fn handle_model_command(app: &mut App, trimmed: &str) -> bool {
 
     if trimmed == "/effort" {
         let current = app.provider.reasoning_effort();
-        let efforts = app.provider.available_efforts();
+        let efforts = app.active_reasoning_efforts();
         if efforts.is_empty() {
             app.push_display_message(DisplayMessage::system(
-                "Reasoning effort not available for this provider.".to_string(),
+                "Reasoning effort not available for this provider. For Claude Max, use a `[1m]` model such as `/model claude-opus-4-8[1m]`.".to_string(),
             ));
         } else {
             let current_label = current
@@ -1140,6 +1140,19 @@ pub(super) fn handle_model_command(app: &mut App, trimmed: &str) -> bool {
 
     if let Some(level) = trimmed.strip_prefix("/effort ") {
         let level = level.trim();
+        let efforts = app.active_reasoning_efforts();
+        if !efforts.contains(&level) {
+            let available = if efforts.is_empty() {
+                "not available for this provider".to_string()
+            } else {
+                efforts.join("|")
+            };
+            app.push_display_message(DisplayMessage::error(format!(
+                "Failed to set effort: `{}` is {}. For Claude Max, use `/model claude-opus-4-8[1m]`.",
+                level, available
+            )));
+            return true;
+        }
         match app.provider.set_reasoning_effort(level) {
             Ok(()) => {
                 let new_effort = app.provider.reasoning_effort();
