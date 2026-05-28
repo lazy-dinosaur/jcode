@@ -934,7 +934,13 @@ pub(super) async fn process_remote_followups(app: &mut App, remote: &mut RemoteC
 }
 
 async fn detect_and_cancel_stall(app: &mut App, remote: &mut RemoteConnection) {
-    const STALL_TIMEOUT: Duration = Duration::from_secs(2 * 60);
+    // Provider streams can legitimately go quiet for several minutes while the
+    // model is reasoning, especially on large OpenAI Responses/WebSocket turns.
+    // A 2 minute client-side watchdog produced false cancellations even though
+    // the server/provider request was still healthy. Keep the guard as a last
+    // resort for genuinely orphaned UI state, but leave normal long generations
+    // alone.
+    const STALL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
     let is_running_tool = matches!(app.status, ProcessingStatus::RunningTool(_));
     if app.foreground_tool_handoff_started.is_some() {
         app.last_stream_activity = Some(Instant::now());
@@ -994,11 +1000,11 @@ async fn detect_and_cancel_stall(app: &mut App, remote: &mut RemoteConnection) {
                 });
             }
             if !app.schedule_pending_remote_retry(
-                "⚠ Stream stalled (no response for 2 minutes). Processing cancelled.",
+                "⚠ Stream stalled (no response for 10 minutes). Processing cancelled.",
             ) {
                 app.clear_pending_remote_retry();
                 app.push_display_message(DisplayMessage::system(
-                    "⚠ Stream stalled (no response for 2 minutes). Processing cancelled. You can resend your message.".to_string(),
+                    "⚠ Stream stalled (no response for 10 minutes). Processing cancelled. You can resend your message.".to_string(),
                 ));
             }
         }
