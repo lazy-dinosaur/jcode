@@ -191,6 +191,41 @@ fn test_reject_duplicate_subcalls_allows_same_tool_different_params() {
 }
 
 #[test]
+fn test_reject_stateful_parallel_subcalls_blocks_cwd_set() {
+    let subcalls = vec![
+        (
+            0,
+            "cwd".to_string(),
+            json!({"action": "set", "path": "/tmp"}),
+        ),
+        (1, "bash".to_string(), json!({"command": "pwd"})),
+    ];
+
+    let err = reject_stateful_parallel_subcalls(&subcalls).unwrap_err();
+    let message = err.to_string();
+    assert!(message.contains("Cannot run cwd action='set' inside batch"));
+    assert!(message.contains("item 1"));
+}
+
+#[test]
+fn test_reject_stateful_parallel_subcalls_blocks_cwd_path_default_set() {
+    let subcalls = vec![(0, "cwd".to_string(), json!({"path": "/tmp"}))];
+
+    let err = reject_stateful_parallel_subcalls(&subcalls).unwrap_err();
+    assert!(err.to_string().contains("action='set'"));
+}
+
+#[test]
+fn test_reject_stateful_parallel_subcalls_allows_cwd_show() {
+    let subcalls = vec![
+        (0, "cwd".to_string(), json!({"action": "show"})),
+        (1, "bash".to_string(), json!({"command": "pwd"})),
+    ];
+
+    reject_stateful_parallel_subcalls(&subcalls).unwrap();
+}
+
+#[test]
 fn test_duplicate_subcall_key_canonicalizes_object_order() {
     let a = duplicate_subcall_key("bash", &json!({"command": "cargo check", "timeout": 1}));
     let b = duplicate_subcall_key("bash", &json!({"timeout": 1, "command": "cargo check"}));

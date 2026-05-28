@@ -73,6 +73,37 @@ fn ordered_batch_subcalls(
     ordered
 }
 
+fn cwd_mutation_action(parameters: &Value) -> Option<&str> {
+    let has_path = parameters.get("path").is_some_and(|path| !path.is_null());
+    let action = parameters
+        .get("action")
+        .and_then(Value::as_str)
+        .unwrap_or(if has_path { "set" } else { "show" });
+
+    match action {
+        "set" | "cd" => Some(action),
+        _ if has_path => Some("set"),
+        _ => None,
+    }
+}
+
+fn reject_stateful_parallel_subcalls(subcalls: &[(usize, String, Value)]) -> Result<()> {
+    for (i, tool_name, parameters) in subcalls {
+        if Registry::resolve_tool_name(tool_name) != "cwd" {
+            continue;
+        }
+
+        if let Some(action) = cwd_mutation_action(parameters) {
+            return Err(anyhow::anyhow!(
+                "Cannot run cwd action='{}' inside batch because batch subcalls run in parallel and session cwd changes must be applied in order. Run the cwd/cd tool as a separate tool call first, then run dependent tools. (stateful batch tool call at item {})",
+                action,
+                i + 1
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub struct BatchTool {
     registry: Registry,
 }
@@ -251,7 +282,7 @@ impl Tool for BatchTool {
     }
 
     fn description(&self) -> &str {
-        "Run tools in parallel."
+        "Run tools in parallel. Do not include stateful cwd/cd set operations; run cwd/cd as a separate tool call before batching dependent tools."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -292,6 +323,7 @@ impl Tool for BatchTool {
                 (i, tool_name, parameters)
             })
             .collect();
+        reject_stateful_parallel_subcalls(&subcalls)?;
         reject_duplicate_subcalls(&subcalls)?;
 
         let mut running: HashMap<usize, ToolCall> = subcalls
