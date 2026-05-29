@@ -140,11 +140,13 @@ pub(crate) fn registered_command_names() -> Vec<&'static str> {
 }
 
 impl App {
+    const CLAUDE_EFFORTS: [&'static str; 4] = ["low", "medium", "high", "max"];
+
     pub(super) fn is_claude_effort_max_level(level: &str) -> bool {
         matches!(level.trim().to_ascii_lowercase().as_str(), "xhigh" | "max")
     }
 
-    pub(super) fn active_claude_max_model(&self) -> Option<String> {
+    fn active_claude_base_model(&self) -> Option<String> {
         let provider = if self.is_remote {
             self.remote_provider_name.as_deref().unwrap_or_default()
         } else {
@@ -172,22 +174,36 @@ impl App {
             return None;
         }
 
-        if normalized.ends_with("[1m]") {
-            Some(normalized)
+        let base = normalized.strip_suffix("[1m]").unwrap_or(&normalized);
+        if base.starts_with("claude-opus-4-")
+            || base.starts_with("claude-sonnet-4-6")
+            || base.starts_with("claude-sonnet-4-5")
+        {
+            Some(base.to_string())
         } else if normalized.starts_with("claude-opus-4-")
             || normalized.starts_with("claude-sonnet-4-6")
             || normalized.starts_with("claude-sonnet-4-5")
         {
-            Some(format!("{}[1m]", normalized))
+            Some(normalized)
         } else {
             None
         }
     }
 
+    pub(super) fn active_claude_model_for_effort(&self, level: &str) -> Option<String> {
+        let level = level.trim().to_ascii_lowercase();
+        let base = self.active_claude_base_model()?;
+        match level.as_str() {
+            "low" | "medium" | "high" | "none" => Some(base),
+            "max" | "xhigh" => Some(format!("{}[1m]", base)),
+            _ => None,
+        }
+    }
+
     pub(super) fn active_reasoning_efforts(&self) -> Vec<&'static str> {
         if !self.is_remote {
-            if self.active_claude_max_model().is_some() {
-                return vec!["xhigh"];
+            if self.active_claude_base_model().is_some() {
+                return Self::CLAUDE_EFFORTS.to_vec();
             }
             return self.provider.available_efforts();
         }
@@ -211,8 +227,8 @@ impl App {
             || model.starts_with("claude-")
             || model.starts_with("anthropic/")
         {
-            return if self.active_claude_max_model().is_some() {
-                vec!["xhigh"]
+            return if self.active_claude_base_model().is_some() {
+                Self::CLAUDE_EFFORTS.to_vec()
             } else {
                 Vec::new()
             };

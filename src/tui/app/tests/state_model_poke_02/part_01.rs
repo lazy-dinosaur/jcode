@@ -547,16 +547,34 @@ fn test_effort_suggestions_are_provider_aware_for_remote_models() {
 
     app.remote_provider_name = Some("claude".to_string());
     app.remote_provider_model = Some("claude-opus-4-8".to_string());
-    let claude_suggestions = app.get_suggestions_for("/effort x");
+    let claude_suggestions = app.get_suggestions_for("/effort ");
+    for (cmd, label) in [
+        ("/effort low", "Low"),
+        ("/effort medium", "Medium"),
+        ("/effort high", "High"),
+        ("/effort max", "Max"),
+    ] {
+        assert!(
+            claude_suggestions
+                .iter()
+                .any(|(suggested, suggested_label)| suggested == cmd && *suggested_label == label),
+            "Claude should suggest {cmd}/{label}: {:?}",
+            claude_suggestions
+        );
+    }
     assert!(
-        claude_suggestions
+        !claude_suggestions
             .iter()
-            .any(|(cmd, label)| cmd == "/effort xhigh" && *label == "Max"),
-        "Claude should suggest xhigh/Max and map it to [1m]: {:?}",
+            .any(|(cmd, _)| cmd == "/effort xhigh"),
+        "Claude completion should use max, not OpenAI xhigh: {:?}",
         claude_suggestions
     );
     assert_eq!(
-        app.active_claude_max_model().as_deref(),
+        app.active_claude_model_for_effort("high").as_deref(),
+        Some("claude-opus-4-8")
+    );
+    assert_eq!(
+        app.active_claude_model_for_effort("max").as_deref(),
         Some("claude-opus-4-8[1m]")
     );
     assert!(super::App::is_claude_effort_max_level("xhigh"));
