@@ -2155,6 +2155,7 @@ impl App {
             return;
         }
         self.streaming_text.push_str(text);
+        strip_trailing_count_wrapper_noise_in_place(&mut self.streaming_text);
         self.refresh_split_view_if_needed();
     }
 
@@ -2162,6 +2163,8 @@ impl App {
         self.streaming_text = if is_count_wrapper_noise(&text) {
             String::new()
         } else {
+            let mut text = text;
+            strip_trailing_count_wrapper_noise_in_place(&mut text);
             text
         };
         self.refresh_split_view_if_needed();
@@ -2184,6 +2187,8 @@ impl App {
         if is_count_wrapper_noise(&content) {
             String::new()
         } else {
+            let mut content = content;
+            strip_trailing_count_wrapper_noise_in_place(&mut content);
             content
         }
     }
@@ -2677,4 +2682,28 @@ pub(super) fn is_count_wrapper_noise(text: &str) -> bool {
             .map(str::trim)
             .filter(|line| !line.is_empty())
             .all(|line| line.eq_ignore_ascii_case("count"))
+}
+
+pub(super) fn strip_trailing_count_wrapper_noise_in_place(text: &mut String) {
+    let mut end = text.len();
+    let mut cursor = text.len();
+
+    while cursor > 0 {
+        let line_start = text[..cursor].rfind('\n').map_or(0, |idx| idx + 1);
+        let line = &text[line_start..cursor];
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("count") {
+            end = line_start;
+            cursor = line_start.saturating_sub(1);
+            continue;
+        }
+        break;
+    }
+
+    if end < text.len() {
+        text.truncate(end);
+        while text.ends_with('\n') || text.ends_with(' ') || text.ends_with('\t') {
+            text.pop();
+        }
+    }
 }

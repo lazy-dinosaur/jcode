@@ -44,6 +44,25 @@ fn is_count_wrapper_noise(text: &str) -> bool {
             .all(|line| line.eq_ignore_ascii_case("count"))
 }
 
+fn strip_trailing_count_wrapper_noise(text: &str) -> &str {
+    let mut end = text.len();
+    let mut cursor = text.len();
+
+    while cursor > 0 {
+        let line_start = text[..cursor].rfind('\n').map_or(0, |idx| idx + 1);
+        let line = &text[line_start..cursor];
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("count") {
+            end = line_start;
+            cursor = line_start.saturating_sub(1);
+            continue;
+        }
+        break;
+    }
+
+    text[..end].trim_end()
+}
+
 fn compacted_history_render_window(
     messages: &[super::StoredMessage],
     compacted_count: usize,
@@ -276,7 +295,8 @@ pub fn render_messages_and_images_with_compacted_history(
         for block in &msg.content {
             match block {
                 ContentBlock::Text { text: t, .. } => {
-                    if is_count_wrapper_noise(t) {
+                    let t = strip_trailing_count_wrapper_noise(t);
+                    if t.is_empty() || is_count_wrapper_noise(t) {
                         continue;
                     }
                     text.push_str(t);
@@ -362,7 +382,7 @@ pub fn render_messages_and_images_with_compacted_history(
 
 #[cfg(test)]
 mod tests {
-    use super::is_count_wrapper_noise;
+    use super::{is_count_wrapper_noise, strip_trailing_count_wrapper_noise};
 
     #[test]
     fn count_wrapper_noise_detects_repeated_count_lines() {
@@ -377,5 +397,25 @@ mod tests {
         assert!(!is_count_wrapper_noise("count files"));
         assert!(!is_count_wrapper_noise("I'll count it."));
         assert!(!is_count_wrapper_noise("count\nthen inspect"));
+    }
+
+    #[test]
+    fn strip_trailing_count_wrapper_noise_removes_suffix_only() {
+        assert_eq!(
+            strip_trailing_count_wrapper_noise("registry 등록 완료\n\ncount\n\ncount\n"),
+            "registry 등록 완료"
+        );
+        assert_eq!(
+            strip_trailing_count_wrapper_noise("설명 문장\n\ncount"),
+            "설명 문장"
+        );
+        assert_eq!(
+            strip_trailing_count_wrapper_noise("count files\n\ncount"),
+            "count files"
+        );
+        assert_eq!(
+            strip_trailing_count_wrapper_noise("count\nthen inspect"),
+            "count\nthen inspect"
+        );
     }
 }
