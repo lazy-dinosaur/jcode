@@ -461,6 +461,30 @@ fn render_assistant_message_strips_count_edges_but_preserves_body() {
 }
 
 #[test]
+fn render_assistant_message_strips_count_lines_before_interrupted_marker() {
+    let msg = DisplayMessage {
+        role: "assistant".to_string(),
+        content: "회의 개별 칩 색을 확인합니다.\n\ncount\n\ncount\n\n[Interrupted: user cancelled]"
+            .to_string(),
+        title: None,
+        tool_calls: Vec::new(),
+        duration_secs: None,
+        tool_data: None,
+    };
+
+    let lines = render_assistant_message(&msg, 80, crate::config::DiffDisplayMode::Off);
+    let rendered = lines
+        .iter()
+        .map(crate::tui::ui::line_plain_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("회의 개별 칩 색을 확인합니다."));
+    assert!(rendered.contains("[Interrupted: user cancelled]"));
+    assert!(!rendered.lines().any(|line| line.trim() == "count"));
+}
+
+#[test]
 fn render_assistant_message_centered_mode_keeps_markdown_unpadded_for_center_alignment() {
     let saved = crate::tui::markdown::center_code_blocks();
     crate::tui::markdown::set_center_code_blocks(true);

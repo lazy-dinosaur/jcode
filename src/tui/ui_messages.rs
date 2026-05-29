@@ -41,30 +41,22 @@ fn normalize_system_content_for_display(content: &str) -> Cow<'_, str> {
     Cow::Owned(normalized)
 }
 
-fn strip_count_wrapper_noise_edges(content: &str) -> Cow<'_, str> {
+fn strip_count_wrapper_noise_lines(content: &str) -> Cow<'_, str> {
     let lines: Vec<&str> = content.lines().collect();
     if lines.is_empty() {
         return Cow::Borrowed(content);
     }
 
-    let mut start = 0usize;
-    while start < lines.len()
-        && (lines[start].trim().is_empty() || lines[start].trim().eq_ignore_ascii_case("count"))
-    {
-        start += 1;
-    }
+    let filtered: Vec<&str> = lines
+        .iter()
+        .copied()
+        .filter(|line| !line.trim().eq_ignore_ascii_case("count"))
+        .collect();
 
-    let mut end = lines.len();
-    while end > start
-        && (lines[end - 1].trim().is_empty() || lines[end - 1].trim().eq_ignore_ascii_case("count"))
-    {
-        end -= 1;
-    }
-
-    if start == 0 && end == lines.len() {
+    if filtered.len() == lines.len() {
         Cow::Borrowed(content)
     } else {
-        Cow::Owned(lines[start..end].join("\n").trim().to_string())
+        Cow::Owned(filtered.join("\n").trim().to_string())
     }
 }
 
@@ -75,7 +67,7 @@ pub(crate) fn render_assistant_message(
 ) -> Vec<Line<'static>> {
     let centered = markdown::center_code_blocks();
     let wrap_width = centered_wrap_width(width, centered, 96);
-    let content = strip_count_wrapper_noise_edges(&msg.content);
+    let content = strip_count_wrapper_noise_lines(&msg.content);
     let mut lines = markdown::render_markdown_with_width(content.as_ref(), Some(wrap_width));
     if centered {
         markdown::recenter_structured_blocks_for_display(&mut lines, width as usize);
