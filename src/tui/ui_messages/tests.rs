@@ -416,6 +416,51 @@ fn render_assistant_message_without_body_does_not_add_extra_blank_line_before_to
 }
 
 #[test]
+fn render_assistant_message_hides_count_noise_around_tool_summary() {
+    let msg = DisplayMessage {
+        role: "assistant".to_string(),
+        content: "count\n\ncount".to_string(),
+        title: None,
+        tool_calls: vec!["read src/lib.rs".to_string()],
+        duration_secs: None,
+        tool_data: None,
+    };
+
+    let lines = render_assistant_message(&msg, 80, crate::config::DiffDisplayMode::Off);
+    let rendered = lines
+        .iter()
+        .map(crate::tui::ui::line_plain_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(!rendered.lines().any(|line| line.trim() == "count"));
+    assert!(rendered.contains("read src/lib.rs"));
+}
+
+#[test]
+fn render_assistant_message_strips_count_edges_but_preserves_body() {
+    let msg = DisplayMessage {
+        role: "assistant".to_string(),
+        content: "count\n\nI will inspect it.\n\ncount".to_string(),
+        title: None,
+        tool_calls: vec!["read src/lib.rs".to_string()],
+        duration_secs: None,
+        tool_data: None,
+    };
+
+    let lines = render_assistant_message(&msg, 80, crate::config::DiffDisplayMode::Off);
+    let rendered = lines
+        .iter()
+        .map(crate::tui::ui::line_plain_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("I will inspect it."));
+    assert!(!rendered.lines().any(|line| line.trim() == "count"));
+    assert!(rendered.contains("read src/lib.rs"));
+}
+
+#[test]
 fn render_assistant_message_centered_mode_keeps_markdown_unpadded_for_center_alignment() {
     let saved = crate::tui::markdown::center_code_blocks();
     crate::tui::markdown::set_center_code_blocks(true);
