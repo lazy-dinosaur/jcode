@@ -29,6 +29,14 @@ impl App {
         event_stream: &mut EventStream,
         mut bus_receiver: Option<&mut tokio::sync::broadcast::Receiver<crate::bus::BusEvent>>,
     ) -> Result<()> {
+        // A previous interrupt can leave `cancel_requested` armed after the
+        // interrupted turn has already returned. Clear it before starting a new
+        // provider request so the next ordinary key/mouse/resize event cannot
+        // cancel the fresh turn immediately.
+        self.cancel_requested = false;
+        self.manual_tool_cancel_signal = None;
+        self.escape_interrupt_armed_until = None;
+
         let eager_stream_redraw = !crate::perf::tui_policy().enable_decorative_animations;
         let mut redraw_period = crate::tui::redraw_interval(self);
         let mut redraw_interval = interval(redraw_period);
