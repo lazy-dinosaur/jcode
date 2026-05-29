@@ -218,6 +218,7 @@ impl Agent {
             let mut retry_after_compaction = false;
             let mut keepalive = stream_keepalive_ticker();
             let turn_stop_signal = self.turn_stop_signal();
+            let mut count_noise_lines_seen = 0usize;
             loop {
                 let next_event = std::pin::pin!(stream.next());
                 let event = tokio::select! {
@@ -322,6 +323,24 @@ impl Agent {
                     StreamEvent::TextDelta(text) => {
                         let text =
                             format_text_delta_after_thinking(text, &mut thinking_prefix_emitted);
+                        let count_noise_lines = Self::count_wrapper_noise_line_count(&text);
+                        let text = Self::strip_standalone_count_noise_lines(&text);
+                        if text.is_empty() && count_noise_lines > 0 {
+                            count_noise_lines_seen += count_noise_lines;
+                            if count_noise_lines_seen >= 4 {
+                                logging::warn(&format!(
+                                    "Stopping provider stream after {} standalone count noise lines",
+                                    count_noise_lines_seen
+                                ));
+                                break;
+                            }
+                            continue;
+                        }
+                        if count_noise_lines == 0 {
+                            count_noise_lines_seen = 0;
+                        } else {
+                            count_noise_lines_seen += count_noise_lines;
+                        }
                         text_content.push_str(&text);
                         if !text_wrapped_detected {
                             if let Some(marker_idx) = text_content

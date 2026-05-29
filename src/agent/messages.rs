@@ -1,7 +1,25 @@
 use super::*;
 
-fn is_count_wrapper_noise_line(line: &str) -> bool {
+pub(crate) fn is_count_wrapper_noise_line(line: &str) -> bool {
     line.trim().eq_ignore_ascii_case("count")
+}
+
+pub(crate) fn count_wrapper_noise_line_count(text: &str) -> usize {
+    text.lines()
+        .filter(|line| is_count_wrapper_noise_line(line))
+        .count()
+}
+
+pub(crate) fn strip_standalone_count_noise_lines(text: &str) -> String {
+    let filtered: Vec<&str> = text
+        .lines()
+        .filter(|line| !is_count_wrapper_noise_line(line))
+        .collect();
+    if filtered.len() == text.lines().count() {
+        text.to_string()
+    } else {
+        filtered.join("\n")
+    }
 }
 
 fn strip_count_wrapper_noise_edges(text: &str) -> String {
@@ -62,6 +80,14 @@ fn normalize_assistant_tool_call_noise(
 }
 
 impl Agent {
+    pub(crate) fn count_wrapper_noise_line_count(text: &str) -> usize {
+        count_wrapper_noise_line_count(text)
+    }
+
+    pub(crate) fn strip_standalone_count_noise_lines(text: &str) -> String {
+        strip_standalone_count_noise_lines(text)
+    }
+
     pub(crate) fn interruption_text_for_reason(reason: Option<TurnStopReason>) -> &'static str {
         match reason {
             Some(TurnStopReason::ServerReload) => "[Interrupted: server reloading]",
@@ -286,5 +312,20 @@ mod tests {
             ContentBlock::Text { text, .. } => assert_eq!(text, "count"),
             other => panic!("expected text block, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn strip_standalone_count_noise_lines_removes_only_exact_count_lines() {
+        assert_eq!(
+            strip_standalone_count_noise_lines(
+                "회의 칩 색을 확인합니다.\n\ncount\n\ncount\n\n[Interrupted: user cancelled]"
+            ),
+            "회의 칩 색을 확인합니다.\n\n\n\n[Interrupted: user cancelled]"
+        );
+        assert_eq!(
+            strip_standalone_count_noise_lines("count files"),
+            "count files"
+        );
+        assert_eq!(strip_standalone_count_noise_lines("count"), "");
     }
 }
