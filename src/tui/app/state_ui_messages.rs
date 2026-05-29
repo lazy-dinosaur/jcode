@@ -10,6 +10,29 @@ const COMPACTED_HISTORY_LOAD_SCROLL_THRESHOLD: usize = 2;
 const COMPACTED_HISTORY_MARKER_PREFIX: &str = "Earlier conversation compacted — ";
 const OVERNIGHT_CARD_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 
+fn strip_count_wrapper_noise_edges(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.is_empty() {
+        return String::new();
+    }
+
+    let mut start = 0usize;
+    while start < lines.len()
+        && (lines[start].trim().is_empty() || lines[start].trim().eq_ignore_ascii_case("count"))
+    {
+        start += 1;
+    }
+
+    let mut end = lines.len();
+    while end > start
+        && (lines[end - 1].trim().is_empty() || lines[end - 1].trim().eq_ignore_ascii_case("count"))
+    {
+        end -= 1;
+    }
+
+    lines[start..end].join("\n").trim().to_string()
+}
+
 fn display_message_from_stored_message(
     message: &crate::session::StoredMessage,
 ) -> Option<DisplayMessage> {
@@ -31,11 +54,20 @@ fn display_message_from_stored_message(
 
 fn stored_message_visible_text(message: &crate::session::StoredMessage) -> String {
     let mut parts = Vec::new();
+    let has_tool_use = message
+        .content
+        .iter()
+        .any(|block| matches!(block, ContentBlock::ToolUse { .. }));
     for block in &message.content {
         match block {
             ContentBlock::Text { text, .. } | ContentBlock::Reasoning { text } => {
+                let text = if has_tool_use {
+                    strip_count_wrapper_noise_edges(text)
+                } else {
+                    text.trim().to_string()
+                };
                 if !text.trim().is_empty() {
-                    parts.push(text.trim().to_string());
+                    parts.push(text);
                 }
             }
             ContentBlock::ToolUse { name, input, .. } => {
@@ -57,6 +89,12 @@ fn stored_message_visible_text(message: &crate::session::StoredMessage) -> Strin
 
 impl App {
     pub fn push_display_message(&mut self, mut message: DisplayMessage) {
+        if message.role == "assistant" {
+            message.content = strip_count_wrapper_noise_edges(&message.content);
+            if message.content.trim().is_empty() {
+                return;
+            }
+        }
         compact_display_message_tool_data(&mut message);
         if self.try_coalesce_repeated_display_message(&message) {
             return;

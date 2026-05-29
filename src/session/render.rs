@@ -63,6 +63,29 @@ fn strip_trailing_count_wrapper_noise(text: &str) -> &str {
     text[..end].trim_end()
 }
 
+fn strip_count_wrapper_noise_edges(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.is_empty() {
+        return String::new();
+    }
+
+    let mut start = 0usize;
+    while start < lines.len()
+        && (lines[start].trim().is_empty() || lines[start].trim().eq_ignore_ascii_case("count"))
+    {
+        start += 1;
+    }
+
+    let mut end = lines.len();
+    while end > start
+        && (lines[end - 1].trim().is_empty() || lines[end - 1].trim().eq_ignore_ascii_case("count"))
+    {
+        end -= 1;
+    }
+
+    lines[start..end].join("\n").trim().to_string()
+}
+
 fn compacted_history_render_window(
     messages: &[super::StoredMessage],
     compacted_count: usize,
@@ -291,11 +314,21 @@ pub fn render_messages_and_images_with_compacted_history(
         let mut tool_calls: Vec<String> = Vec::new();
         let mut current_tool: Option<ToolCall> = None;
         let mut last_image_idx: Option<usize> = None;
+        let has_tool_use = msg
+            .content
+            .iter()
+            .any(|block| matches!(block, ContentBlock::ToolUse { .. }));
 
         for block in &msg.content {
             match block {
                 ContentBlock::Text { text: t, .. } => {
-                    let t = strip_trailing_count_wrapper_noise(t);
+                    let sanitized;
+                    let t = if has_tool_use {
+                        sanitized = strip_count_wrapper_noise_edges(t);
+                        sanitized.as_str()
+                    } else {
+                        strip_trailing_count_wrapper_noise(t)
+                    };
                     if t.is_empty() || is_count_wrapper_noise(t) {
                         continue;
                     }
