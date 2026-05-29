@@ -1512,7 +1512,12 @@ pub(super) async fn handle_client(
         // socket writer. If cancellation waits behind that Ack write, the
         // provider keeps thinking/streaming even though the server has already
         // read the cancel request.
-        if matches!(request, Request::Cancel { .. }) {
+        if matches!(request, Request::Cancel { .. })
+            && processing_task
+                .as_ref()
+                .map(|handle| !handle.is_finished())
+                .unwrap_or(false)
+        {
             prefire_cancel_request(&session_control, &client_event_tx);
         }
 
@@ -3153,6 +3158,7 @@ async fn cancel_processing_message(
     if let Some(mut handle) = state.task.take() {
         if handle.is_finished() {
             *state.task = Some(handle);
+            session_control.reset_cancel();
             return;
         }
         *state.cancel_state = ProcessingCancelState::Cancelling;
@@ -3203,6 +3209,13 @@ async fn cancel_processing_message(
                 detail: String::new(),
             });
         }
+    } else {
+        // A cancel request can race with turn completion: the TUI may still think
+        // the turn is processing while the server task has already completed and
+        // cleared its handle. If the latency-sensitive prefire path set the shared
+        // turn stop signal, leaving it set would cancel the next user message at
+        // the first provider chunk and persist a bogus "user cancelled" marker.
+        session_control.reset_cancel();
     }
 }
 

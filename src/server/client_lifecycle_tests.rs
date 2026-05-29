@@ -204,6 +204,113 @@ async fn prefire_cancel_request_sets_turn_signal_before_ack_path() {
 }
 
 #[tokio::test]
+async fn cancel_without_active_task_clears_prefired_turn_signal() {
+    let queue = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let background_signal = InterruptSignal::new();
+    let turn_control = TurnControl::new();
+    let stop_signal = turn_control.stop_signal();
+    let control = SessionControlHandle::new(
+        "session_cancel_race",
+        Arc::clone(&queue),
+        background_signal,
+        turn_control,
+    );
+    let (client_tx, _client_rx) = mpsc::unbounded_channel();
+    let members = Arc::new(RwLock::new(HashMap::new()));
+    let swarms_by_id = Arc::new(RwLock::new(HashMap::new()));
+    let event_history = Arc::new(RwLock::new(std::collections::VecDeque::new()));
+    let event_counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let (event_tx, _event_rx) = broadcast::channel(8);
+    let mut client_is_processing = false;
+    let mut message_id = None;
+    let mut session_id = None;
+    let mut task = None;
+    let mut cancel_state = ProcessingCancelState::Idle;
+
+    control.request_cancel();
+    assert!(stop_signal.is_set(), "prefire simulation should set cancel");
+
+    cancel_processing_message(
+        &mut ProcessingState {
+            client_is_processing: &mut client_is_processing,
+            message_id: &mut message_id,
+            session_id: &mut session_id,
+            task: &mut task,
+            cancel_state: &mut cancel_state,
+        },
+        &control,
+        &client_tx,
+        &SwarmStatusRefs {
+            members: &members,
+            swarms_by_id: &swarms_by_id,
+            event_history: &event_history,
+            event_counter: &event_counter,
+            event_tx: &event_tx,
+        },
+    )
+    .await;
+
+    assert!(
+        !stop_signal.is_set(),
+        "a raced cancel with no active task must not poison the next turn"
+    );
+}
+
+#[tokio::test]
+async fn cancel_finished_task_clears_prefired_turn_signal() {
+    let queue = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let background_signal = InterruptSignal::new();
+    let turn_control = TurnControl::new();
+    let stop_signal = turn_control.stop_signal();
+    let control = SessionControlHandle::new(
+        "session_cancel_finished_race",
+        Arc::clone(&queue),
+        background_signal,
+        turn_control,
+    );
+    let (client_tx, _client_rx) = mpsc::unbounded_channel();
+    let members = Arc::new(RwLock::new(HashMap::new()));
+    let swarms_by_id = Arc::new(RwLock::new(HashMap::new()));
+    let event_history = Arc::new(RwLock::new(std::collections::VecDeque::new()));
+    let event_counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let (event_tx, _event_rx) = broadcast::channel(8);
+    let mut client_is_processing = true;
+    let mut message_id = Some(42);
+    let mut session_id = Some("session_cancel_finished_race".to_string());
+    let mut task = Some(tokio::spawn(async {}));
+    let mut cancel_state = ProcessingCancelState::Idle;
+    tokio::task::yield_now().await;
+
+    control.request_cancel();
+    assert!(stop_signal.is_set(), "prefire simulation should set cancel");
+
+    cancel_processing_message(
+        &mut ProcessingState {
+            client_is_processing: &mut client_is_processing,
+            message_id: &mut message_id,
+            session_id: &mut session_id,
+            task: &mut task,
+            cancel_state: &mut cancel_state,
+        },
+        &control,
+        &client_tx,
+        &SwarmStatusRefs {
+            members: &members,
+            swarms_by_id: &swarms_by_id,
+            event_history: &event_history,
+            event_counter: &event_counter,
+            event_tx: &event_tx,
+        },
+    )
+    .await;
+
+    assert!(
+        !stop_signal.is_set(),
+        "a cancel racing with a finished task must not poison the next turn"
+    );
+}
+
+#[tokio::test]
 async fn processing_interrupt_snapshot_tracks_active_task_without_agent_lock() {
     let mut client_is_processing = true;
     let mut processing_message_id = Some(777);
