@@ -303,6 +303,9 @@ fn handle_manual_tool_completed(app: &mut App, result: ManualToolCompleted) {
 
     if result.tool_call.name == "subagent" {
         app.subagent_status = None;
+        app.manual_tool_cancel_signal = None;
+        app.cancel_requested = false;
+        app.is_processing = false;
         app.set_status_notice(if result.is_error {
             "Subagent failed"
         } else {

@@ -2133,6 +2133,7 @@ pub(super) async fn handle_client(
                     subagent_type,
                     model,
                     session_id,
+                    &session_control,
                     &agent,
                     &client_event_tx,
                 );

@@ -1,6 +1,22 @@
 use super::*;
 use tokio_util::sync::CancellationToken;
 
+struct AbortJoinHandleOnDrop(Option<tokio::task::JoinHandle<()>>);
+
+impl AbortJoinHandleOnDrop {
+    fn new(handle: tokio::task::JoinHandle<()>) -> Self {
+        Self(Some(handle))
+    }
+}
+
+impl Drop for AbortJoinHandleOnDrop {
+    fn drop(&mut self) {
+        if let Some(handle) = self.0.take() {
+            handle.abort();
+        }
+    }
+}
+
 #[allow(dead_code)]
 pub(super) struct ClassifiedTools {
     /// Original tool_calls index plus a pre-decided result that must not be executed locally.
@@ -175,21 +191,40 @@ impl Agent {
     }
 
     pub async fn run_once_capture(&mut self, user_message: &str) -> Result<String> {
-        self.inject_pending_context_for_turn().await?;
-        self.add_message(
-            Role::User,
-            vec![ContentBlock::Text {
-                text: user_message.to_string(),
-                cache_control: None,
-            }],
-        );
-        self.session.save()?;
-        if trace_enabled() {
-            eprintln!("[trace] session_id {}", self.session.id);
+        self.run_once_capture_with_cancel(user_message, None).await
+    }
+
+    pub async fn run_once_capture_with_cancel(
+        &mut self,
+        user_message: &str,
+        parent_cancel_signal: Option<InterruptSignal>,
+    ) -> Result<String> {
+        let _cancel_watcher = parent_cancel_signal.map(|signal| {
+            let turn_control = self.turn_control();
+            AbortJoinHandleOnDrop::new(tokio::spawn(async move {
+                signal.notified().await;
+                turn_control.request_stop(TurnStopReason::UserInterrupt);
+            }))
+        });
+
+        let result = async {
+            self.inject_pending_context_for_turn().await?;
+            self.add_message(
+                Role::User,
+                vec![ContentBlock::Text {
+                    text: user_message.to_string(),
+                    cache_control: None,
+                }],
+            );
+            self.session.save()?;
+            if trace_enabled() {
+                eprintln!("[trace] session_id {}", self.session.id);
+            }
+            self.reset_lifecycle_deny_streak_for_user_turn();
+            self.current_turn_system_reminder = self.take_pending_lifecycle_system_reminder();
+            self.run_turn(false).await
         }
-        self.reset_lifecycle_deny_streak_for_user_turn();
-        self.current_turn_system_reminder = self.take_pending_lifecycle_system_reminder();
-        let result = self.run_turn(false).await;
+        .await;
         self.current_turn_system_reminder = None;
         result
     }

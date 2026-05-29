@@ -36,6 +36,11 @@ struct CancelAwareProvider {
     observed_cancel: Arc<AtomicBool>,
 }
 
+struct NonStreamingOptionsProvider {
+    entered: Arc<tokio::sync::Notify>,
+    received_cancel_signal: Arc<AtomicBool>,
+}
+
 struct PendingAfterTextProvider {
     text_sent: Arc<tokio::sync::Notify>,
 }
@@ -364,6 +369,46 @@ impl Provider for CancelAwareProvider {
 }
 
 #[async_trait]
+impl Provider for NonStreamingOptionsProvider {
+    async fn complete(
+        &self,
+        _messages: &[Message],
+        _tools: &[ToolDefinition],
+        _system: &str,
+        _resume_session_id: Option<&str>,
+    ) -> Result<EventStream> {
+        Err(anyhow::anyhow!(
+            "NonStreamingOptionsProvider requires complete_with_options"
+        ))
+    }
+
+    async fn complete_with_options(
+        &self,
+        _messages: &[Message],
+        _tools: &[ToolDefinition],
+        _system: &str,
+        _resume_session_id: Option<&str>,
+        options: CompletionOptions,
+    ) -> Result<EventStream> {
+        self.received_cancel_signal
+            .store(options.cancel_signal().is_some(), Ordering::SeqCst);
+        self.entered.notify_waiters();
+        std::future::pending::<Result<EventStream>>().await
+    }
+
+    fn name(&self) -> &str {
+        "non-streaming-options"
+    }
+
+    fn fork(&self) -> Arc<dyn Provider> {
+        Arc::new(Self {
+            entered: self.entered.clone(),
+            received_cancel_signal: self.received_cancel_signal.clone(),
+        })
+    }
+}
+
+#[async_trait]
 impl Provider for PendingAfterTextProvider {
     async fn complete(
         &self,
@@ -649,6 +694,40 @@ async fn run_turn_streaming_mpsc_passes_turn_cancel_signal_to_provider() {
             .contains("provider observed cancellation")
     );
     assert!(observed_cancel.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn run_once_capture_with_parent_cancel_stops_non_streaming_turn() {
+    let _guard = crate::storage::lock_test_env();
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let received_cancel_signal = Arc::new(AtomicBool::new(false));
+    let provider: Arc<dyn Provider> = Arc::new(NonStreamingOptionsProvider {
+        entered: entered.clone(),
+        received_cancel_signal: received_cancel_signal.clone(),
+    });
+    let registry = Registry::new(provider.clone()).await;
+    let mut agent = Agent::new(provider, registry);
+    let parent_cancel = InterruptSignal::new();
+    let cancel_for_task = parent_cancel.clone();
+
+    let task = tokio::spawn(async move {
+        agent
+            .run_once_capture_with_cancel("wait until parent cancellation", Some(cancel_for_task))
+            .await
+    });
+
+    tokio::time::timeout(Duration::from_secs(5), entered.notified())
+        .await
+        .expect("provider should receive non-streaming completion request");
+    assert!(received_cancel_signal.load(Ordering::SeqCst));
+
+    parent_cancel.fire();
+    let result = tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .expect("non-streaming task should finish after parent cancel")
+        .expect("task should join");
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("Cancelled"));
 }
 
 #[tokio::test]

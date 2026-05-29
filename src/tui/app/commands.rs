@@ -641,6 +641,10 @@ fn launch_manual_subagent(app: &mut App, spec: ManualSubagentSpec) {
     let _ = app.session.save();
     app.subagent_status = Some("starting subagent".to_string());
     app.set_status_notice("Running subagent");
+    app.is_processing = true;
+    app.cancel_requested = false;
+    let turn_cancel_signal = crate::agent::InterruptSignal::new();
+    app.manual_tool_cancel_signal = Some(turn_cancel_signal.clone());
 
     let registry = app.registry.clone();
     let session_id = app.session.id.clone();
@@ -663,7 +667,7 @@ fn launch_manual_subagent(app: &mut App, spec: ManualSubagentSpec) {
             working_dir: working_dir.as_deref().map(PathBuf::from),
             stdin_request_tx: None,
             graceful_shutdown_signal: None,
-            turn_cancel_signal: None,
+            turn_cancel_signal: Some(turn_cancel_signal),
             execution_mode: crate::tool::ToolExecutionMode::Direct,
         };
 

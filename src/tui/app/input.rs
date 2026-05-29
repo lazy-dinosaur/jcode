@@ -1638,6 +1638,9 @@ pub(super) fn handle_global_control_shortcuts(
             if app.is_processing {
                 clear_escape_interrupt_arm(app);
                 app.cancel_requested = true;
+                if let Some(signal) = &app.manual_tool_cancel_signal {
+                    signal.fire();
+                }
                 if app.cancel_overnight_for_interrupt() {
                     app.set_status_notice("Interrupting... Overnight cancelled");
                 } else {
@@ -1755,6 +1758,9 @@ pub(super) fn handle_basic_key(app: &mut App, code: KeyCode) -> bool {
             } else if app.is_processing {
                 if confirm_or_arm_escape_interrupt(app) {
                     app.cancel_requested = true;
+                    if let Some(signal) = &app.manual_tool_cancel_signal {
+                        signal.fire();
+                    }
                 }
             } else {
                 app.follow_chat_bottom();

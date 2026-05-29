@@ -2,11 +2,11 @@
 
 use super::client_lifecycle::process_message_streaming_mpsc;
 use super::{
-    ClientConnectionInfo, SessionInterruptQueues, SwarmEvent, SwarmMember, SwarmState,
-    VersionedPlan, broadcast_swarm_status, fanout_session_event, persist_swarm_state_for,
-    queue_soft_interrupt_for_session, remove_session_channel_subscriptions,
-    remove_session_from_swarm, session_event_fanout_sender, swarm_id_for_dir, truncate_detail,
-    update_member_status,
+    ClientConnectionInfo, SessionControlHandle, SessionInterruptQueues, SwarmEvent, SwarmMember,
+    SwarmState, VersionedPlan, broadcast_swarm_status, fanout_session_event,
+    persist_swarm_state_for, queue_soft_interrupt_for_session,
+    remove_session_channel_subscriptions, remove_session_from_swarm, session_event_fanout_sender,
+    swarm_id_for_dir, truncate_detail, update_member_status,
 };
 use crate::agent::Agent;
 use crate::protocol::{FeatureToggle, NotificationType, ServerEvent};
@@ -299,11 +299,14 @@ pub(super) fn handle_run_subagent(
     subagent_type: String,
     model: Option<String>,
     session_id: Option<String>,
+    session_control: &SessionControlHandle,
     agent: &Arc<Mutex<Agent>>,
     client_event_tx: &mpsc::UnboundedSender<ServerEvent>,
 ) {
     let agent = Arc::clone(agent);
     let tx = client_event_tx.clone();
+    let turn_cancel_signal = session_control.stop_current_turn_signal();
+    let session_control_for_task = session_control.clone();
 
     tokio::spawn(async move {
         let description = derive_subagent_description(&prompt);
@@ -365,7 +368,7 @@ pub(super) fn handle_run_subagent(
             working_dir,
             stdin_request_tx: None,
             graceful_shutdown_signal: None,
-            turn_cancel_signal: None,
+            turn_cancel_signal: Some(turn_cancel_signal),
             execution_mode: crate::tool::ToolExecutionMode::Direct,
         };
 
@@ -442,6 +445,7 @@ pub(super) fn handle_run_subagent(
                 let _ = tx.send(ServerEvent::Done { id });
             }
         }
+        session_control_for_task.reset_cancel();
     });
 }
 

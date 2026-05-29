@@ -382,6 +382,10 @@ impl Agent {
         let mut empty_after_tool_continuations = 0u32;
 
         loop {
+            if self.turn_control.is_stopped() {
+                return Err(anyhow::anyhow!("[Cancelled: user interrupted]"));
+            }
+
             let repaired = self.repair_missing_tool_outputs();
             if repaired > 0 {
                 logging::warn(&format!(
@@ -455,17 +459,22 @@ impl Agent {
                 &messages_with_memory
             };
             self.last_status_detail = None;
-            let mut stream = match self
-                .provider
-                .complete_split(
+            let turn_stop_signal = self.turn_stop_signal();
+            let stream_result = tokio::select! {
+                result = self.provider.complete_split_with_options(
                     send_messages,
                     &tools,
                     &split_prompt.static_part,
                     &split_prompt.dynamic_part,
                     self.provider_session_id.as_deref(),
-                )
-                .await
-            {
+                    CompletionOptions::with_cancel_signal(turn_stop_signal.clone()),
+                ) => result,
+                _ = turn_stop_signal.notified() => {
+                    return Err(anyhow::anyhow!("[Cancelled: user interrupted]"));
+                }
+            };
+
+            let mut stream = match stream_result {
                 Ok(stream) => stream,
                 Err(e) => {
                     if self.try_auto_compact_after_context_limit(&e.to_string()) {
@@ -520,7 +529,16 @@ impl Agent {
             let mut openai_native_compaction: Option<(String, usize)> = None;
 
             let mut retry_after_compaction = false;
-            while let Some(event) = stream.next().await {
+            let turn_stop_signal = self.turn_stop_signal();
+            loop {
+                let Some(event) = (tokio::select! {
+                    event = stream.next() => event,
+                    _ = turn_stop_signal.notified() => {
+                        return Err(anyhow::anyhow!("[Cancelled: user interrupted]"));
+                    }
+                }) else {
+                    break;
+                };
                 let event = match event {
                     Ok(event) => event,
                     Err(e) => {
@@ -1087,6 +1105,14 @@ impl Agent {
                     .clone()
                     .unwrap_or_else(|| self.session.id.clone());
                 let cancel_token = tokio_util::sync::CancellationToken::new();
+                let turn_stop_signal = self.turn_stop_signal();
+                let cancel_on_turn_stop = {
+                    let cancel_token = cancel_token.clone();
+                    tokio::spawn(async move {
+                        turn_stop_signal.notified().await;
+                        cancel_token.cancel();
+                    })
+                };
                 let ctx_factory = |tc: &ToolCall| ToolContext {
                     session_id: self.session.id.clone(),
                     message_id: message_id.clone(),
@@ -1124,6 +1150,7 @@ impl Agent {
                 let results = self
                     .dispatch_tools_parallel(to_execute, ctx_factory, per_tool_start, &cancel_token)
                     .await;
+                cancel_on_turn_stop.abort();
                 dispatched_results = results
                     .into_iter()
                     .map(|result| (result.index, result))

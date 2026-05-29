@@ -758,6 +758,9 @@ pub struct App {
     rewind_undo_snapshot: Option<LocalRewindUndoSnapshot>,
     // Cancel flag for interrupting generation
     cancel_requested: bool,
+    // Cancel signal for manually launched tools such as `/subagent` that run
+    // outside the normal interactive turn loop.
+    manual_tool_cancel_signal: Option<crate::agent::InterruptSignal>,
     // Esc interrupt confirmation window. First Esc arms, second Esc confirms.
     escape_interrupt_armed_until: Option<Instant>,
     // Quit confirmation: tracks when first Ctrl+C was pressed

@@ -701,17 +701,20 @@ impl Tool for SubagentTool {
 
         let start = std::time::Instant::now();
         let prompt = Self::prompt_with_profile(&params.prompt, &params.subagent_type, &route);
-        let final_text = agent.run_once_capture(&prompt).await.map_err(|err| {
-            logging::warn(&format!(
-                "[tool:subagent] subagent failed description={} type={} session_id={} model={} error={}",
-                params.description,
-                params.subagent_type,
-                agent.session_id(),
-                resolved_model,
+        let final_text = agent
+            .run_once_capture_with_cancel(&prompt, ctx.turn_cancel_signal.clone())
+            .await
+            .map_err(|err| {
+                logging::warn(&format!(
+                    "[tool:subagent] subagent failed description={} type={} session_id={} model={} error={}",
+                    params.description,
+                    params.subagent_type,
+                    agent.session_id(),
+                    resolved_model,
+                    err
+                ));
                 err
-            ));
-            err
-        })?;
+            })?;
         let sub_session_id = agent.session_id().to_string();
         let history = if params.output_mode == SubagentOutputMode::Compact {
             Some(agent.get_history())
