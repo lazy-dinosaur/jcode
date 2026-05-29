@@ -178,6 +178,49 @@ impl Registry {
         timings.push((name.to_string(), start.elapsed().as_millis()));
     }
 
+    fn unknown_tool_message(
+        name: &str,
+        available_tools: &HashMap<String, Arc<dyn Tool>>,
+    ) -> String {
+        if !name.starts_with("mcp__") {
+            return format!("Unknown tool: {name}");
+        }
+
+        let mut parts = name.split("__");
+        let _mcp = parts.next();
+        let server = parts.next().unwrap_or_default();
+        let server_prefix = if server.is_empty() {
+            None
+        } else {
+            Some(format!("mcp__{server}__"))
+        };
+        let mut candidates: Vec<String> = available_tools
+            .keys()
+            .filter(|tool_name| {
+                server_prefix
+                    .as_ref()
+                    .is_some_and(|prefix| tool_name.starts_with(prefix))
+            })
+            .cloned()
+            .collect();
+        candidates.sort();
+        candidates.truncate(12);
+
+        let mut message = format!(
+            "Unknown MCP tool: {name}. The MCP tool registry changed or this tool is not currently available. Do not retry the same tool name."
+        );
+        if !candidates.is_empty() {
+            message.push_str(" Available tools from the same MCP server include: ");
+            message.push_str(&candidates.join(", "));
+            message.push('.');
+        } else {
+            message.push_str(
+                " Run the `mcp` management tool with action=`list` to inspect currently connected MCP servers, or proceed without that MCP tool.",
+            );
+        }
+        message
+    }
+
     /// Create a lightweight empty registry (no tools, no skill loading).
     /// Used by remote-mode clients that don't execute tools locally.
     pub fn empty() -> Self {
@@ -509,10 +552,11 @@ impl Registry {
             let tools = self.tools.read().await;
             tools
                 .get(resolved_name)
-                .ok_or_else(|| anyhow::anyhow!("Unknown tool: {}", name))?
+                .ok_or_else(|| anyhow::anyhow!(Self::unknown_tool_message(name, &tools)))?
                 .clone()
         } else {
-            anyhow::bail!("Unknown tool: {}", name);
+            let tools = self.tools.read().await;
+            anyhow::bail!(Self::unknown_tool_message(name, &tools));
         };
 
         // Drop the lock before executing
