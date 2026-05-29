@@ -214,6 +214,10 @@ fn stream_text_or_recovered_tool_call(
         return None;
     }
 
+    if is_count_wrapper_noise(text) {
+        return None;
+    }
+
     if let Some((prefix, tool_name, arguments, suffix)) = parse_text_wrapped_tool_call(text) {
         let total = RECOVERED_TEXT_WRAPPED_TOOL_CALLS.fetch_add(1, Ordering::Relaxed) + 1;
         crate::logging::warn(&format!(
@@ -240,6 +244,16 @@ fn stream_text_or_recovered_tool_call(
     }
 
     Some(StreamEvent::TextDelta(text.to_string()))
+}
+
+fn is_count_wrapper_noise(text: &str) -> bool {
+    let trimmed = text.trim();
+    !trimmed.is_empty()
+        && trimmed
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .all(|line| line.eq_ignore_ascii_case("count"))
 }
 
 fn sanitize_recovered_tool_suffix(suffix: &str) -> String {
@@ -940,6 +954,64 @@ mod tests {
         assert_eq!(tool_name, "read");
         assert_eq!(arguments["file_path"], "Cargo.toml");
         assert!(suffix.is_empty());
+    }
+
+    #[test]
+    fn parse_openai_response_event_suppresses_standalone_count_noise() {
+        let mut saw_text_delta = false;
+        let mut streaming_tool_calls = HashMap::new();
+        let mut completed_tool_items = HashSet::new();
+        let mut pending = VecDeque::new();
+
+        let event = parse_openai_response_event(
+            r#"{"type":"response.output_text.delta","delta":"count\n\n"}"#,
+            &mut saw_text_delta,
+            &mut streaming_tool_calls,
+            &mut completed_tool_items,
+            &mut pending,
+        );
+
+        assert!(event.is_none());
+        assert!(pending.is_empty());
+        assert!(saw_text_delta);
+    }
+
+    #[test]
+    fn parse_openai_response_event_recovers_invoke_after_suppressed_count_noise() {
+        let mut saw_text_delta = false;
+        let mut streaming_tool_calls = HashMap::new();
+        let mut completed_tool_items = HashSet::new();
+        let mut pending = VecDeque::new();
+
+        let noise = parse_openai_response_event(
+            r#"{"type":"response.output_text.delta","delta":"count"}"#,
+            &mut saw_text_delta,
+            &mut streaming_tool_calls,
+            &mut completed_tool_items,
+            &mut pending,
+        );
+        assert!(noise.is_none());
+
+        let first = parse_openai_response_event(
+            r#"{"type":"response.output_text.delta","delta":"<invoke name=\"read\"><parameter name=\"file_path\">Cargo.toml</parameter></invoke>"}"#,
+            &mut saw_text_delta,
+            &mut streaming_tool_calls,
+            &mut completed_tool_items,
+            &mut pending,
+        );
+
+        match first {
+            Some(StreamEvent::ToolUseStart { name, .. }) => assert_eq!(name, "read"),
+            other => panic!("expected recovered tool start, got {other:?}"),
+        }
+        match pending.pop_front() {
+            Some(StreamEvent::ToolInputDelta(arguments)) => {
+                let arguments: Value = serde_json::from_str(&arguments).expect("valid arguments");
+                assert_eq!(arguments["file_path"], "Cargo.toml");
+            }
+            other => panic!("expected tool input delta, got {other:?}"),
+        }
+        assert!(matches!(pending.pop_front(), Some(StreamEvent::ToolUseEnd)));
     }
 
     #[test]
