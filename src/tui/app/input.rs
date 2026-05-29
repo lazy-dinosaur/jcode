@@ -2159,7 +2159,11 @@ impl App {
     }
 
     pub(super) fn replace_streaming_text(&mut self, text: String) {
-        self.streaming_text = text;
+        self.streaming_text = if is_count_wrapper_noise(&text) {
+            String::new()
+        } else {
+            text
+        };
         self.refresh_split_view_if_needed();
     }
 
@@ -2177,7 +2181,11 @@ impl App {
         self.refresh_split_view_if_needed();
         self.streaming_md_renderer.borrow_mut().reset();
         crate::tui::mermaid::clear_streaming_preview_diagram();
-        content
+        if is_count_wrapper_noise(&content) {
+            String::new()
+        } else {
+            content
+        }
     }
 
     pub(super) fn commit_pending_streaming_assistant_message(&mut self) -> bool {
@@ -2185,8 +2193,9 @@ impl App {
             self.append_streaming_text(&chunk);
         }
 
-        if self.streaming_text.is_empty() {
+        if self.streaming_text.is_empty() || is_count_wrapper_noise(&self.streaming_text) {
             self.stream_buffer.clear();
+            self.streaming_text.clear();
             return false;
         }
 
@@ -2660,7 +2669,7 @@ impl App {
     }
 }
 
-fn is_count_wrapper_noise(text: &str) -> bool {
+pub(super) fn is_count_wrapper_noise(text: &str) -> bool {
     let trimmed = text.trim();
     !trimmed.is_empty()
         && trimmed

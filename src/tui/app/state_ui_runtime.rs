@@ -23,6 +23,9 @@ impl App {
     }
 
     pub fn streaming_text(&self) -> &str {
+        if super::input::is_count_wrapper_noise(&self.streaming_text) {
+            return "";
+        }
         &self.streaming_text
     }
 
