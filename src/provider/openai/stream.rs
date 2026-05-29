@@ -59,7 +59,7 @@ pub(super) fn parse_text_wrapped_tool_call(text: &str) -> Option<(String, String
             continue;
         }
 
-        let prefix = text[..marker_idx].trim_end().to_string();
+        let prefix = sanitize_recovered_tool_prefix(&text[..marker_idx]);
         let suffix = remaining[brace_idx + consumed..].trim().to_string();
         let args = serde_json::to_string(&parsed).ok()?;
         if suffix.is_empty() {
@@ -99,10 +99,30 @@ fn parse_xml_wrapped_tool_call(text: &str) -> Option<(String, String, String, St
         .unwrap_or(close_start);
 
     let arguments = parse_xml_invoke_arguments(inner)?;
-    let prefix = text[..invoke_start].trim_end().to_string();
+    let prefix = sanitize_recovered_tool_prefix(&text[..invoke_start]);
     let suffix = text[after_close..].trim().to_string();
     let args = serde_json::to_string(&arguments).ok()?;
     Some((prefix, tool_name, args, suffix))
+}
+
+fn sanitize_recovered_tool_prefix(prefix: &str) -> String {
+    let trimmed = prefix.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    // Some models emit stray `count` tokens before text-wrapped tool calls.
+    // Do not surface these wrapper artifacts as assistant text.
+    if trimmed
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .all(|line| line.eq_ignore_ascii_case("count"))
+    {
+        return String::new();
+    }
+
+    trimmed.to_string()
 }
 
 fn parse_xml_attr(tag: &str, attr: &str) -> Option<String> {
@@ -898,7 +918,7 @@ mod tests {
             parse_text_wrapped_tool_call(text).expect("should recover xml invoke");
         let arguments: Value = serde_json::from_str(&arguments).expect("arguments should be json");
 
-        assert_eq!(prefix, "count");
+        assert!(prefix.is_empty());
         assert_eq!(tool_name, "read");
         assert_eq!(
             arguments["file_path"],
@@ -906,6 +926,19 @@ mod tests {
         );
         assert_eq!(arguments["limit"], 20);
         assert_eq!(arguments["offset"], 42);
+        assert!(suffix.is_empty());
+    }
+
+    #[test]
+    fn parse_text_wrapped_tool_call_preserves_meaningful_xml_prefix() {
+        let text = r#"I'll inspect it. <invoke name="read"><parameter name="file_path">Cargo.toml</parameter></invoke>"#;
+        let (prefix, tool_name, arguments, suffix) =
+            parse_text_wrapped_tool_call(text).expect("should recover xml invoke");
+        let arguments: Value = serde_json::from_str(&arguments).expect("arguments should be json");
+
+        assert_eq!(prefix, "I'll inspect it.");
+        assert_eq!(tool_name, "read");
+        assert_eq!(arguments["file_path"], "Cargo.toml");
         assert!(suffix.is_empty());
     }
 

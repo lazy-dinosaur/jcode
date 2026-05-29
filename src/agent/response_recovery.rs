@@ -44,7 +44,7 @@ impl Agent {
                 continue;
             }
 
-            let prefix = text[..marker_idx].trim_end().to_string();
+            let prefix = Self::sanitize_recovered_tool_prefix(&text[..marker_idx]);
             let suffix = remaining[brace_idx + consumed..].trim().to_string();
             if suffix.is_empty() {
                 return Some((prefix, tool_name.clone(), parsed, suffix));
@@ -85,9 +85,30 @@ impl Agent {
             .unwrap_or(close_start);
 
         let arguments = Self::parse_xml_invoke_arguments(inner)?;
-        let prefix = text[..invoke_start].trim_end().to_string();
+        let prefix = Self::sanitize_recovered_tool_prefix(&text[..invoke_start]);
         let suffix = text[after_close..].trim().to_string();
         Some((prefix, tool_name, arguments, suffix))
+    }
+
+    fn sanitize_recovered_tool_prefix(prefix: &str) -> String {
+        let trimmed = prefix.trim();
+        if trimmed.is_empty() {
+            return String::new();
+        }
+
+        // Some models emit stray `count` tokens before text-wrapped tool calls,
+        // especially for XML-style `<invoke ...>` calls. Treat a prefix that is
+        // only one or more `count` lines as wrapper noise, not assistant text.
+        if trimmed
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .all(|line| line.eq_ignore_ascii_case("count"))
+        {
+            return String::new();
+        }
+
+        trimmed.to_string()
     }
 
     fn parse_xml_attr(tag: &str, attr: &str) -> Option<String> {
@@ -368,7 +389,7 @@ mod tests {
         let (prefix, tool_name, arguments, suffix) =
             Agent::parse_text_wrapped_tool_call(text).expect("should recover invoke tool call");
 
-        assert_eq!(prefix, "count");
+        assert!(prefix.is_empty());
         assert_eq!(tool_name, "bash");
         assert_eq!(
             arguments["command"],
@@ -396,7 +417,7 @@ mod tests {
         let (prefix, tool_name, arguments, suffix) =
             Agent::parse_text_wrapped_tool_call(text).expect("should recover read invoke");
 
-        assert_eq!(prefix, "count");
+        assert!(prefix.is_empty());
         assert_eq!(tool_name, "read");
         assert_eq!(
             arguments["file_path"],
@@ -428,5 +449,17 @@ mod tests {
         assert_eq!(tool_name, "bash");
         assert_eq!(arguments["command"], "pwd");
         assert_eq!(arguments["timeout"], 5000);
+    }
+
+    #[test]
+    fn parse_xml_wrapped_invoke_preserves_meaningful_prefix() {
+        let text = r#"I'll inspect it. <invoke name="read"><parameter name="file_path">Cargo.toml</parameter></invoke>"#;
+        let (prefix, tool_name, arguments, suffix) =
+            Agent::parse_text_wrapped_tool_call(text).expect("should recover prefixed invoke");
+
+        assert_eq!(prefix, "I'll inspect it.");
+        assert_eq!(tool_name, "read");
+        assert_eq!(arguments["file_path"], "Cargo.toml");
+        assert!(suffix.is_empty());
     }
 }
