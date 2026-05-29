@@ -549,10 +549,18 @@ fn test_effort_suggestions_are_provider_aware_for_remote_models() {
     app.remote_provider_model = Some("claude-opus-4-8".to_string());
     let claude_suggestions = app.get_suggestions_for("/effort x");
     assert!(
-        claude_suggestions.is_empty(),
-        "Claude should not suggest OpenAI xhigh effort: {:?}",
+        claude_suggestions
+            .iter()
+            .any(|(cmd, label)| cmd == "/effort xhigh" && *label == "Max"),
+        "Claude should suggest xhigh/Max and map it to [1m]: {:?}",
         claude_suggestions
     );
+    assert_eq!(
+        app.active_claude_max_model().as_deref(),
+        Some("claude-opus-4-8[1m]")
+    );
+    assert!(super::App::is_claude_effort_max_level("xhigh"));
+    assert!(super::App::is_claude_effort_max_level("max"));
 
     app.remote_provider_name = Some("openai".to_string());
     app.remote_provider_model = Some("gpt-5.5".to_string());

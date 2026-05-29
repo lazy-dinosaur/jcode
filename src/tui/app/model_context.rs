@@ -1140,6 +1140,35 @@ pub(super) fn handle_model_command(app: &mut App, trimmed: &str) -> bool {
 
     if let Some(level) = trimmed.strip_prefix("/effort ") {
         let level = level.trim();
+        if App::is_claude_effort_max_level(level)
+            && let Some(target_model) = app.active_claude_max_model()
+        {
+            match app.provider.set_model(&target_model) {
+                Ok(()) => {
+                    app.provider_session_id = None;
+                    app.session.provider_session_id = None;
+                    app.upstream_provider = None;
+                    app.invalidate_model_picker_cache();
+                    let active_model = app.provider.model();
+                    app.update_context_limit_for_model(&active_model);
+                    app.session.model = Some(active_model.clone());
+                    let _ = app.session.save();
+                    app.push_display_message(DisplayMessage::system(format!(
+                        "✓ Claude Max → {}",
+                        active_model
+                    )));
+                    app.set_status_notice(format!("Claude Max → {}", active_model));
+                }
+                Err(e) => {
+                    app.push_display_message(DisplayMessage::error(model_switch_failure_message(
+                        &e.to_string(),
+                        app.is_remote,
+                    )));
+                    app.set_status_notice("Claude Max switch failed");
+                }
+            }
+            return true;
+        }
         let efforts = app.active_reasoning_efforts();
         if !efforts.contains(&level) {
             let available = if efforts.is_empty() {

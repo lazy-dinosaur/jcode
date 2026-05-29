@@ -140,8 +140,55 @@ pub(crate) fn registered_command_names() -> Vec<&'static str> {
 }
 
 impl App {
+    pub(super) fn is_claude_effort_max_level(level: &str) -> bool {
+        matches!(level.trim().to_ascii_lowercase().as_str(), "xhigh" | "max")
+    }
+
+    pub(super) fn active_claude_max_model(&self) -> Option<String> {
+        let provider = if self.is_remote {
+            self.remote_provider_name.as_deref().unwrap_or_default()
+        } else {
+            self.provider.name()
+        }
+        .trim()
+        .to_ascii_lowercase();
+
+        let model = if self.is_remote {
+            self.remote_provider_model
+                .as_deref()
+                .or(self.session.model.as_deref())
+                .map(str::to_string)
+                .unwrap_or_else(|| self.provider.model())
+        } else {
+            self.provider.model()
+        };
+        let model = model.trim();
+        let model_without_route = model.rsplit('/').next().unwrap_or(model);
+        let normalized = model_without_route.replace('.', "-");
+        let is_claude = provider.contains("claude")
+            || provider.contains("anthropic")
+            || normalized.starts_with("claude-");
+        if !is_claude {
+            return None;
+        }
+
+        if normalized.ends_with("[1m]") {
+            Some(normalized)
+        } else if normalized.starts_with("claude-opus-4-")
+            || normalized.starts_with("claude-sonnet-4-6")
+            || normalized.starts_with("claude-sonnet-4-5")
+        {
+            Some(format!("{}[1m]", normalized))
+        } else {
+            None
+        }
+    }
+
     pub(super) fn active_reasoning_efforts(&self) -> Vec<&'static str> {
         if !self.is_remote {
+            if self.active_claude_max_model().is_some() {
+                return vec!["xhigh"];
+            }
             return self.provider.available_efforts();
         }
 
@@ -164,7 +211,11 @@ impl App {
             || model.starts_with("claude-")
             || model.starts_with("anthropic/")
         {
-            return Vec::new();
+            return if self.active_claude_max_model().is_some() {
+                vec!["xhigh"]
+            } else {
+                Vec::new()
+            };
         }
 
         if provider.contains("deepseek") || model.contains("deepseek") {

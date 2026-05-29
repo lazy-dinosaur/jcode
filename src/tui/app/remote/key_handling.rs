@@ -1022,6 +1022,21 @@ async fn handle_remote_key_internal(
                         app.push_display_message(DisplayMessage::error("Usage: /effort <level>"));
                         return Ok(());
                     }
+                    if app_mod::App::is_claude_effort_max_level(level)
+                        && let Some(target_model) = app.active_claude_max_model()
+                    {
+                        app.upstream_provider = None;
+                        remote.set_model(&target_model).await?;
+                        app.remote_model_switch_in_flight = true;
+                        app.remote_provider_model = Some(target_model.clone());
+                        app.invalidate_model_picker_cache();
+                        app.set_status_notice(format!("Claude Max → {}", target_model));
+                        app.push_display_message(DisplayMessage::system(format!(
+                            "✓ Claude Max → {}",
+                            target_model
+                        )));
+                        return Ok(());
+                    }
                     let efforts = app.active_reasoning_efforts();
                     if !efforts.contains(&level) {
                         let available = if efforts.is_empty() {
