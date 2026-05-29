@@ -258,9 +258,19 @@ pub(super) fn render_usage_bar(
             };
             let style = if idx >= label_start && idx < label_end {
                 if in_used {
-                    Style::default().fg(rgb(20, 30, 35)).bold()
+                    // The label character replaces the filled `█` cell rather
+                    // than drawing on top of it. Keep the colored cell as a
+                    // background, but render the number itself in the normal
+                    // bright label color so it stays readable on dark themes.
+                    Style::default()
+                        .fg(rgb(240, 240, 245))
+                        .bg(used_color)
+                        .bold()
                 } else {
-                    Style::default().fg(rgb(170, 170, 180)).bold()
+                    Style::default()
+                        .fg(rgb(220, 220, 230))
+                        .bg(rgb(50, 50, 60))
+                        .bold()
                 }
             } else if in_used {
                 Style::default().fg(used_color)

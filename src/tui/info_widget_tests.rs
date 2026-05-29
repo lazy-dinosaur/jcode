@@ -599,6 +599,29 @@ fn usage_bar_shows_centered_numeric_label_when_space_allows() {
 }
 
 #[test]
+fn usage_bar_numeric_label_keeps_contrast_when_over_filled_bar() {
+    let line = super::render_usage_bar(900_000, 1_000_000, 26);
+    let labeled_spans: Vec<_> = line
+        .spans
+        .iter()
+        .filter(|span| span.content.chars().any(|ch| ch.is_ascii_digit()))
+        .collect();
+
+    assert!(
+        !labeled_spans.is_empty(),
+        "expected numeric spans in usage bar"
+    );
+    assert!(
+        labeled_spans.iter().any(|span| span.style.bg.is_some()),
+        "numeric label spans over the filled bar should set a background for contrast: {labeled_spans:?}"
+    );
+    assert!(
+        labeled_spans.iter().any(|span| span.style.fg.is_some()),
+        "numeric label spans should keep an explicit bright foreground: {labeled_spans:?}"
+    );
+}
+
+#[test]
 fn usage_bar_omits_numeric_label_when_bar_too_narrow() {
     let line = super::render_usage_bar(200_000, 1_000_000, 10);
     let text: String = line
