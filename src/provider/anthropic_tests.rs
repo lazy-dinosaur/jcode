@@ -16,6 +16,87 @@ fn test_parse_sse_event() {
     assert!(buffer.is_empty());
 }
 
+#[test]
+fn anthropic_text_delta_suppresses_standalone_count_noise() {
+    let mut current_tool_use = None;
+    let mut input_tokens = None;
+    let mut output_tokens = None;
+    let mut cache_read_input_tokens = None;
+    let mut cache_creation_input_tokens = None;
+    let event = SseEvent {
+        event_type: "content_block_delta".to_string(),
+        data: r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"count\n\n"}}"#
+            .to_string(),
+    };
+
+    let events = process_sse_event(
+        &event,
+        &mut current_tool_use,
+        &mut input_tokens,
+        &mut output_tokens,
+        &mut cache_read_input_tokens,
+        &mut cache_creation_input_tokens,
+        true,
+    );
+
+    assert!(events.is_empty());
+}
+
+#[test]
+fn anthropic_text_delta_recovers_xml_invoke_tool_call() {
+    let mut current_tool_use = None;
+    let mut input_tokens = None;
+    let mut output_tokens = None;
+    let mut cache_read_input_tokens = None;
+    let mut cache_creation_input_tokens = None;
+    let event = SseEvent {
+        event_type: "content_block_delta".to_string(),
+        data: r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"<invoke name=\"read\"><parameter name=\"file_path\">Cargo.toml</parameter><parameter name=\"limit\">20</parameter></invoke>"}}"#
+            .to_string(),
+    };
+
+    let events = process_sse_event(
+        &event,
+        &mut current_tool_use,
+        &mut input_tokens,
+        &mut output_tokens,
+        &mut cache_read_input_tokens,
+        &mut cache_creation_input_tokens,
+        true,
+    );
+
+    assert!(matches!(
+        events.first(),
+        Some(StreamEvent::ToolUseStart { name, .. }) if name == "read"
+    ));
+    match events.get(1) {
+        Some(StreamEvent::ToolInputDelta(arguments)) => {
+            let arguments: Value = serde_json::from_str(arguments).expect("valid arguments");
+            assert_eq!(arguments["file_path"], "Cargo.toml");
+            assert_eq!(arguments["limit"], 20);
+        }
+        other => panic!("expected tool input delta, got {other:?}"),
+    }
+    assert!(matches!(events.get(2), Some(StreamEvent::ToolUseEnd)));
+}
+
+#[test]
+fn anthropic_text_delta_preserves_meaningful_prefix() {
+    let events = anthropic_text_or_recovered_tool_events(
+        "I'll inspect it. <invoke name=\"read\"><parameter name=\"file_path\">Cargo.toml</parameter></invoke>"
+            .to_string(),
+    );
+
+    assert!(matches!(
+        events.first(),
+        Some(StreamEvent::TextDelta(text)) if text == "I'll inspect it."
+    ));
+    assert!(matches!(
+        events.get(1),
+        Some(StreamEvent::ToolUseStart { name, .. }) if name == "read"
+    ));
+}
+
 #[tokio::test]
 async fn test_available_models() {
     let provider = AnthropicProvider::new();

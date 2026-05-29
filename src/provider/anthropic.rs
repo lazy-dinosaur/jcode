@@ -1834,6 +1834,170 @@ struct SseEvent {
     data: String,
 }
 
+fn anthropic_text_or_recovered_tool_events(text: String) -> Vec<StreamEvent> {
+    if text.trim().is_empty() {
+        return Vec::new();
+    }
+
+    if is_count_wrapper_noise(&text) {
+        return Vec::new();
+    }
+
+    if let Some((prefix, tool_name, arguments, suffix)) = parse_xml_wrapped_tool_call(&text) {
+        crate::logging::warn(&format!(
+            "[anthropic] Recovered XML text-wrapped tool call for '{}'",
+            tool_name
+        ));
+        let mut events = Vec::new();
+        if !prefix.is_empty() {
+            events.push(StreamEvent::TextDelta(prefix));
+        }
+        events.push(StreamEvent::ToolUseStart {
+            id: format!("fallback_xml_call_{}", Uuid::new_v4()),
+            name: tool_name,
+        });
+        events.push(StreamEvent::ToolInputDelta(arguments.to_string()));
+        events.push(StreamEvent::ToolUseEnd);
+        if !suffix.is_empty() {
+            events.push(StreamEvent::TextDelta(suffix));
+        }
+        return events;
+    }
+
+    vec![StreamEvent::TextDelta(text)]
+}
+
+fn is_count_wrapper_noise(text: &str) -> bool {
+    let trimmed = text.trim();
+    !trimmed.is_empty()
+        && trimmed
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .all(|line| line.eq_ignore_ascii_case("count"))
+}
+
+fn parse_xml_wrapped_tool_call(text: &str) -> Option<(String, String, Value, String)> {
+    let invoke_start = text.find("<invoke")?;
+    let tag_end_rel = text[invoke_start..].find('>')?;
+    let open_tag_end = invoke_start + tag_end_rel + 1;
+    let open_tag = &text[invoke_start..open_tag_end];
+    let tool_name = parse_xml_attr(open_tag, "name")?;
+    let tool_name = tool_name
+        .strip_prefix("functions.")
+        .or_else(|| tool_name.strip_prefix("tools."))
+        .unwrap_or(&tool_name)
+        .to_string();
+    if tool_name.trim().is_empty() {
+        return None;
+    }
+
+    let close_tag = "</invoke>";
+    let close_rel = text[open_tag_end..].find(close_tag);
+    let close_start = close_rel
+        .map(|rel| open_tag_end + rel)
+        .unwrap_or_else(|| text.len());
+    let inner = &text[open_tag_end..close_start];
+    let after_close = close_rel
+        .map(|_| close_start + close_tag.len())
+        .unwrap_or(close_start);
+
+    let arguments = parse_xml_invoke_arguments(inner)?;
+    let prefix = sanitize_recovered_tool_prefix(&text[..invoke_start]);
+    let suffix = text[after_close..].trim().to_string();
+    Some((prefix, tool_name, arguments, suffix))
+}
+
+fn sanitize_recovered_tool_prefix(prefix: &str) -> String {
+    let trimmed = prefix.trim();
+    if trimmed.is_empty() || is_count_wrapper_noise(trimmed) {
+        String::new()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn parse_xml_attr(tag: &str, attr: &str) -> Option<String> {
+    let mut search_start = 0usize;
+    while let Some(rel_idx) = tag[search_start..].find(attr) {
+        let idx = search_start + rel_idx;
+        let before_ok = idx == 0
+            || tag[..idx]
+                .chars()
+                .next_back()
+                .is_some_and(|ch| ch.is_whitespace() || ch == '<');
+        let after_attr = &tag[idx + attr.len()..];
+        let after_eq = after_attr.trim_start();
+        if !before_ok || !after_eq.starts_with('=') {
+            search_start = idx + attr.len();
+            continue;
+        }
+        let value = after_eq[1..].trim_start();
+        let quote = value.chars().next()?;
+        let quote = match quote {
+            '"' | '\'' => quote,
+            '“' | '”' => '”',
+            '‘' | '’' => '’',
+            _ => return None,
+        };
+        let value_body = &value[value.chars().next()?.len_utf8()..];
+        let end = value_body.find(quote)?;
+        return Some(xml_unescape(&value_body[..end]));
+    }
+
+    None
+}
+
+fn parse_xml_invoke_arguments(inner: &str) -> Option<Value> {
+    let trimmed = inner.trim();
+    if trimmed.starts_with('{') {
+        if let Ok(value) = serde_json::from_str::<Value>(trimmed)
+            && value.is_object()
+        {
+            return Some(value);
+        }
+    }
+
+    let mut map = serde_json::Map::new();
+    let mut cursor = 0usize;
+    while let Some(param_rel) = inner[cursor..].find("<parameter") {
+        let param_start = cursor + param_rel;
+        let tag_end_rel = inner[param_start..].find('>')?;
+        let open_tag_end = param_start + tag_end_rel + 1;
+        let open_tag = &inner[param_start..open_tag_end];
+        let name = parse_xml_attr(open_tag, "name")?;
+        let close_tag = "</parameter>";
+        let close_rel = inner[open_tag_end..].find(close_tag)?;
+        let close_start = open_tag_end + close_rel;
+        let raw_value = inner[open_tag_end..close_start].trim();
+        map.insert(name, xml_parameter_value(raw_value));
+        cursor = close_start + close_tag.len();
+    }
+
+    if map.is_empty() {
+        None
+    } else {
+        Some(Value::Object(map))
+    }
+}
+
+fn xml_parameter_value(raw: &str) -> Value {
+    let unescaped = xml_unescape(raw);
+    let trimmed = unescaped.trim();
+    if trimmed.is_empty() {
+        return Value::String(String::new());
+    }
+    serde_json::from_str::<Value>(trimmed).unwrap_or_else(|_| Value::String(unescaped))
+}
+
+fn xml_unescape(raw: &str) -> String {
+    raw.replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+}
+
 /// Process an SSE event and return StreamEvents if applicable
 fn process_sse_event(
     event: &SseEvent,
@@ -1885,7 +2049,7 @@ fn process_sse_event(
             if let Ok(parsed) = serde_json::from_str::<ContentBlockDeltaEvent>(&event.data) {
                 match parsed.delta {
                     ApiDelta::TextDelta { text } => {
-                        events.push(StreamEvent::TextDelta(text));
+                        events.extend(anthropic_text_or_recovered_tool_events(text));
                     }
                     ApiDelta::InputJsonDelta { partial_json } => {
                         if let Some(tool) = current_tool_use {
