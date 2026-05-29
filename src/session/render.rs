@@ -34,6 +34,16 @@ fn stored_message_renders_visible_message(msg: &super::StoredMessage) -> bool {
     })
 }
 
+fn is_count_wrapper_noise(text: &str) -> bool {
+    let trimmed = text.trim();
+    !trimmed.is_empty()
+        && trimmed
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .all(|line| line.eq_ignore_ascii_case("count"))
+}
+
 fn compacted_history_render_window(
     messages: &[super::StoredMessage],
     compacted_count: usize,
@@ -266,6 +276,9 @@ pub fn render_messages_and_images_with_compacted_history(
         for block in &msg.content {
             match block {
                 ContentBlock::Text { text: t, .. } => {
+                    if is_count_wrapper_noise(t) {
+                        continue;
+                    }
                     text.push_str(t);
                     if let Some(label) = parse_attached_image_label(t)
                         && let Some(last_idx) = last_image_idx
@@ -334,7 +347,7 @@ pub fn render_messages_and_images_with_compacted_history(
             }
         }
 
-        if !text.is_empty() {
+        if !text.is_empty() && !is_count_wrapper_noise(&text) {
             rendered.push(RenderedMessage {
                 role: role.to_string(),
                 content: text,
@@ -345,4 +358,24 @@ pub fn render_messages_and_images_with_compacted_history(
     }
 
     (rendered, images, compacted_info)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_count_wrapper_noise;
+
+    #[test]
+    fn count_wrapper_noise_detects_repeated_count_lines() {
+        assert!(is_count_wrapper_noise("count"));
+        assert!(is_count_wrapper_noise("count\n\ncount\n"));
+        assert!(is_count_wrapper_noise("  COUNT  \n\tcount"));
+    }
+
+    #[test]
+    fn count_wrapper_noise_preserves_meaningful_text() {
+        assert!(!is_count_wrapper_noise(""));
+        assert!(!is_count_wrapper_noise("count files"));
+        assert!(!is_count_wrapper_noise("I'll count it."));
+        assert!(!is_count_wrapper_noise("count\nthen inspect"));
+    }
 }

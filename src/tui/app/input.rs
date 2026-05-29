@@ -2151,6 +2151,9 @@ impl App {
         if text.is_empty() {
             return;
         }
+        if is_count_wrapper_noise(text) {
+            return;
+        }
         self.streaming_text.push_str(text);
         self.refresh_split_view_if_needed();
     }
@@ -2655,4 +2658,14 @@ impl App {
             }
         }
     }
+}
+
+fn is_count_wrapper_noise(text: &str) -> bool {
+    let trimmed = text.trim();
+    !trimmed.is_empty()
+        && trimmed
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .all(|line| line.eq_ignore_ascii_case("count"))
 }
