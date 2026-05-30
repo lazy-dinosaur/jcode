@@ -508,6 +508,47 @@ fn test_prepare_body_preserves_list_item_title_continuation_break() {
 }
 
 #[test]
+fn test_prepare_body_does_not_glue_nested_bullet_to_next_numbered_item() {
+    let state = TestState {
+        display_messages: vec![DisplayMessage::assistant(
+            "1. **실제 긴 세션에서 체감 확인**\n   - 스크롤 밀림\n   - input 밀림\n   - markdown 재깨짐 여부 - TPS/frame latency\n2. **cache 효과 계측**\n   - body cache hit/miss\n   - incremental reuse 비율\n   - markdown render 시간이 아직 큰지\n3. **RAM cap 조정**",
+        )],
+        messages_version: 1,
+        ..Default::default()
+    };
+
+    let prepared = super::prepare::prepare_body(&state, 220, false);
+    let lines = prepared.wrapped_plain_lines.as_ref();
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.trim_start().starts_with("• markdown 재깨짐 여부 - TPS/frame latency")),
+        "last nested bullet should render separately: {lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.trim_start().starts_with("2. cache 효과 계측")),
+        "next numbered item should render separately: {lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.trim_start().starts_with("3. RAM cap 조정")),
+        "third numbered item should render separately: {lines:?}"
+    );
+    assert!(
+        lines.iter().all(|line| {
+            !line.contains("latency2.")
+                && !line.contains("큰지3.")
+                && !line.contains("추가4.")
+        }),
+        "TUI body wrapping must not glue numbered markers after nested bullets: {lines:?}"
+    );
+}
+
+#[test]
 fn test_tail_update_incremental_body_matches_full_rebuild() {
     let width = 80;
     let old_state = TestState {

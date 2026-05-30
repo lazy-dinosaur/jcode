@@ -204,6 +204,50 @@ fn test_ordered_list_item_continuation_line_preserves_visible_break() {
 }
 
 #[test]
+fn test_nested_bullets_do_not_glue_to_next_numbered_item() {
+    let md = "1. **실제 긴 세션에서 체감 확인**\n   - 스크롤 밀림\n   - input 밀림\n   - markdown 재깨짐 여부 - TPS/frame latency\n2. **cache 효과 계측**\n   - body cache hit/miss\n   - incremental reuse 비율\n   - markdown render 시간이 아직 큰지\n3. **RAM cap 조정**";
+    let rendered: Vec<String> = render_markdown_with_width(md, Some(180))
+        .iter()
+        .map(line_to_string)
+        .collect();
+
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("1. 실제 긴 세션에서 체감 확인")),
+        "first numbered item should render: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line
+                .trim_start()
+                .starts_with("• markdown 재깨짐 여부 - TPS/frame latency")),
+        "last nested bullet should render separately: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("2. cache 효과 계측")),
+        "second numbered item should not glue to previous bullet: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("3. RAM cap 조정")),
+        "third numbered item should not glue to previous bullet: {rendered:?}"
+    );
+    assert!(
+        rendered.iter().all(|line| {
+            !line.contains("latency2.")
+                && !line.contains("큰지3.")
+                && !line.contains("추가4.")
+        }),
+        "numbered markers must not be glued after nested bullets: {rendered:?}"
+    );
+}
+
+#[test]
 fn test_paragraph_to_fenced_code_block_starts_on_new_line_without_blank_source_line() {
     let md = "로그 추가:\n```js\nconsole.log('badge')\n```";
     let rendered: Vec<String> = render_markdown_with_width(md, Some(96))
