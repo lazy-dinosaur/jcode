@@ -97,6 +97,7 @@ fn test_active_file_diff_context_resolves_visible_edit() {
         wrapped_user_indices: Vec::new(),
         wrapped_user_prompt_starts: Vec::new(),
         wrapped_user_prompt_ends: Vec::new(),
+        message_wrapped_starts: Vec::new(),
         user_prompt_texts: Vec::new(),
         image_regions: Vec::new(),
         edit_tool_ranges: vec![

@@ -218,6 +218,7 @@ fn empty_prepared_messages() -> PreparedMessages {
         wrapped_user_indices: Vec::new(),
         wrapped_user_prompt_starts: Vec::new(),
         wrapped_user_prompt_ends: Vec::new(),
+        message_wrapped_starts: Vec::new(),
         user_prompt_texts: Vec::new(),
         image_regions: Vec::new(),
         edit_tool_ranges: Vec::new(),
@@ -340,7 +341,7 @@ fn prepare_active_batch_progress(
         super::left_pad_lines_to_block_width(&mut lines, width, block_width);
     }
 
-    wrap_lines_with_map(lines, &[], &[], &[], &[], &[], width, &[], &[])
+    wrap_lines_with_map(lines, &[], &[], &[], &[], &[], &[], width, &[], &[])
 }
 
 pub(super) fn prepare_messages(
@@ -509,6 +510,7 @@ fn prepare_messages_inner(app: &dyn TuiState, width: u16, height: u16) -> Prepar
             wrapped_user_indices: Vec::new(),
             wrapped_user_prompt_starts: Vec::new(),
             wrapped_user_prompt_ends: Vec::new(),
+            message_wrapped_starts: Vec::new(),
             user_prompt_texts: Vec::new(),
             image_regions: Vec::new(),
             edit_tool_ranges: Vec::new(),
@@ -560,9 +562,38 @@ fn prepare_body_cached(app: &dyn TuiState, width: u16) -> Arc<PreparedMessages> 
     }
 
     super::note_body_cache_miss();
+    drop(cache);
 
-    let incremental_base = cache.take_best_incremental_base(&key, msg_count);
+    let message_hashes: Arc<[u64]> = app
+        .display_messages()
+        .iter()
+        .map(DisplayMessage::stable_cache_hash)
+        .collect::<Vec<_>>()
+        .into();
 
+    let lock_start = Instant::now();
+    let mut cache = match body_cache().lock() {
+        Ok(c) => c,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    super::note_body_lock_wait(lock_start.elapsed());
+
+    let incremental_base = cache
+        .take_best_incremental_base(&key, msg_count, &message_hashes)
+        .or_else(|| {
+            let last_role = app
+                .display_messages()
+                .last()
+                .map(|message| message.effective_role());
+            if matches!(
+                last_role,
+                Some("tool" | "system" | "error" | "background_task" | "meta")
+            ) {
+                cache.take_tail_update_base(&key, msg_count, &message_hashes)
+            } else {
+                None
+            }
+        });
     drop(cache);
 
     let prepared = if let Some((prev, prev_count)) = incremental_base {
@@ -580,7 +611,7 @@ fn prepare_body_cached(app: &dyn TuiState, width: u16) -> Arc<PreparedMessages> 
         Err(poisoned) => poisoned.into_inner(),
     };
     super::note_body_lock_wait(lock_start.elapsed());
-    cache.insert(key, prepared.clone(), msg_count);
+    cache.insert_with_message_hashes(key, prepared.clone(), msg_count, message_hashes);
     prepared
 }
 
@@ -620,10 +651,12 @@ pub(super) fn prepare_body_incremental(
     let mut new_raw_plain_lines: Vec<String> = Vec::new();
     let mut new_line_raw_overrides: Vec<Option<WrappedLineMap>> = Vec::new();
     let mut new_line_copy_offsets: Vec<usize> = Vec::new();
+    let mut new_message_line_starts: Vec<usize> = Vec::with_capacity(new_messages.len() + 1);
 
     let body_has_content = !prev.wrapped_lines.is_empty();
 
     for (new_msg_offset, msg) in new_messages.iter().enumerate() {
+        new_message_line_starts.push(new_lines.len());
         let role = msg.effective_role();
         if (body_has_content || !new_lines.is_empty()) && role != "tool" && role != "meta" {
             new_lines.push(Line::from(""));
@@ -895,6 +928,7 @@ pub(super) fn prepare_body_incremental(
             _ => {}
         }
     }
+    new_message_line_starts.push(new_lines.len());
 
     let new_wrapped = wrap_lines_with_map(
         new_lines,
@@ -903,6 +937,7 @@ pub(super) fn prepare_body_incremental(
         &new_line_copy_offsets,
         &new_user_line_indices,
         &new_user_prompt_texts,
+        &new_message_line_starts,
         width,
         &new_edit_tool_line_ranges,
         &new_copy_targets,
@@ -949,6 +984,24 @@ pub(super) fn prepare_body_incremental(
             .into_iter()
             .map(|idx| idx + prev_len),
     );
+    if prepared.message_wrapped_starts.len() == prev_msg_count + 1 {
+        prepared.message_wrapped_starts.extend(
+            new_wrapped
+                .message_wrapped_starts
+                .into_iter()
+                .skip(1)
+                .map(|idx| idx + prev_len),
+        );
+    } else if prev_msg_count == 0 && prepared.message_wrapped_starts.is_empty() {
+        prepared.message_wrapped_starts.extend(
+            new_wrapped
+                .message_wrapped_starts
+                .into_iter()
+                .map(|idx| idx + prev_len),
+        );
+    } else {
+        prepared.message_wrapped_starts.clear();
+    }
     prepared
         .user_prompt_texts
         .extend(new_wrapped.user_prompt_texts);
@@ -1009,6 +1062,7 @@ fn prepare_streaming_cached(
             wrapped_user_indices: Vec::new(),
             wrapped_user_prompt_starts: Vec::new(),
             wrapped_user_prompt_ends: Vec::new(),
+            message_wrapped_starts: Vec::new(),
             user_prompt_texts: Vec::new(),
             image_regions: Vec::new(),
             edit_tool_ranges: Vec::new(),
@@ -1059,6 +1113,7 @@ pub(super) fn prepare_body(
     let mut user_prompt_texts: Vec<String> = Vec::new();
     let mut edit_tool_line_ranges: Vec<(usize, String, usize, usize)> = Vec::new();
     let mut copy_targets: Vec<RawCopyTarget> = Vec::new();
+    let mut message_line_starts: Vec<usize> = Vec::with_capacity(app.display_messages().len() + 1);
     let centered = app.centered_mode();
     markdown::set_center_code_blocks(centered);
     let display_width = width.saturating_sub(4) as usize;
@@ -1067,6 +1122,7 @@ pub(super) fn prepare_body(
     let pending_count = input_ui::pending_prompt_count(app);
 
     for (msg_idx, msg) in app.display_messages().iter().enumerate() {
+        message_line_starts.push(lines.len());
         let role = msg.effective_role();
         let align = default_message_alignment(role, centered);
         if !lines.is_empty() && role != "tool" && role != "meta" && role != "swarm" {
@@ -1367,6 +1423,7 @@ pub(super) fn prepare_body(
             _ => {}
         }
     }
+    message_line_starts.push(lines.len());
 
     if include_streaming && app.is_processing() && !app.streaming_text().is_empty() {
         if !lines.is_empty() {
@@ -1398,6 +1455,7 @@ pub(super) fn prepare_body(
         &line_copy_offsets,
         &user_line_indices,
         &user_prompt_texts,
+        &message_line_starts,
         width,
         &edit_tool_line_ranges,
         &copy_targets,
@@ -1416,6 +1474,7 @@ fn wrap_lines(
     let mut wrapped_user_indices: Vec<usize> = Vec::new();
     let mut wrapped_user_prompt_starts: Vec<usize> = Vec::new();
     let mut wrapped_user_prompt_ends: Vec<usize> = Vec::new();
+    let message_wrapped_starts: Vec<usize> = Vec::new();
     let mut raw_plain_lines: Vec<String> = Vec::with_capacity(lines.len());
     let mut wrapped_line_map: Vec<WrappedLineMap> = Vec::new();
     let mut wrapped_copy_offsets: Vec<usize> = Vec::new();
@@ -1497,6 +1556,7 @@ fn wrap_lines(
         wrapped_user_indices,
         wrapped_user_prompt_starts,
         wrapped_user_prompt_ends,
+        message_wrapped_starts,
         user_prompt_texts: user_prompt_texts.to_vec(),
         image_regions,
         edit_tool_ranges: Vec::new(),
@@ -1515,6 +1575,7 @@ fn wrap_lines_with_map(
     line_copy_offsets: &[usize],
     user_line_indices: &[usize],
     user_prompt_texts: &[String],
+    message_line_starts: &[usize],
     width: u16,
     edit_ranges: &[(usize, String, usize, usize)],
     copy_ranges: &[RawCopyTarget],
@@ -1524,6 +1585,7 @@ fn wrap_lines_with_map(
     let mut wrapped_user_indices: Vec<usize> = Vec::new();
     let mut wrapped_user_prompt_starts: Vec<usize> = Vec::new();
     let mut wrapped_user_prompt_ends: Vec<usize> = Vec::new();
+    let mut message_wrapped_starts: Vec<usize> = Vec::with_capacity(message_line_starts.len());
     let mut raw_plain_lines: Vec<String> = seeded_raw_plain_lines.to_vec();
     let mut wrapped_line_map: Vec<WrappedLineMap> = Vec::new();
     let mut wrapped_copy_offsets: Vec<usize> = Vec::new();
@@ -1582,6 +1644,14 @@ fn wrap_lines_with_map(
         wrapped_idx += count;
     }
     raw_to_wrapped.push(wrapped_idx);
+    for &line_start in message_line_starts {
+        message_wrapped_starts.push(
+            raw_to_wrapped
+                .get(line_start)
+                .copied()
+                .unwrap_or(wrapped_lines.len()),
+        );
+    }
 
     let mut image_regions = Vec::new();
     for (idx, line) in wrapped_lines.iter().enumerate() {
@@ -1655,6 +1725,7 @@ fn wrap_lines_with_map(
         wrapped_user_indices,
         wrapped_user_prompt_starts,
         wrapped_user_prompt_ends,
+        message_wrapped_starts,
         user_prompt_texts: user_prompt_texts.to_vec(),
         image_regions,
         edit_tool_ranges,

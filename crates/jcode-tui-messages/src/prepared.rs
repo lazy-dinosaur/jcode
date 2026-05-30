@@ -46,6 +46,10 @@ pub struct PreparedMessages {
     pub wrapped_user_prompt_starts: Vec<usize>,
     /// Wrapped line indices where a user prompt line ends, exclusive.
     pub wrapped_user_prompt_ends: Vec<usize>,
+    /// Wrapped line boundaries for display messages in this prepared body.
+    /// Length is message_count + 1 when available. Entry N is the wrapped line
+    /// index where message N starts, and the final entry is the end boundary.
+    pub message_wrapped_starts: Vec<usize>,
     /// Flattened user prompt text in display order, used by prompt preview without
     /// scanning display_messages on every frame.
     pub user_prompt_texts: Vec<String>,

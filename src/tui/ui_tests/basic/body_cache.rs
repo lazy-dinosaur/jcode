@@ -1,3 +1,15 @@
+fn test_hashes(values: &[u64]) -> Arc<[u64]> {
+    values.to_vec().into()
+}
+
+fn display_message_hashes(messages: &[DisplayMessage]) -> Arc<[u64]> {
+    messages
+        .iter()
+        .map(DisplayMessage::stable_cache_hash)
+        .collect::<Vec<_>>()
+        .into()
+}
+
 #[test]
 fn test_body_cache_state_keeps_multiple_width_entries() {
     let key_a = BodyCacheKey {
@@ -23,6 +35,7 @@ fn test_body_cache_state_keeps_multiple_width_entries() {
         wrapped_user_indices: Vec::new(),
         wrapped_user_prompt_starts: Vec::new(),
         wrapped_user_prompt_ends: Vec::new(),
+        message_wrapped_starts: Vec::new(),
         user_prompt_texts: Vec::new(),
         image_regions: Vec::new(),
         edit_tool_ranges: Vec::new(),
@@ -37,6 +50,7 @@ fn test_body_cache_state_keeps_multiple_width_entries() {
         wrapped_user_indices: Vec::new(),
         wrapped_user_prompt_starts: Vec::new(),
         wrapped_user_prompt_ends: Vec::new(),
+        message_wrapped_starts: Vec::new(),
         user_prompt_texts: Vec::new(),
         image_regions: Vec::new(),
         edit_tool_ranges: Vec::new(),
@@ -81,6 +95,7 @@ fn test_body_cache_state_evicts_oldest_entries() {
             wrapped_user_indices: Vec::new(),
             wrapped_user_prompt_starts: Vec::new(),
             wrapped_user_prompt_ends: Vec::new(),
+            message_wrapped_starts: Vec::new(),
             user_prompt_texts: Vec::new(),
             image_regions: Vec::new(),
             edit_tool_ranges: Vec::new(),
@@ -118,6 +133,107 @@ fn test_body_cache_state_accepts_large_single_entry_within_total_budget() {
         .get_exact(&key)
         .expect("expected large body cache entry to be retained");
     assert!(Arc::ptr_eq(&hit, &prepared));
+}
+
+#[test]
+fn test_body_cache_state_reuses_prefix_when_last_message_updates() {
+    let key_v1 = BodyCacheKey {
+        session_id: Some("session-a".to_string()),
+        width: 120,
+        diff_mode: crate::config::DiffDisplayMode::Off,
+        messages_version: 1,
+        diagram_mode: crate::config::DiagramDisplayMode::Pinned,
+        centered: false,
+    };
+    let key_v2 = BodyCacheKey {
+        messages_version: 2,
+        ..key_v1.clone()
+    };
+    let prepared = Arc::new(PreparedMessages {
+        wrapped_lines: vec![Line::from("first"), Line::from("tail")],
+        wrapped_plain_lines: Arc::new(vec!["first".to_string(), "tail".to_string()]),
+        wrapped_copy_offsets: Arc::new(vec![0, 0]),
+        raw_plain_lines: Arc::new(vec!["first".to_string(), "tail".to_string()]),
+        wrapped_line_map: Arc::new(vec![
+            WrappedLineMap {
+                raw_line: 0,
+                start_col: 0,
+                end_col: 5,
+            },
+            WrappedLineMap {
+                raw_line: 1,
+                start_col: 0,
+                end_col: 4,
+            },
+        ]),
+        wrapped_user_indices: Vec::new(),
+        wrapped_user_prompt_starts: Vec::new(),
+        wrapped_user_prompt_ends: Vec::new(),
+        message_wrapped_starts: vec![0, 1, 2],
+        user_prompt_texts: Vec::new(),
+        image_regions: Vec::new(),
+        edit_tool_ranges: Vec::new(),
+        copy_targets: Vec::new(),
+    });
+
+    let mut cache = BodyCacheState::default();
+    cache.insert_with_message_hashes(key_v1, prepared, 2, test_hashes(&[11, 22]));
+
+    let (prefix, prefix_count) = cache
+        .take_tail_update_base(&key_v2, 2, &[11, 33])
+        .expect("same-count entry should provide prefix base");
+    assert_eq!(prefix_count, 1);
+    assert_eq!(prefix.wrapped_lines.len(), 1);
+    assert_eq!(prefix.raw_plain_lines.len(), 1);
+    assert_eq!(prefix.message_wrapped_starts, vec![0, 1]);
+    assert_eq!(super::line_plain_text(&prefix.wrapped_lines[0]), "first");
+}
+
+#[test]
+fn test_body_cache_state_rejects_tail_update_when_prefix_hash_changes() {
+    let key_v1 = BodyCacheKey {
+        session_id: Some("session-a".to_string()),
+        width: 120,
+        diff_mode: crate::config::DiffDisplayMode::Off,
+        messages_version: 1,
+        diagram_mode: crate::config::DiagramDisplayMode::Pinned,
+        centered: false,
+    };
+    let key_v2 = BodyCacheKey {
+        messages_version: 2,
+        ..key_v1.clone()
+    };
+    let prepared = Arc::new(PreparedMessages {
+        wrapped_lines: vec![Line::from("first"), Line::from("tail")],
+        wrapped_plain_lines: Arc::new(vec!["first".to_string(), "tail".to_string()]),
+        wrapped_copy_offsets: Arc::new(vec![0, 0]),
+        raw_plain_lines: Arc::new(vec!["first".to_string(), "tail".to_string()]),
+        wrapped_line_map: Arc::new(vec![
+            WrappedLineMap {
+                raw_line: 0,
+                start_col: 0,
+                end_col: 5,
+            },
+            WrappedLineMap {
+                raw_line: 1,
+                start_col: 0,
+                end_col: 4,
+            },
+        ]),
+        wrapped_user_indices: Vec::new(),
+        wrapped_user_prompt_starts: Vec::new(),
+        wrapped_user_prompt_ends: Vec::new(),
+        message_wrapped_starts: vec![0, 1, 2],
+        user_prompt_texts: Vec::new(),
+        image_regions: Vec::new(),
+        edit_tool_ranges: Vec::new(),
+        copy_targets: Vec::new(),
+    });
+
+    let mut cache = BodyCacheState::default();
+    cache.insert_with_message_hashes(key_v1, prepared, 2, test_hashes(&[11, 22]));
+
+    assert!(cache.take_tail_update_base(&key_v2, 2, &[99, 22]).is_none());
 }
 
 #[test]
@@ -242,6 +358,75 @@ fn test_prepare_body_incremental_reuses_unique_prepared_arc() {
         incremented.wrapped_lines.len() >= 4,
         "expected incremental prep to append new wrapped content"
     );
+    assert_eq!(
+        incremented.message_wrapped_starts.len(),
+        grown_state.display_messages.len() + 1,
+        "incremental prep should retain message boundaries for later tail updates"
+    );
+    assert_eq!(
+        incremented.message_wrapped_starts.last().copied(),
+        Some(incremented.wrapped_lines.len())
+    );
+}
+
+#[test]
+fn test_tail_update_incremental_body_matches_full_rebuild() {
+    let width = 80;
+    let old_state = TestState {
+        display_messages: vec![
+            DisplayMessage::user("first prompt"),
+            DisplayMessage::system("tool still running"),
+        ],
+        messages_version: 1,
+        ..Default::default()
+    };
+    let updated_state = TestState {
+        display_messages: vec![
+            DisplayMessage::user("first prompt"),
+            DisplayMessage::system("tool finished"),
+        ],
+        messages_version: 2,
+        ..Default::default()
+    };
+    let key_v1 = BodyCacheKey {
+        session_id: None,
+        width,
+        diff_mode: crate::config::DiffDisplayMode::Off,
+        messages_version: old_state.messages_version,
+        diagram_mode: crate::config::DiagramDisplayMode::Pinned,
+        centered: false,
+    };
+    let key_v2 = BodyCacheKey {
+        messages_version: updated_state.messages_version,
+        ..key_v1.clone()
+    };
+
+    let old_prepared = Arc::new(super::prepare::prepare_body(&old_state, width, false));
+    let full_rebuild = super::prepare::prepare_body(&updated_state, width, false);
+    let old_hashes = display_message_hashes(&old_state.display_messages);
+    let updated_hashes = display_message_hashes(&updated_state.display_messages);
+    let mut cache = BodyCacheState::default();
+    cache.insert_with_message_hashes(
+        key_v1,
+        old_prepared,
+        old_state.display_messages.len(),
+        old_hashes,
+    );
+
+    let (prefix, prefix_count) = cache
+        .take_tail_update_base(&key_v2, updated_state.display_messages.len(), &updated_hashes)
+        .expect("expected same-count cache entry to provide reusable prefix");
+    let incremented =
+        super::prepare::prepare_body_incremental(&updated_state, width, prefix, prefix_count);
+
+    assert_eq!(
+        incremented.wrapped_plain_lines.as_ref(),
+        full_rebuild.wrapped_plain_lines.as_ref()
+    );
+    assert_eq!(
+        incremented.message_wrapped_starts,
+        full_rebuild.message_wrapped_starts
+    );
 }
 
 #[test]
@@ -274,6 +459,7 @@ fn test_full_prep_cache_state_keeps_multiple_width_entries() {
         wrapped_user_indices: Vec::new(),
         wrapped_user_prompt_starts: Vec::new(),
         wrapped_user_prompt_ends: Vec::new(),
+        message_wrapped_starts: Vec::new(),
         user_prompt_texts: Vec::new(),
         image_regions: Vec::new(),
         edit_tool_ranges: Vec::new(),
@@ -288,6 +474,7 @@ fn test_full_prep_cache_state_keeps_multiple_width_entries() {
         wrapped_user_indices: Vec::new(),
         wrapped_user_prompt_starts: Vec::new(),
         wrapped_user_prompt_ends: Vec::new(),
+        message_wrapped_starts: Vec::new(),
         user_prompt_texts: Vec::new(),
         image_regions: Vec::new(),
         edit_tool_ranges: Vec::new(),
@@ -337,6 +524,7 @@ fn test_full_prep_cache_state_evicts_oldest_entries() {
             wrapped_user_indices: Vec::new(),
             wrapped_user_prompt_starts: Vec::new(),
             wrapped_user_prompt_ends: Vec::new(),
+            message_wrapped_starts: Vec::new(),
             user_prompt_texts: Vec::new(),
             image_regions: Vec::new(),
             edit_tool_ranges: Vec::new(),

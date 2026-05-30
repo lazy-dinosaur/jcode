@@ -631,6 +631,7 @@ struct BodyCacheEntry {
     prepared: Arc<PreparedMessages>,
     prepared_bytes: usize,
     msg_count: usize,
+    message_hashes: Arc<[u64]>,
 }
 
 const BODY_CACHE_MAX_ENTRIES: usize = 12;
@@ -693,6 +694,7 @@ impl BodyCacheState {
                     && entry.key.diff_mode == key.diff_mode
                     && entry.key.diagram_mode == key.diagram_mode
                     && entry.key.centered == key.centered
+                    && message_hash_prefix_matches(&entry.message_hashes, &[], entry.msg_count)
             })
             .max_by_key(|entry| entry.msg_count)
             .map(|entry| (entry.prepared.clone(), entry.msg_count));
@@ -707,6 +709,7 @@ impl BodyCacheState {
                     && entry.key.diff_mode == key.diff_mode
                     && entry.key.diagram_mode == key.diagram_mode
                     && entry.key.centered == key.centered
+                    && message_hash_prefix_matches(&entry.message_hashes, &[], entry.msg_count)
             })
             .max_by_key(|entry| entry.msg_count)
             .map(|entry| (entry.prepared.clone(), entry.msg_count));
@@ -728,6 +731,7 @@ impl BodyCacheState {
         &mut self,
         key: &BodyCacheKey,
         msg_count: usize,
+        message_hashes: &[u64],
     ) -> Option<(Arc<PreparedMessages>, usize)> {
         let regular = self
             .entries
@@ -741,6 +745,11 @@ impl BodyCacheState {
                     && entry.key.diff_mode == key.diff_mode
                     && entry.key.diagram_mode == key.diagram_mode
                     && entry.key.centered == key.centered
+                    && message_hash_prefix_matches(
+                        &entry.message_hashes,
+                        message_hashes,
+                        entry.msg_count,
+                    )
             })
             .max_by_key(|(_, entry)| entry.msg_count)
             .map(|(idx, entry)| (false, idx, entry.msg_count));
@@ -756,6 +765,11 @@ impl BodyCacheState {
                     && entry.key.diff_mode == key.diff_mode
                     && entry.key.diagram_mode == key.diagram_mode
                     && entry.key.centered == key.centered
+                    && message_hash_prefix_matches(
+                        &entry.message_hashes,
+                        message_hashes,
+                        entry.msg_count,
+                    )
             })
             .max_by_key(|(_, entry)| entry.msg_count)
             .map(|(idx, entry)| (true, idx, entry.msg_count));
@@ -781,10 +795,87 @@ impl BodyCacheState {
         Some((entry.prepared, msg_count))
     }
 
-    fn insert(&mut self, key: BodyCacheKey, prepared: Arc<PreparedMessages>, msg_count: usize) {
-        self.insert_with_budget(key, prepared, msg_count, BODY_CACHE_MAX_BYTES);
+    fn take_tail_update_base(
+        &mut self,
+        key: &BodyCacheKey,
+        msg_count: usize,
+        message_hashes: &[u64],
+    ) -> Option<(Arc<PreparedMessages>, usize)> {
+        if msg_count == 0 {
+            return None;
+        }
+        let prefix_count = msg_count.saturating_sub(1);
+
+        let regular = self
+            .entries
+            .iter()
+            .enumerate()
+            .find(|(_, entry)| {
+                entry.msg_count == msg_count
+                    && entry.key.session_id == key.session_id
+                    && entry.key.width == key.width
+                    && entry.key.diff_mode == key.diff_mode
+                    && entry.key.diagram_mode == key.diagram_mode
+                    && entry.key.centered == key.centered
+                    && message_hash_prefix_matches(
+                        &entry.message_hashes,
+                        message_hashes,
+                        prefix_count,
+                    )
+            })
+            .map(|(idx, _)| (false, idx));
+        let oversized = self
+            .oversized_entries
+            .iter()
+            .enumerate()
+            .find(|(_, entry)| {
+                entry.msg_count == msg_count
+                    && entry.key.session_id == key.session_id
+                    && entry.key.width == key.width
+                    && entry.key.diff_mode == key.diff_mode
+                    && entry.key.diagram_mode == key.diagram_mode
+                    && entry.key.centered == key.centered
+                    && message_hash_prefix_matches(
+                        &entry.message_hashes,
+                        message_hashes,
+                        prefix_count,
+                    )
+            })
+            .map(|(idx, _)| (true, idx));
+
+        let (is_oversized, idx) = regular.or(oversized)?;
+        let entry = if is_oversized {
+            self.oversized_entries.remove(idx)?
+        } else {
+            self.entries.remove(idx)?
+        };
+
+        truncate_prepared_messages_to_message_count(entry.prepared, prefix_count)
+            .map(|prepared| (prepared, prefix_count))
     }
 
+    #[cfg(test)]
+    fn insert(&mut self, key: BodyCacheKey, prepared: Arc<PreparedMessages>, msg_count: usize) {
+        self.insert_with_message_hashes(key, prepared, msg_count, Arc::from([]));
+    }
+
+    fn insert_with_message_hashes(
+        &mut self,
+        key: BodyCacheKey,
+        prepared: Arc<PreparedMessages>,
+        msg_count: usize,
+        message_hashes: Arc<[u64]>,
+    ) {
+        self.insert_with_budget_and_hashes(
+            key,
+            prepared,
+            msg_count,
+            message_hashes,
+            BODY_CACHE_MAX_BYTES,
+        );
+    }
+
+    #[cfg(test)]
     fn insert_with_budget(
         &mut self,
         key: BodyCacheKey,
@@ -792,7 +883,19 @@ impl BodyCacheState {
         msg_count: usize,
         max_bytes: usize,
     ) {
-        let prepared_bytes = estimate_prepared_messages_bytes(&prepared);
+        self.insert_with_budget_and_hashes(key, prepared, msg_count, Arc::from([]), max_bytes);
+    }
+
+    fn insert_with_budget_and_hashes(
+        &mut self,
+        key: BodyCacheKey,
+        prepared: Arc<PreparedMessages>,
+        msg_count: usize,
+        message_hashes: Arc<[u64]>,
+        max_bytes: usize,
+    ) {
+        let prepared_bytes = estimate_prepared_messages_bytes(&prepared)
+            .saturating_add(message_hashes.len() * std::mem::size_of::<u64>());
         if prepared_bytes > max_bytes {
             if let Some(pos) = self
                 .oversized_entries
@@ -806,6 +909,7 @@ impl BodyCacheState {
                 prepared,
                 prepared_bytes,
                 msg_count,
+                message_hashes,
             });
             while self.oversized_entries.len() > BODY_OVERSIZED_CACHE_MAX_ENTRIES {
                 self.oversized_entries.pop_back();
@@ -827,11 +931,69 @@ impl BodyCacheState {
             prepared,
             prepared_bytes,
             msg_count,
+            message_hashes,
         });
         while self.entries.len() > BODY_CACHE_MAX_ENTRIES || self.total_bytes() > max_bytes {
             self.entries.pop_back();
         }
     }
+}
+
+fn message_hash_prefix_matches(
+    cached_hashes: &[u64],
+    current_hashes: &[u64],
+    prefix_count: usize,
+) -> bool {
+    if prefix_count == 0 {
+        return true;
+    }
+    // Unit tests that exercise cache geometry directly may omit hashes. Runtime
+    // cache entries always carry hashes, so non-empty current hashes still fail
+    // safely against an unhashed entry.
+    if cached_hashes.is_empty() && current_hashes.is_empty() {
+        return true;
+    }
+    cached_hashes.get(..prefix_count) == current_hashes.get(..prefix_count)
+}
+
+fn truncate_prepared_messages_to_message_count(
+    prepared: Arc<PreparedMessages>,
+    msg_count: usize,
+) -> Option<Arc<PreparedMessages>> {
+    let line_end = *prepared.message_wrapped_starts.get(msg_count)?;
+    let raw_end = prepared
+        .wrapped_line_map
+        .iter()
+        .take(line_end)
+        .map(|map| map.raw_line.saturating_add(1))
+        .max()
+        .unwrap_or(0);
+
+    let mut prepared = (*prepared).clone();
+    prepared.wrapped_lines.truncate(line_end);
+    Arc::make_mut(&mut prepared.wrapped_plain_lines).truncate(line_end);
+    Arc::make_mut(&mut prepared.wrapped_copy_offsets).truncate(line_end);
+    Arc::make_mut(&mut prepared.wrapped_line_map).truncate(line_end);
+    Arc::make_mut(&mut prepared.raw_plain_lines).truncate(raw_end);
+    prepared.wrapped_user_indices.retain(|idx| *idx < line_end);
+    prepared
+        .wrapped_user_prompt_starts
+        .retain(|idx| *idx < line_end);
+    prepared
+        .wrapped_user_prompt_ends
+        .retain(|idx| *idx <= line_end);
+    prepared
+        .image_regions
+        .retain(|region| region.end_line <= line_end);
+    prepared
+        .edit_tool_ranges
+        .retain(|range| range.end_line <= line_end);
+    prepared
+        .copy_targets
+        .retain(|target| target.end_line <= line_end);
+    prepared.message_wrapped_starts.truncate(msg_count + 1);
+
+    Some(Arc::new(prepared))
 }
 
 static BODY_CACHE: OnceLock<Mutex<BodyCacheState>> = OnceLock::new();
