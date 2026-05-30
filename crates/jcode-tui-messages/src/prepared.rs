@@ -19,7 +19,7 @@ pub struct ImageRegion {
 #[derive(Clone, Debug)]
 pub struct CopyTarget {
     pub kind: CopyTargetKind,
-    pub content: String,
+    pub content: Arc<str>,
     pub start_line: usize,
     pub end_line: usize,
     pub badge_line: usize,

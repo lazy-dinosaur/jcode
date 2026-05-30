@@ -298,7 +298,7 @@ pub(super) fn draw_messages(
     let visible_streaming_hash =
         if prepared.visible_intersects_section(PreparedSectionKind::Streaming, scroll, visible_end)
         {
-            super::hash_text_for_cache(app.streaming_text())
+            app.streaming_text_version()
         } else {
             0
         };

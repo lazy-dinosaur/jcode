@@ -115,6 +115,16 @@ pub trait TuiState {
     /// Version counter for display_messages (monotonic, increments on mutation)
     fn display_messages_version(&self) -> u64;
     fn streaming_text(&self) -> &str;
+    /// Version counter for streaming_text (monotonic, increments on mutation).
+    ///
+    /// Implementations that do not track a counter may fall back to hashing the
+    /// current text. The main App overrides this so scroll/input redraws do not
+    /// rescan a long in-flight assistant message on every frame.
+    fn streaming_text_version(&self) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        std::hash::Hash::hash(self.streaming_text(), &mut hasher);
+        std::hash::Hasher::finish(&hasher)
+    }
     fn input(&self) -> &str;
     fn cursor_pos(&self) -> usize;
     fn is_processing(&self) -> bool;

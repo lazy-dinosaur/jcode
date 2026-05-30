@@ -51,7 +51,7 @@ use ratatui::{prelude::*, widgets::Paragraph};
 use serde::Serialize;
 #[cfg(test)]
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, VecDeque, hash_map::DefaultHasher};
+use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
 #[cfg(not(test))]
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -327,12 +327,6 @@ pub(crate) fn set_last_diff_pane_effective_scroll(value: usize) {
     }
 }
 
-pub(super) fn hash_text_for_cache(text: &str) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    text.hash(&mut hasher);
-    std::hash::Hasher::finish(&hasher)
-}
-
 #[path = "ui_layout.rs"]
 mod layout_support;
 #[path = "ui_status.rs"]
@@ -378,7 +372,7 @@ pub(crate) struct VisibleCopyTarget {
     pub key: char,
     pub kind_label: String,
     pub copied_notice: String,
-    pub content: String,
+    pub content: Arc<str>,
 }
 
 // Copy badges intentionally avoid h/j/k/l so they never shadow vi-style
@@ -843,7 +837,7 @@ struct FullPrepCacheKey {
     centered: bool,
     is_processing: bool,
     streaming_text_len: usize,
-    streaming_text_hash: u64,
+    streaming_text_version: u64,
     batch_progress_hash: u64,
 }
 

@@ -630,6 +630,7 @@ pub struct App {
     active_skill: Option<String>,
     is_processing: bool,
     streaming_text: String,
+    streaming_text_version: u64,
     should_quit: bool,
     // Message queueing
     queued_messages: Vec<String>,
@@ -943,7 +944,7 @@ pub struct App {
     split_view_markdown: String,
     split_view_updated_at_ms: u64,
     split_view_rendered_display_version: u64,
-    split_view_rendered_streaming_hash: u64,
+    split_view_rendered_streaming_version: u64,
     todos_view_enabled: bool,
     todos_view_markdown: String,
     todos_view_updated_at_ms: u64,

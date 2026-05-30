@@ -361,7 +361,7 @@ pub(super) fn prepare_messages(
         centered: app.centered_mode(),
         is_processing: app.is_processing(),
         streaming_text_len: app.streaming_text().len(),
-        streaming_text_hash: super::hash_text_for_cache(app.streaming_text()),
+        streaming_text_version: app.streaming_text_version(),
         batch_progress_hash: active_batch_progress_hash(app),
     };
 
@@ -1627,7 +1627,7 @@ fn wrap_lines_with_map(
             .unwrap_or(start_line);
         copy_targets.push(CopyTarget {
             kind: target.kind.clone(),
-            content: target.content.clone(),
+            content: Arc::<str>::from(target.content.clone()),
             start_line,
             end_line,
             badge_line,

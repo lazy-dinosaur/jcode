@@ -2147,6 +2147,10 @@ impl App {
         }
     }
 
+    fn bump_streaming_text_version(&mut self) {
+        self.streaming_text_version = self.streaming_text_version.wrapping_add(1);
+    }
+
     pub(super) fn append_streaming_text(&mut self, text: &str) {
         if text.is_empty() {
             return;
@@ -2156,22 +2160,30 @@ impl App {
         }
         self.streaming_text.push_str(text);
         strip_trailing_count_wrapper_noise_in_place(&mut self.streaming_text);
+        self.bump_streaming_text_version();
         self.refresh_split_view_if_needed();
     }
 
     pub(super) fn replace_streaming_text(&mut self, text: String) {
-        self.streaming_text = if is_count_wrapper_noise(&text) {
+        let new_text = if is_count_wrapper_noise(&text) {
             String::new()
         } else {
             let mut text = text;
             strip_trailing_count_wrapper_noise_in_place(&mut text);
             text
         };
+        if self.streaming_text != new_text {
+            self.streaming_text = new_text;
+            self.bump_streaming_text_version();
+        }
         self.refresh_split_view_if_needed();
     }
 
     pub(super) fn clear_streaming_render_state(&mut self) {
-        self.streaming_text.clear();
+        if !self.streaming_text.is_empty() {
+            self.streaming_text.clear();
+            self.bump_streaming_text_version();
+        }
         self.stream_message_ended = false;
         self.refresh_split_view_if_needed();
         self.streaming_md_renderer.borrow_mut().reset();
@@ -2180,6 +2192,9 @@ impl App {
 
     pub(super) fn take_streaming_text(&mut self) -> String {
         let content = std::mem::take(&mut self.streaming_text);
+        if !content.is_empty() {
+            self.bump_streaming_text_version();
+        }
         self.stream_message_ended = false;
         self.refresh_split_view_if_needed();
         self.streaming_md_renderer.borrow_mut().reset();
@@ -2200,7 +2215,10 @@ impl App {
 
         if self.streaming_text.is_empty() || is_count_wrapper_noise(&self.streaming_text) {
             self.stream_buffer.clear();
-            self.streaming_text.clear();
+            if !self.streaming_text.is_empty() {
+                self.streaming_text.clear();
+                self.bump_streaming_text_version();
+            }
             return false;
         }
 

@@ -715,7 +715,7 @@ pub(crate) fn recent_flicker_copy_target_for_key(key: char) -> Option<VisibleCop
         key: FLICKER_NOTICE_COPY_KEY,
         kind_label: "flicker hint".to_string(),
         copied_notice: "Copied flicker hint".to_string(),
-        content: notice.hint,
+        content: Arc::<str>::from(notice.hint),
     })
 }
 

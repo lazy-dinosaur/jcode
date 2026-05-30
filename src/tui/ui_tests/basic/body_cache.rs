@@ -244,7 +244,7 @@ fn test_full_prep_cache_state_keeps_multiple_width_entries() {
         centered: false,
         is_processing: false,
         streaming_text_len: 0,
-        streaming_text_hash: 0,
+        streaming_text_version: 0,
         batch_progress_hash: 0,
     };
     let key_b = FullPrepCacheKey {
@@ -311,7 +311,7 @@ fn test_full_prep_cache_state_evicts_oldest_entries() {
             centered: false,
             is_processing: false,
             streaming_text_len: 0,
-            streaming_text_hash: 0,
+            streaming_text_version: 0,
             batch_progress_hash: 0,
         };
         let prepared = make_prepared_chat_frame(Arc::new(PreparedMessages {
@@ -349,7 +349,7 @@ fn test_full_prep_cache_state_accepts_large_single_entry_within_total_budget() {
         centered: false,
         is_processing: false,
         streaming_text_len: 0,
-        streaming_text_hash: 0,
+        streaming_text_version: 0,
         batch_progress_hash: 0,
     };
     let prepared = make_prepared_chat_frame_with_content_bytes(3 * 1024 * 1024, "full-large-");
@@ -376,7 +376,7 @@ fn test_full_prep_cache_state_retains_oversized_hot_entry() {
         centered: false,
         is_processing: true,
         streaming_text_len: 4096,
-        streaming_text_hash: 12345,
+        streaming_text_version: 12345,
         batch_progress_hash: 0,
     };
     let prepared = make_oversized_prepared_chat_frame("full-oversized-");
@@ -405,7 +405,7 @@ fn test_full_prep_cache_state_keeps_two_oversized_width_entries_hot() {
         centered: false,
         is_processing: true,
         streaming_text_len: 4096,
-        streaming_text_hash: 12345,
+        streaming_text_version: 12345,
         batch_progress_hash: 0,
     };
     let key_b = FullPrepCacheKey {

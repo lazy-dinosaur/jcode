@@ -53,7 +53,7 @@ fn estimate_copy_target_kind_bytes(kind: &CopyTargetKind) -> usize {
 fn estimate_copy_targets_bytes(values: &Vec<CopyTarget>) -> usize {
     values
         .iter()
-        .map(|target| estimate_copy_target_kind_bytes(&target.kind) + target.content.capacity())
+        .map(|target| estimate_copy_target_kind_bytes(&target.kind) + target.content.len())
         .sum::<usize>()
         + values.capacity() * std::mem::size_of::<CopyTarget>()
 }
@@ -109,9 +109,7 @@ fn estimate_visible_copy_targets_bytes(values: &Vec<VisibleCopyTarget>) -> usize
     values
         .iter()
         .map(|target| {
-            target.kind_label.capacity()
-                + target.copied_notice.capacity()
-                + target.content.capacity()
+            target.kind_label.capacity() + target.copied_notice.capacity() + target.content.len()
         })
         .sum::<usize>()
         + values.capacity() * std::mem::size_of::<VisibleCopyTarget>()

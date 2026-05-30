@@ -2,8 +2,6 @@ use super::App;
 use crate::side_panel::{
     SidePanelPage, SidePanelPageFormat, SidePanelPageSource, SidePanelSnapshot,
 };
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 
 pub(super) const SPLIT_VIEW_PAGE_ID: &str = "split_view";
 const SPLIT_VIEW_TITLE: &str = "Split View";
@@ -81,7 +79,7 @@ impl App {
         self.split_view_markdown.shrink_to_fit();
         self.split_view_updated_at_ms = now_ms();
         self.split_view_rendered_display_version = 0;
-        self.split_view_rendered_streaming_hash = 0;
+        self.split_view_rendered_streaming_version = 0;
     }
 
     fn refresh_split_view_page(&mut self) {
@@ -99,10 +97,10 @@ impl App {
     }
 
     fn refresh_split_view_cache(&mut self, force: bool) -> bool {
-        let streaming_hash = hash_str(&self.streaming_text);
+        let streaming_version = self.streaming_text_version;
         if !force
             && self.split_view_rendered_display_version == self.display_messages_version
-            && self.split_view_rendered_streaming_hash == streaming_hash
+            && self.split_view_rendered_streaming_version == streaming_version
         {
             return false;
         }
@@ -110,7 +108,7 @@ impl App {
         self.split_view_markdown = build_split_view_markdown(self);
         self.split_view_updated_at_ms = now_ms();
         self.split_view_rendered_display_version = self.display_messages_version;
-        self.split_view_rendered_streaming_hash = streaming_hash;
+        self.split_view_rendered_streaming_version = streaming_version;
         true
     }
 
@@ -327,12 +325,6 @@ fn capitalize_role(role: &str) -> String {
         Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
         None => "Message".to_string(),
     }
-}
-
-fn hash_str(value: &str) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    value.hash(&mut hasher);
-    hasher.finish()
 }
 
 fn now_ms() -> u64 {

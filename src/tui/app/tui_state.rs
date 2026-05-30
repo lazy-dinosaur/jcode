@@ -328,6 +328,10 @@ impl crate::tui::TuiState for App {
         &self.streaming_text
     }
 
+    fn streaming_text_version(&self) -> u64 {
+        self.streaming_text_version
+    }
+
     fn input(&self) -> &str {
         &self.input
     }
