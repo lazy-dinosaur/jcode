@@ -76,7 +76,13 @@ fn make_prepared_chat_frame_with_content_bytes(
 }
 
 fn make_oversized_prepared_chat_frame(marker: &str) -> Arc<PreparedChatFrame> {
-    make_prepared_chat_frame(make_oversized_prepared_messages(marker))
+    let mut frame = PreparedChatFrame::from_single(make_oversized_prepared_messages(marker));
+    frame.user_prompt_texts = vec![format!(
+        "{}{}",
+        marker,
+        "x".repeat((25 * 1024 * 1024usize).saturating_sub(marker.len()))
+    )];
+    Arc::new(frame)
 }
 
 #[test]

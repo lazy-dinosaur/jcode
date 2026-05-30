@@ -18,6 +18,25 @@ fn highlight_line_selection(
         return line.clone();
     }
 
+    if start_col == 0 && end_col >= line.width() {
+        let spans = line
+            .spans
+            .iter()
+            .map(|span| {
+                let mut style = span.style.bg(selection_bg_for(span.style.bg));
+                if let Some(fg) = selection_fg_for(style.fg) {
+                    style = style.fg(fg);
+                }
+                Span::styled(span.content.clone(), style)
+            })
+            .collect();
+        return Line {
+            spans,
+            style: line.style,
+            alignment: line.alignment,
+        };
+    }
+
     let mut rebuilt: Vec<Span<'static>> = Vec::new();
     let mut current_text = String::new();
     let mut current_style: Option<Style> = None;
@@ -83,6 +102,8 @@ fn apply_side_selection_highlight(
         return;
     };
 
+    let selection_start = std::time::Instant::now();
+    let mut highlighted_lines = 0usize;
     let (start, end) =
         if (range.start.abs_line, range.start.column) <= (range.end.abs_line, range.end.column) {
             (range.start, range.end)
@@ -105,8 +126,11 @@ fn apply_side_selection_highlight(
                 line.width()
             };
             *line = highlight_line_selection(line, start_col, end_col);
+            highlighted_lines += 1;
         }
     }
+
+    super::frame_metrics::note_selection_highlight(highlighted_lines, selection_start.elapsed());
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -1,6 +1,7 @@
 #[test]
 fn test_body_cache_state_keeps_multiple_width_entries() {
     let key_a = BodyCacheKey {
+        session_id: None,
         width: 40,
         diff_mode: crate::config::DiffDisplayMode::Off,
         messages_version: 1,
@@ -8,6 +9,7 @@ fn test_body_cache_state_keeps_multiple_width_entries() {
         centered: false,
     };
     let key_b = BodyCacheKey {
+        session_id: None,
         width: 41,
         ..key_a.clone()
     };
@@ -63,6 +65,7 @@ fn test_body_cache_state_evicts_oldest_entries() {
 
     for idx in 0..(BODY_CACHE_MAX_ENTRIES + 2) {
         let key = BodyCacheKey {
+            session_id: None,
             width: 40 + idx as u16,
             diff_mode: crate::config::DiffDisplayMode::Off,
             messages_version: 1,
@@ -96,6 +99,7 @@ fn test_body_cache_state_evicts_oldest_entries() {
 #[test]
 fn test_body_cache_state_accepts_large_single_entry_within_total_budget() {
     let key = BodyCacheKey {
+        session_id: None,
         width: 120,
         diff_mode: crate::config::DiffDisplayMode::Off,
         messages_version: 99,
@@ -119,6 +123,7 @@ fn test_body_cache_state_accepts_large_single_entry_within_total_budget() {
 #[test]
 fn test_body_cache_state_retains_oversized_hot_entry() {
     let key = BodyCacheKey {
+        session_id: None,
         width: 140,
         diff_mode: crate::config::DiffDisplayMode::Off,
         messages_version: 120,
@@ -143,6 +148,7 @@ fn test_body_cache_state_retains_oversized_hot_entry() {
 #[test]
 fn test_body_cache_state_keeps_two_oversized_width_entries_hot() {
     let key_a = BodyCacheKey {
+        session_id: None,
         width: 140,
         diff_mode: crate::config::DiffDisplayMode::Off,
         messages_version: 120,
@@ -150,6 +156,7 @@ fn test_body_cache_state_keeps_two_oversized_width_entries_hot() {
         centered: false,
     };
     let key_b = BodyCacheKey {
+        session_id: None,
         width: 139,
         ..key_a.clone()
     };
@@ -174,6 +181,7 @@ fn test_body_cache_state_keeps_two_oversized_width_entries_hot() {
 #[test]
 fn test_body_cache_state_uses_oversized_hot_entry_as_incremental_base() {
     let key = BodyCacheKey {
+        session_id: None,
         width: 140,
         diff_mode: crate::config::DiffDisplayMode::Off,
         messages_version: 120,
@@ -236,6 +244,7 @@ fn test_prepare_body_incremental_reuses_unique_prepared_arc() {
 #[test]
 fn test_full_prep_cache_state_keeps_multiple_width_entries() {
     let key_a = FullPrepCacheKey {
+        session_id: None,
         width: 40,
         height: 20,
         diff_mode: crate::config::DiffDisplayMode::Off,
@@ -248,6 +257,7 @@ fn test_full_prep_cache_state_keeps_multiple_width_entries() {
         batch_progress_hash: 0,
     };
     let key_b = FullPrepCacheKey {
+        session_id: None,
         width: 39,
         ..key_a.clone()
     };
@@ -303,6 +313,7 @@ fn test_full_prep_cache_state_evicts_oldest_entries() {
 
     for idx in 0..(FULL_PREP_CACHE_MAX_ENTRIES + 2) {
         let key = FullPrepCacheKey {
+            session_id: None,
             width: 40 + idx as u16,
             height: 20,
             diff_mode: crate::config::DiffDisplayMode::Off,
@@ -341,6 +352,7 @@ fn test_full_prep_cache_state_evicts_oldest_entries() {
 #[test]
 fn test_full_prep_cache_state_accepts_large_single_entry_within_total_budget() {
     let key = FullPrepCacheKey {
+        session_id: None,
         width: 120,
         height: 40,
         diff_mode: crate::config::DiffDisplayMode::Off,
@@ -368,6 +380,7 @@ fn test_full_prep_cache_state_accepts_large_single_entry_within_total_budget() {
 #[test]
 fn test_full_prep_cache_state_retains_oversized_hot_entry() {
     let key = FullPrepCacheKey {
+        session_id: None,
         width: 140,
         height: 42,
         diff_mode: crate::config::DiffDisplayMode::Off,
@@ -381,7 +394,7 @@ fn test_full_prep_cache_state_retains_oversized_hot_entry() {
     };
     let prepared = make_oversized_prepared_chat_frame("full-oversized-");
 
-    assert!(estimate_prepared_chat_frame_bytes(&prepared) <= FULL_PREP_CACHE_MAX_BYTES);
+    assert!(estimate_prepared_chat_frame_bytes(&prepared) > FULL_PREP_CACHE_MAX_BYTES);
 
     let mut cache = FullPrepCacheState::default();
     cache.insert(key.clone(), prepared.clone());
@@ -397,6 +410,7 @@ fn test_full_prep_cache_state_retains_oversized_hot_entry() {
 #[test]
 fn test_full_prep_cache_state_keeps_two_oversized_width_entries_hot() {
     let key_a = FullPrepCacheKey {
+        session_id: None,
         width: 140,
         height: 42,
         diff_mode: crate::config::DiffDisplayMode::Off,
@@ -409,6 +423,7 @@ fn test_full_prep_cache_state_keeps_two_oversized_width_entries_hot() {
         batch_progress_hash: 0,
     };
     let key_b = FullPrepCacheKey {
+        session_id: None,
         width: 139,
         ..key_a.clone()
     };

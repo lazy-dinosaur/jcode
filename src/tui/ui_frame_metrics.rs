@@ -35,6 +35,8 @@ pub(crate) struct FramePerfStats {
     pub draw_side_pane_ms: f64,
     pub draw_input_ms: f64,
     pub draw_widgets_ms: f64,
+    pub selection_highlight_lines: usize,
+    pub selection_highlight_ms: f64,
     pub viewport_scroll: usize,
     pub viewport_visible_end: usize,
     pub viewport_visible_lines: usize,
@@ -367,6 +369,16 @@ pub(super) fn note_draw_phase_timings(timings: DrawPhaseTimings) {
         stats.draw_side_pane_ms = timings.side_pane_ms;
         stats.draw_input_ms = timings.input_ms;
         stats.draw_widgets_ms = timings.widgets_ms;
+    });
+}
+
+pub(super) fn note_selection_highlight(lines: usize, elapsed: Duration) {
+    if lines == 0 {
+        return;
+    }
+    with_frame_perf_stats_mut(|stats| {
+        stats.selection_highlight_lines += lines;
+        stats.selection_highlight_ms += elapsed.as_secs_f64() * 1000.0;
     });
 }
 

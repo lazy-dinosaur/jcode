@@ -617,6 +617,7 @@ fn update_prompt_entry_animation(
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct BodyCacheKey {
+    session_id: Option<String>,
     width: u16,
     diff_mode: crate::config::DiffDisplayMode,
     messages_version: u64,
@@ -632,11 +633,11 @@ struct BodyCacheEntry {
     msg_count: usize,
 }
 
-const BODY_CACHE_MAX_ENTRIES: usize = 8;
+const BODY_CACHE_MAX_ENTRIES: usize = 12;
 // Keep enough room for a single large transcript snapshot so long sessions do not
 // fall off a hard per-entry cache cliff and get rebuilt every frame.
-const BODY_CACHE_MAX_BYTES: usize = 32 * 1024 * 1024;
-const BODY_OVERSIZED_CACHE_MAX_ENTRIES: usize = 2;
+const BODY_CACHE_MAX_BYTES: usize = 36 * 1024 * 1024;
+const BODY_OVERSIZED_CACHE_MAX_ENTRIES: usize = 4;
 
 #[derive(Default)]
 struct BodyCacheState {
@@ -687,6 +688,7 @@ impl BodyCacheState {
             .filter(|entry| {
                 entry.msg_count > 0
                     && msg_count > entry.msg_count
+                    && entry.key.session_id == key.session_id
                     && entry.key.width == key.width
                     && entry.key.diff_mode == key.diff_mode
                     && entry.key.diagram_mode == key.diagram_mode
@@ -700,6 +702,7 @@ impl BodyCacheState {
             .filter(|entry| {
                 entry.msg_count > 0
                     && msg_count > entry.msg_count
+                    && entry.key.session_id == key.session_id
                     && entry.key.width == key.width
                     && entry.key.diff_mode == key.diff_mode
                     && entry.key.diagram_mode == key.diagram_mode
@@ -733,6 +736,7 @@ impl BodyCacheState {
             .filter(|(_, entry)| {
                 entry.msg_count > 0
                     && msg_count > entry.msg_count
+                    && entry.key.session_id == key.session_id
                     && entry.key.width == key.width
                     && entry.key.diff_mode == key.diff_mode
                     && entry.key.diagram_mode == key.diagram_mode
@@ -747,6 +751,7 @@ impl BodyCacheState {
             .filter(|(_, entry)| {
                 entry.msg_count > 0
                     && msg_count > entry.msg_count
+                    && entry.key.session_id == key.session_id
                     && entry.key.width == key.width
                     && entry.key.diff_mode == key.diff_mode
                     && entry.key.diagram_mode == key.diagram_mode
@@ -829,6 +834,7 @@ fn body_cache() -> &'static Mutex<BodyCacheState> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct FullPrepCacheKey {
+    session_id: Option<String>,
     width: u16,
     height: u16,
     diff_mode: crate::config::DiffDisplayMode,
@@ -848,11 +854,11 @@ struct FullPrepCacheEntry {
     prepared_bytes: usize,
 }
 
-const FULL_PREP_CACHE_MAX_ENTRIES: usize = 4;
+const FULL_PREP_CACHE_MAX_ENTRIES: usize = 8;
 // Full prepared frames duplicate some body data, so give them enough headroom to
 // retain the active large transcript instead of forcing full recomposition.
 const FULL_PREP_CACHE_MAX_BYTES: usize = 24 * 1024 * 1024;
-const FULL_PREP_OVERSIZED_CACHE_MAX_ENTRIES: usize = 2;
+const FULL_PREP_OVERSIZED_CACHE_MAX_ENTRIES: usize = 4;
 
 #[derive(Default)]
 struct FullPrepCacheState {

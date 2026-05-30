@@ -353,6 +353,7 @@ pub(super) fn prepare_messages(
     }
 
     let key = FullPrepCacheKey {
+        session_id: app.current_session_id(),
         width,
         height,
         diff_mode: app.diff_mode(),
@@ -532,6 +533,7 @@ fn prepare_body_cached(app: &dyn TuiState, width: u16) -> Arc<PreparedMessages> 
     super::note_body_request();
 
     let key = BodyCacheKey {
+        session_id: app.current_session_id(),
         width,
         diff_mode: app.diff_mode(),
         messages_version: app.display_messages_version(),
