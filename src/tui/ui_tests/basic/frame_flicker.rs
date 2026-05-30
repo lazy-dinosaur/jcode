@@ -53,6 +53,16 @@ fn test_redraw_interval_caps_mouse_scroll_animation_but_not_streaming() {
     );
 }
 
+#[test]
+fn test_large_content_height_does_not_wrap_to_packed_layout() {
+    assert!(crate::tui::ui::content_lines_fit_available(20, 3, 24));
+    assert!(!crate::tui::ui::content_lines_fit_available(21, 4, 24));
+    assert!(
+        !crate::tui::ui::content_lines_fit_available(65_536, 4, 24),
+        "line counts above u16::MAX must not wrap to zero and select packed layout"
+    );
+}
+
 fn record_test_chat_snapshot(text: &str) {
     clear_copy_viewport_snapshot();
     let width = line_display_width(text);

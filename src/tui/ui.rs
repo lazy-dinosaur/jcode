@@ -2073,10 +2073,10 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
         + donut_height; // status + queued + notification + inline UI + gap + input + donut
     let available_height = chat_area.height;
 
-    let initial_content_height = prepared_wide.total_wrapped_lines().max(1) as u16;
+    let initial_content_height = prepared_wide.total_wrapped_lines().max(1);
     let wide_overflows = app.chat_native_scrollbar()
         && chat_area.width > 1
-        && initial_content_height + fixed_height > available_height;
+        && !content_lines_fit_available(initial_content_height, fixed_height, available_height);
     let (prepared, chat_scrollbar_visible) = if !wide_overflows {
         (prepared_wide, false)
     } else {
@@ -2085,8 +2085,9 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
             mermaid::with_preferred_aspect_ratio(pinned_mermaid_aspect_ratio, || {
                 prepare::prepare_messages(app, narrow_prepare_width, chat_area.height)
             });
-        let narrow_content_height = prepared_narrow.total_wrapped_lines().max(1) as u16;
-        let narrow_overflows = narrow_content_height + fixed_height > available_height;
+        let narrow_content_height = prepared_narrow.total_wrapped_lines().max(1);
+        let narrow_overflows =
+            !content_lines_fit_available(narrow_content_height, fixed_height, available_height);
         if narrow_overflows {
             (prepared_narrow, true)
         } else {
@@ -2109,10 +2110,10 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
             .collect();
     }
     let prep_elapsed = prep_start.elapsed();
-    let content_height = prepared.total_wrapped_lines().max(1) as u16;
+    let content_height = prepared.total_wrapped_lines().max(1);
 
     // Use packed layout when content fits, scrolling layout otherwise
-    let use_packed = content_height + fixed_height <= available_height;
+    let use_packed = content_lines_fit_available(content_height, fixed_height, available_height);
 
     // Layout: messages (includes header), queued, status, notification, inline UI, gap, input, donut
     // All vertical chunks are within the chat_area (left column).
@@ -2120,14 +2121,14 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
         .direction(Direction::Vertical)
         .constraints(if use_packed {
             vec![
-                Constraint::Length(content_height.max(1)), // Messages (exact height)
-                Constraint::Length(queued_height),         // Queued messages (above status)
-                Constraint::Length(1),                     // Status line
-                Constraint::Length(notification_height),   // Notification line
-                Constraint::Length(inline_block_height),   // Inline UI
-                Constraint::Length(inline_ui_gap_height),  // Inline UI/input spacing
-                Constraint::Length(input_height),          // Input
-                Constraint::Length(donut_height),          // Donut animation
+                Constraint::Length(content_height.min(u16::MAX as usize) as u16), // Messages (exact height)
+                Constraint::Length(queued_height), // Queued messages (above status)
+                Constraint::Length(1),             // Status line
+                Constraint::Length(notification_height), // Notification line
+                Constraint::Length(inline_block_height), // Inline UI
+                Constraint::Length(inline_ui_gap_height), // Inline UI/input spacing
+                Constraint::Length(input_height),  // Input
+                Constraint::Length(donut_height),  // Donut animation
             ]
         } else {
             vec![
@@ -2147,7 +2148,7 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
     // Capture layout info for visual debug
     if let Some(ref mut capture) = debug_capture {
         capture.layout.use_packed = use_packed;
-        capture.layout.estimated_content_height = content_height as usize;
+        capture.layout.estimated_content_height = content_height;
         capture.layout.messages_area = Some(chunks[0].into());
         if queued_height > 0 {
             capture.layout.queued_area = Some(chunks[1].into());
@@ -2216,8 +2217,8 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
     note_chat_layout(ChatLayoutMetrics {
         chat_area,
         messages_area,
-        initial_content_height: initial_content_height as usize,
-        content_height: content_height as usize,
+        initial_content_height,
+        content_height,
         chat_scrollbar_visible,
         use_packed_layout: use_packed,
         has_side_panel_content,
@@ -2462,6 +2463,14 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
         draw_start.elapsed(),
         Some(messages_draw.as_secs_f64() * 1000.0),
     );
+}
+
+pub(crate) fn content_lines_fit_available(
+    content_lines: usize,
+    fixed_height: u16,
+    available_height: u16,
+) -> bool {
+    content_lines.saturating_add(fixed_height as usize) <= available_height as usize
 }
 
 pub(crate) fn split_native_scrollbar_area(area: Rect, enabled: bool) -> (Rect, Option<Rect>) {
