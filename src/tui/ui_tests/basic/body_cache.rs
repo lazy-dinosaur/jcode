@@ -407,6 +407,40 @@ fn test_prepare_body_renders_glued_assistant_ordered_list_on_separate_lines() {
 }
 
 #[test]
+fn test_prepare_body_renders_glued_alphabetic_options_on_separate_lines() {
+    let state = TestState {
+        display_messages: vec![DisplayMessage::assistant(
+            "선택지: A. 내가 중복 함수 하나만 제거 (Recommended) B. 네가 직접 getRecipientChatBadge 중복 블록 하나 삭제 C. 우선 그대로 둠",
+        )],
+        messages_version: 1,
+        ..Default::default()
+    };
+
+    let prepared = super::prepare::prepare_body(&state, 180, false);
+    let lines = prepared.wrapped_plain_lines.as_ref();
+
+    assert_eq!(lines.first().map(String::as_str), Some("선택지:"));
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.trim_start().starts_with("A. 내가 중복 함수")),
+        "A option should render separately: {lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.trim_start().starts_with("B. 네가 직접")),
+        "B option should render separately: {lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|line| !line.contains("선택지: A.") && !line.contains("Recommended) B.")),
+        "TUI body wrapping must not glue alphabetic option markers: {lines:?}"
+    );
+}
+
+#[test]
 fn test_prepare_body_preserves_list_item_title_continuation_break() {
     let state = TestState {
         display_messages: vec![DisplayMessage::assistant(

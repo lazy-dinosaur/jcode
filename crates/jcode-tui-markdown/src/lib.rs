@@ -1303,6 +1303,7 @@ fn repair_glued_list_markers_in_line(line: &str) -> String {
     let mut cursor = 0usize;
     let mut scan = 0usize;
     let mut line_start = true;
+    let mut alpha_option_mode = starts_with_alpha_option_marker(line.trim_start()).is_some();
 
     while scan < line.len() {
         if !line.is_char_boundary(scan) {
@@ -1310,9 +1311,13 @@ fn repair_glued_list_markers_in_line(line: &str) -> String {
             continue;
         }
 
-        if let Some(marker) = glued_list_marker_at(line, scan, line_start) {
+        if let Some(marker) = glued_list_marker_at(line, scan, line_start, alpha_option_mode) {
             out.push_str(line[cursor..scan].trim_end());
+            if marker.requires_hardbreak_before && !out.ends_with("  ") {
+                out.push_str("  ");
+            }
             out.push('\n');
+            alpha_option_mode |= marker.enables_alpha_option_mode;
             if let Some(replacement) = marker.replacement {
                 out.push_str(replacement);
                 cursor = scan + marker.len;
@@ -1344,19 +1349,30 @@ fn repair_glued_list_markers_in_line(line: &str) -> String {
 struct GluedListMarker {
     len: usize,
     replacement: Option<&'static str>,
+    enables_alpha_option_mode: bool,
+    requires_hardbreak_before: bool,
 }
 
-fn glued_list_marker_at(line: &str, idx: usize, line_start: bool) -> Option<GluedListMarker> {
+fn glued_list_marker_at(
+    line: &str,
+    idx: usize,
+    line_start: bool,
+    alpha_option_mode: bool,
+) -> Option<GluedListMarker> {
     if idx == 0 || line_start || inside_inline_backticks(line, idx) {
         return None;
     }
 
     let before = previous_non_whitespace_char(line, idx)?;
     if !is_list_glue_boundary_char(before) {
-        return None;
+        return alpha_option_mode
+            .then(|| alpha_option_marker_at(line, idx, true, before))
+            .flatten();
     }
 
-    ordered_list_marker_len_at(line, idx).or_else(|| bullet_list_marker_at(line, idx))
+    ordered_list_marker_len_at(line, idx)
+        .or_else(|| bullet_list_marker_at(line, idx))
+        .or_else(|| alpha_option_marker_at(line, idx, alpha_option_mode, before))
 }
 
 fn previous_non_whitespace_char(line: &str, idx: usize) -> Option<char> {
@@ -1392,6 +1408,8 @@ fn ordered_list_marker_len_at(line: &str, idx: usize) -> Option<GluedListMarker>
     Some(GluedListMarker {
         len: after_marker_idx + after_marker.len_utf8(),
         replacement: None,
+        enables_alpha_option_mode: false,
+        requires_hardbreak_before: false,
     })
 }
 
@@ -1409,7 +1427,65 @@ fn bullet_list_marker_at(line: &str, idx: usize) -> Option<GluedListMarker> {
     Some(GluedListMarker {
         len: after_marker_idx + after_marker.len_utf8(),
         replacement: (marker == '•').then_some("- "),
+        enables_alpha_option_mode: false,
+        requires_hardbreak_before: false,
     })
+}
+
+fn alpha_option_marker_at(
+    line: &str,
+    idx: usize,
+    alpha_option_mode: bool,
+    previous_boundary: char,
+) -> Option<GluedListMarker> {
+    let previous_char = line[..idx].chars().next_back()?;
+    if !previous_char.is_whitespace() {
+        return None;
+    }
+
+    let rest = &line[idx..];
+    let marker_letter = rest.chars().next()?;
+    if !matches!(marker_letter, 'A'..='H') {
+        return None;
+    }
+    let marker_idx = marker_letter.len_utf8();
+    let marker = rest[marker_idx..].chars().next()?;
+    if !matches!(marker, '.' | ')') {
+        return None;
+    }
+    let after_marker_idx = marker_idx + marker.len_utf8();
+    let after_marker = rest[after_marker_idx..].chars().next()?;
+    if !after_marker.is_whitespace() {
+        return None;
+    }
+
+    if !alpha_option_mode && !matches!(previous_boundary, ':' | ';' | '：') {
+        return None;
+    }
+
+    Some(GluedListMarker {
+        len: after_marker_idx + after_marker.len_utf8(),
+        replacement: None,
+        enables_alpha_option_mode: true,
+        requires_hardbreak_before: true,
+    })
+}
+
+fn starts_with_alpha_option_marker(line: &str) -> Option<usize> {
+    let marker_letter = line.chars().next()?;
+    if !matches!(marker_letter, 'A'..='H') {
+        return None;
+    }
+    let marker_idx = marker_letter.len_utf8();
+    let marker = line[marker_idx..].chars().next()?;
+    if !matches!(marker, '.' | ')') {
+        return None;
+    }
+    let after_marker_idx = marker_idx + marker.len_utf8();
+    let after_marker = line[after_marker_idx..].chars().next()?;
+    after_marker
+        .is_whitespace()
+        .then_some(after_marker_idx + after_marker.len_utf8())
 }
 
 fn is_list_glue_boundary_char(ch: char) -> bool {

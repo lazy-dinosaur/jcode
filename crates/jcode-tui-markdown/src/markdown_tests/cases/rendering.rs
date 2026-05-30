@@ -98,6 +98,55 @@ fn test_glued_bullet_marker_after_sentence_is_repaired() {
 }
 
 #[test]
+fn test_glued_alphabetic_option_markers_after_choice_label_are_repaired() {
+    let md = "선택지: A. 내가 중복 함수 하나만 제거 (Recommended) B. 네가 직접 getRecipientChatBadge 중복 블록 하나 삭제 C. 우선 그대로 둠";
+    let rendered: Vec<String> = render_markdown_with_width(md, Some(160))
+        .iter()
+        .map(line_to_string)
+        .collect();
+
+    assert_eq!(rendered.first().map(String::as_str), Some("선택지:"));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("A. 내가 중복 함수")),
+        "A option should render on its own line: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("B. 네가 직접")),
+        "B option should render on its own line: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("C. 우선 그대로")),
+        "C option should render on its own line: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .all(|line| !line.contains("선택지: A.") && !line.contains("Recommended) B.")),
+        "alphabetic options must not remain glued to prose: {rendered:?}"
+    );
+}
+
+#[test]
+fn test_alpha_abbreviation_is_not_split_as_option_marker() {
+    let md = "참고 문장. U.S.A. 표기는 그대로 둡니다.";
+    let rendered: Vec<String> = render_markdown_with_width(md, Some(120))
+        .iter()
+        .map(line_to_string)
+        .collect();
+
+    assert!(
+        rendered.iter().any(|line| line.contains("U.S.A. 표기")),
+        "abbreviations without choice context should not be split: {rendered:?}"
+    );
+}
+
+#[test]
 fn test_ordered_list_item_continuation_line_preserves_visible_break() {
     let md = "5. **poll 메시지도 push 발송 유지**\npoll도 unread에 포함되므로 push가 나가야 합니다.";
     let rendered: Vec<String> = render_markdown_with_width(md, Some(120))
