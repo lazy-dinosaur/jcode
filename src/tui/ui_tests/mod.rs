@@ -127,6 +127,7 @@ struct TestState {
     centered_mode: bool,
     anim_elapsed: f32,
     time_since_activity: Option<Duration>,
+    pending_mouse_scroll_animation: bool,
     remote_startup_phase_active: bool,
     inline_view_state: Option<crate::tui::InlineViewState>,
     inline_interactive_state: Option<crate::tui::InlineInteractiveState>,
@@ -429,6 +430,9 @@ impl crate::tui::TuiState for TestState {
     }
     fn chat_native_scrollbar(&self) -> bool {
         self.chat_native_scrollbar
+    }
+    fn has_pending_mouse_scroll_animation(&self) -> bool {
+        self.pending_mouse_scroll_animation
     }
     fn side_panel_native_scrollbar(&self) -> bool {
         false

@@ -19,6 +19,40 @@ fn test_redraw_interval_uses_low_frequency_during_remote_startup_phase() {
     assert_eq!(startup_interval, crate::tui::REDRAW_REMOTE_STARTUP);
 }
 
+#[test]
+fn test_redraw_interval_caps_mouse_scroll_animation_but_not_streaming() {
+    let policy = crate::perf::TuiPerfPolicy {
+        tier: crate::perf::PerformanceTier::Full,
+        redraw_fps: 60,
+        animation_fps: 60,
+        enable_decorative_animations: true,
+        enable_focus_change: true,
+        enable_mouse_capture: true,
+        enable_keyboard_enhancement: true,
+        simplified_model_picker: false,
+        linked_side_panel_refresh_interval: Duration::from_millis(250),
+    };
+
+    let streaming = TestState {
+        status: ProcessingStatus::Streaming,
+        streaming_text: "streaming".to_string(),
+        ..Default::default()
+    };
+    let scrolling = TestState {
+        pending_mouse_scroll_animation: true,
+        ..streaming.clone()
+    };
+
+    assert_eq!(
+        crate::tui::redraw_interval_with_policy(&streaming, &policy),
+        Duration::from_millis(16)
+    );
+    assert_eq!(
+        crate::tui::redraw_interval_with_policy(&scrolling, &policy),
+        crate::tui::REDRAW_MOUSE_SCROLL_ACTIVE
+    );
+}
+
 fn record_test_chat_snapshot(text: &str) {
     clear_copy_viewport_snapshot();
     let width = line_display_width(text);

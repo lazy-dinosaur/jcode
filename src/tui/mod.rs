@@ -1038,6 +1038,7 @@ pub struct PickerOption {
 }
 
 pub(crate) const REDRAW_IDLE: Duration = Duration::from_millis(250);
+pub(crate) const REDRAW_MOUSE_SCROLL_ACTIVE: Duration = Duration::from_millis(33);
 pub(crate) const REDRAW_DEEP_IDLE: Duration = Duration::from_millis(5000);
 pub(crate) const REDRAW_REMOTE_STARTUP: Duration = Duration::from_millis(1000);
 pub(crate) const REDRAW_PASSIVE_LIVENESS: Duration = Duration::from_millis(1000);
@@ -1108,10 +1109,16 @@ pub(crate) fn redraw_interval_with_policy(
         return REDRAW_PASSIVE_LIVENESS;
     }
 
+    if state.has_pending_mouse_scroll_animation() {
+        return match policy.tier {
+            crate::perf::PerformanceTier::Minimal => REDRAW_IDLE,
+            _ => fast_interval.max(REDRAW_MOUSE_SCROLL_ACTIVE),
+        };
+    }
+
     if state.is_processing()
         || !state.streaming_text().is_empty()
         || state.status_notice().is_some()
-        || state.has_pending_mouse_scroll_animation()
         || state.has_notification()
         || rate_limit_countdown_redraw_active(state)
     {
