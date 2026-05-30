@@ -1186,6 +1186,250 @@ fn repair_glued_markdown_headings(text: &str) -> String {
     out
 }
 
+fn repair_glued_code_fences(text: &str) -> String {
+    let mut out = Vec::new();
+    let mut in_code_fence = false;
+    let mut fence_char = '\0';
+    let mut fence_len = 0usize;
+
+    for line in text.split('\n') {
+        let mut pending = std::collections::VecDeque::from([line.to_string()]);
+        while let Some(segment) = pending.pop_front() {
+            if !in_code_fence {
+                if let Some((before, after)) = split_before_glued_fence_marker(&segment) {
+                    out.push(before);
+                    pending.push_front(after);
+                    continue;
+                }
+
+                if let Some((opener, code_after)) = split_compact_fence_opening(&segment) {
+                    update_code_fence_state_after_line(
+                        &opener,
+                        &mut in_code_fence,
+                        &mut fence_char,
+                        &mut fence_len,
+                    );
+                    out.push(opener);
+                    pending.push_front(code_after);
+                    continue;
+                }
+
+                update_code_fence_state_after_line(
+                    &segment,
+                    &mut in_code_fence,
+                    &mut fence_char,
+                    &mut fence_len,
+                );
+                out.push(segment);
+                continue;
+            }
+
+            if let Some((before, after)) =
+                split_code_line_before_closing_marker(&segment, fence_char)
+            {
+                if !before.is_empty() {
+                    out.push(before);
+                }
+                pending.push_front(after);
+                continue;
+            }
+
+            if let Some((closing, trailing)) =
+                split_closing_fence_with_trailing(&segment, fence_char, fence_len)
+            {
+                out.push(closing.clone());
+                update_code_fence_state_after_line(
+                    &closing,
+                    &mut in_code_fence,
+                    &mut fence_char,
+                    &mut fence_len,
+                );
+                if !trailing.is_empty() {
+                    pending.push_front(trailing);
+                }
+                continue;
+            }
+
+            update_code_fence_state_after_line(
+                &segment,
+                &mut in_code_fence,
+                &mut fence_char,
+                &mut fence_len,
+            );
+            out.push(segment);
+        }
+    }
+
+    out.join("\n")
+}
+
+fn update_code_fence_state_after_line(
+    line: &str,
+    in_code_fence: &mut bool,
+    fence_char: &mut char,
+    fence_len: &mut usize,
+) {
+    if *in_code_fence {
+        if is_closing_fence(line, *fence_char, *fence_len) {
+            *in_code_fence = false;
+            *fence_char = '\0';
+            *fence_len = 0;
+        }
+    } else if let Some((marker, min_len)) = parse_opening_fence(line) {
+        *in_code_fence = true;
+        *fence_char = marker;
+        *fence_len = min_len;
+    }
+}
+
+fn split_before_glued_fence_marker(line: &str) -> Option<(String, String)> {
+    find_fence_run(line).and_then(|(idx, _marker, _len)| {
+        if idx == 0 || line[..idx].trim().is_empty() || inside_inline_backticks(line, idx) {
+            return None;
+        }
+
+        let before = line[..idx].trim_end().to_string();
+        let after = line[idx..].trim_start().to_string();
+        if before.is_empty() || after.is_empty() {
+            None
+        } else {
+            Some((before, after))
+        }
+    })
+}
+
+fn split_code_line_before_closing_marker(line: &str, fence_char: char) -> Option<(String, String)> {
+    let marker = fence_char.to_string().repeat(3);
+    let idx = line.find(&marker)?;
+    if idx == 0 || line[..idx].trim().is_empty() || inside_inline_backticks(line, idx) {
+        return None;
+    }
+    let prev = line[..idx].chars().next_back()?;
+    if !prev.is_whitespace() {
+        return None;
+    }
+    Some((line[..idx].trim_end().to_string(), line[idx..].to_string()))
+}
+
+fn split_closing_fence_with_trailing(
+    line: &str,
+    fence_char: char,
+    min_len: usize,
+) -> Option<(String, String)> {
+    let indent_len = line.chars().take_while(|c| *c == ' ').count();
+    if indent_len > 3 {
+        return None;
+    }
+    let trimmed = &line[indent_len..];
+    let fence_len = trimmed.chars().take_while(|c| *c == fence_char).count();
+    if fence_len < min_len {
+        return None;
+    }
+
+    let fence_byte_len = trimmed
+        .char_indices()
+        .nth(fence_len)
+        .map(|(idx, _)| idx)
+        .unwrap_or(trimmed.len());
+    let trailing = trimmed[fence_byte_len..].trim_start();
+    if trailing.is_empty() {
+        return None;
+    }
+
+    Some((
+        line[..indent_len + fence_byte_len].to_string(),
+        trailing.to_string(),
+    ))
+}
+
+fn split_compact_fence_opening(line: &str) -> Option<(String, String)> {
+    let indent_len = line.chars().take_while(|c| *c == ' ').count();
+    if indent_len > 3 {
+        return None;
+    }
+    let trimmed = &line[indent_len..];
+    let (marker, fence_len) = parse_opening_fence(line)?;
+    let fence_byte_len = trimmed
+        .char_indices()
+        .nth(fence_len)
+        .map(|(idx, _)| idx)
+        .unwrap_or(trimmed.len());
+    let info = trimmed[fence_byte_len..].trim_start();
+    let (language, rest) = split_fence_info_language_and_inline_code(info)?;
+    if !should_treat_fence_info_rest_as_code(rest) {
+        return None;
+    }
+
+    let opener = format!(
+        "{}{}{}",
+        &line[..indent_len],
+        marker.to_string().repeat(fence_len),
+        language
+    );
+    Some((opener, rest.to_string()))
+}
+
+fn split_fence_info_language_and_inline_code(info: &str) -> Option<(&str, &str)> {
+    let mut language_end = None;
+    for (idx, ch) in info.char_indices() {
+        if ch.is_whitespace() {
+            language_end = Some(idx);
+            break;
+        }
+    }
+    let language_end = language_end?;
+    let language = &info[..language_end];
+    let rest = info[language_end..].trim_start();
+    if language.is_empty() || rest.is_empty() || !looks_like_markdown_code_language(language) {
+        return None;
+    }
+    Some((language, rest))
+}
+
+fn looks_like_markdown_code_language(language: &str) -> bool {
+    language
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '+' | '#' | '.'))
+}
+
+fn should_treat_fence_info_rest_as_code(rest: &str) -> bool {
+    let trimmed = rest.trim();
+    if trimmed.starts_with('{') && trimmed.ends_with('}') {
+        return false;
+    }
+    trimmed.chars().any(|ch| {
+        matches!(
+            ch,
+            ':' | '=' | '(' | ')' | '{' | '}' | '[' | ']' | '<' | '>' | ';' | '$' | '\'' | '"'
+        )
+    })
+}
+
+fn find_fence_run(line: &str) -> Option<(usize, char, usize)> {
+    let bytes = line.as_bytes();
+    let mut idx = 0usize;
+    while idx < bytes.len() {
+        let marker = match bytes[idx] {
+            b'`' => '`',
+            b'~' => '~',
+            _ => {
+                idx += 1;
+                continue;
+            }
+        };
+
+        let mut len = 0usize;
+        while idx + len < bytes.len() && bytes[idx + len] == bytes[idx] {
+            len += 1;
+        }
+        if len >= 3 {
+            return Some((idx, marker, len));
+        }
+        idx += len.max(1);
+    }
+    None
+}
+
 fn repair_line_oriented_markdown_boundaries(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let lines: Vec<&str> = text.split('\n').collect();

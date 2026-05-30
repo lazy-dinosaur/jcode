@@ -6,6 +6,7 @@ pub fn render_markdown_lazy(
     visible_range: std::ops::Range<usize>,
 ) -> Vec<Line<'static>> {
     let text = escape_currency_dollars(text);
+    let text = repair_glued_code_fences(&text);
     let text = repair_glued_markdown_headings(&text);
     let text = repair_line_oriented_markdown_boundaries(&text);
     let text = preserve_line_oriented_softbreaks(&text);

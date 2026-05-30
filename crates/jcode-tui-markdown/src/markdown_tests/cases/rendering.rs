@@ -57,6 +57,65 @@ fn test_paragraph_to_fenced_code_block_starts_on_new_line_without_blank_source_l
 }
 
 #[test]
+fn test_glued_fenced_code_block_after_prose_is_repaired() {
+    let md = "방향은 이거예요:```ts tag: chat-${messageId} ```그리고 data.roomId는 계속 유지.";
+    let rendered: Vec<String> = render_markdown_with_width(md, Some(120))
+        .iter()
+        .map(line_to_string)
+        .collect();
+
+    assert_eq!(rendered.first().map(String::as_str), Some("방향은 이거예요:"));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("┌─ ts")),
+        "glued fence should become a TypeScript code block: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("tag: chat-${messageId}")),
+        "same-line fence code should be moved into the code block body: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("그리고 data.roomId는 계속 유지.")),
+        "text glued after the closing fence should render as prose: {rendered:?}"
+    );
+    assert!(
+        rendered.iter().all(|line| !line.contains("이거예요:```")),
+        "opening fence must not remain glued to prose: {rendered:?}"
+    );
+}
+
+#[test]
+fn test_multiple_glued_fenced_code_blocks_are_repaired() {
+    let md = "방향은 이거예요:```ts tag: chat-${messageId} ```또는 방 정보도 남기고 싶으면:```ts tag: chat-room-${roomId}-message-${messageId} ```그리고 data는 유지.";
+    let rendered: Vec<String> = render_markdown_with_width(md, Some(140))
+        .iter()
+        .map(line_to_string)
+        .collect();
+
+    let code_lines = rendered
+        .iter()
+        .filter(|line| line.contains("tag: chat-"))
+        .count();
+    assert_eq!(
+        code_lines, 2,
+        "both compact glued code snippets should render as code lines: {rendered:?}"
+    );
+    assert!(
+        rendered.iter().any(|line| line.contains("또는 방 정보도")),
+        "middle prose should not be swallowed by the first code block: {rendered:?}"
+    );
+    assert!(
+        rendered.iter().any(|line| line.contains("그리고 data는 유지.")),
+        "trailing prose should not be swallowed by the second code block: {rendered:?}"
+    );
+}
+
+#[test]
 fn test_extract_copy_targets_from_rendered_lines_for_code_block() {
     let lines = render_markdown("before\n\n```rust\nfn main() {}\nprintln!(\"hi\");\n```\n\nafter");
     let targets = extract_copy_targets_from_rendered_lines(&lines);

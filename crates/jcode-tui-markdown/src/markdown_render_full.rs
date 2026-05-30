@@ -4,6 +4,7 @@ use super::*;
 pub fn render_markdown_with_width(text: &str, max_width: Option<usize>) -> Vec<Line<'static>> {
     let render_start = Instant::now();
     let text = escape_currency_dollars(text);
+    let text = repair_glued_code_fences(&text);
     let text = repair_glued_markdown_headings(&text);
     let text = repair_line_oriented_markdown_boundaries(&text);
     let text = preserve_line_oriented_softbreaks(&text);
