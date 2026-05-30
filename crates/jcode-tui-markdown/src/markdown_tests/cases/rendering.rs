@@ -133,6 +133,35 @@ fn test_glued_alphabetic_option_markers_after_choice_label_are_repaired() {
 }
 
 #[test]
+fn test_source_newlines_before_alphabetic_option_markers_are_preserved() {
+    let md = "선택지:\nA. 내가 중복 함수 하나만 제거 (Recommended)\nB. 네가 직접 getRecipientChatBadge 중복 블록 하나 삭제\nC. 우선 그대로 둠";
+    let rendered: Vec<String> = render_markdown_with_width(md, Some(160))
+        .iter()
+        .map(line_to_string)
+        .collect();
+
+    assert_eq!(rendered.first().map(String::as_str), Some("선택지:"));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("A. 내가 중복 함수")),
+        "A option should preserve source newline: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("B. 네가 직접")),
+        "B option should preserve source newline: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .all(|line| !line.contains("선택지: A.") && !line.contains("Recommended) B.")),
+        "source newlines before options must not be collapsed: {rendered:?}"
+    );
+}
+
+#[test]
 fn test_alpha_abbreviation_is_not_split_as_option_marker() {
     let md = "참고 문장. U.S.A. 표기는 그대로 둡니다.";
     let rendered: Vec<String> = render_markdown_with_width(md, Some(120))

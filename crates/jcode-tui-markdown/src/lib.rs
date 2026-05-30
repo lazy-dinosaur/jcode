@@ -1713,7 +1713,8 @@ fn repair_line_oriented_list_item_continuations(text: &str) -> String {
         out.push_str(line);
         if idx + 1 < lines.len() {
             let next = lines[idx + 1];
-            if should_preserve_list_item_continuation_break(line, next, in_code_fence)
+            if (should_preserve_list_item_continuation_break(line, next, in_code_fence)
+                || should_preserve_alpha_option_line_break(line, next, in_code_fence))
                 && !line.ends_with("  ")
             {
                 out.push_str("  ");
@@ -1735,6 +1736,26 @@ fn repair_line_oriented_list_item_continuations(text: &str) -> String {
     }
 
     out
+}
+
+fn should_preserve_alpha_option_line_break(line: &str, next: &str, in_code_fence: bool) -> bool {
+    if in_code_fence {
+        return false;
+    }
+    let trimmed = line.trim_start();
+    let next_trimmed = next.trim_start();
+    if trimmed.is_empty() || next_trimmed.is_empty() {
+        return false;
+    }
+
+    let current_is_option = starts_with_alpha_option_marker(trimmed).is_some();
+    let next_is_option = starts_with_alpha_option_marker(next_trimmed).is_some();
+
+    (next_is_option && (line.trim_end().ends_with(':') || current_is_option))
+        || (current_is_option
+            && !line_starts_interrupting_markdown_block(next)
+            && !next.starts_with(' ')
+            && !next.starts_with('\t'))
 }
 
 fn should_preserve_list_item_continuation_break(
