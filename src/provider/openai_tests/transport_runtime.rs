@@ -301,6 +301,11 @@ fn test_websocket_completion_timeout_is_long_enough_for_reasoning() {
         "completion timeout regressed to {}s; reasoning models may need several minutes",
         timeout
     );
+    assert!(
+        timeout <= 180,
+        "completion timeout regressed to {}s; silent websocket waits look like stuck thinking before HTTPS fallback",
+        timeout
+    );
 }
 
 #[test]
