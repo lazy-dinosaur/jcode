@@ -14,6 +14,9 @@ pub(crate) struct FramePerfStats {
     pub full_prep_last_prepared_bytes: usize,
     pub full_prep_last_total_wrapped_lines: usize,
     pub full_prep_last_section_count: usize,
+    pub full_prep_lock_waits: usize,
+    pub full_prep_lock_wait_ms: f64,
+    pub full_prep_lock_wait_max_ms: f64,
     pub body_requests: usize,
     pub body_hits: usize,
     pub body_oversized_hits: usize,
@@ -24,6 +27,14 @@ pub(crate) struct FramePerfStats {
     pub body_last_wrapped_lines: usize,
     pub body_last_copy_targets: usize,
     pub body_last_image_regions: usize,
+    pub body_lock_waits: usize,
+    pub body_lock_wait_ms: f64,
+    pub body_lock_wait_max_ms: f64,
+    pub draw_layout_ms: f64,
+    pub draw_messages_area_ms: f64,
+    pub draw_side_pane_ms: f64,
+    pub draw_input_ms: f64,
+    pub draw_widgets_ms: f64,
     pub viewport_scroll: usize,
     pub viewport_visible_end: usize,
     pub viewport_visible_lines: usize,
@@ -217,6 +228,18 @@ pub(super) fn note_full_prep_request() {
     with_frame_perf_stats_mut(|stats| stats.full_prep_requests += 1);
 }
 
+pub(super) fn note_full_prep_lock_wait(wait: Duration) {
+    let wait_ms = wait.as_secs_f64() * 1000.0;
+    if wait_ms <= 0.0 {
+        return;
+    }
+    with_frame_perf_stats_mut(|stats| {
+        stats.full_prep_lock_waits += 1;
+        stats.full_prep_lock_wait_ms += wait_ms;
+        stats.full_prep_lock_wait_max_ms = stats.full_prep_lock_wait_max_ms.max(wait_ms);
+    });
+}
+
 pub(super) fn note_full_prep_cache_hit(kind: CacheEntryKind, prepared: &PreparedChatFrame) {
     with_frame_perf_stats_mut(|stats| {
         stats.full_prep_hits += 1;
@@ -243,6 +266,18 @@ pub(super) fn note_full_prep_built(prepared: &PreparedChatFrame) {
 
 pub(super) fn note_body_request() {
     with_frame_perf_stats_mut(|stats| stats.body_requests += 1);
+}
+
+pub(super) fn note_body_lock_wait(wait: Duration) {
+    let wait_ms = wait.as_secs_f64() * 1000.0;
+    if wait_ms <= 0.0 {
+        return;
+    }
+    with_frame_perf_stats_mut(|stats| {
+        stats.body_lock_waits += 1;
+        stats.body_lock_wait_ms += wait_ms;
+        stats.body_lock_wait_max_ms = stats.body_lock_wait_max_ms.max(wait_ms);
+    });
 }
 
 pub(super) fn note_body_cache_hit(kind: CacheEntryKind, prepared: &PreparedMessages) {
@@ -314,6 +349,24 @@ pub(super) fn note_chat_layout(metrics: ChatLayoutMetrics) {
         stats.has_side_panel_content = has_side_panel_content;
         stats.has_pinned_content = has_pinned_content;
         stats.has_file_diff_edits = has_file_diff_edits;
+    });
+}
+
+pub(super) struct DrawPhaseTimings {
+    pub layout_ms: f64,
+    pub messages_area_ms: f64,
+    pub side_pane_ms: f64,
+    pub input_ms: f64,
+    pub widgets_ms: f64,
+}
+
+pub(super) fn note_draw_phase_timings(timings: DrawPhaseTimings) {
+    with_frame_perf_stats_mut(|stats| {
+        stats.draw_layout_ms = timings.layout_ms;
+        stats.draw_messages_area_ms = timings.messages_area_ms;
+        stats.draw_side_pane_ms = timings.side_pane_ms;
+        stats.draw_input_ms = timings.input_ms;
+        stats.draw_widgets_ms = timings.widgets_ms;
     });
 }
 

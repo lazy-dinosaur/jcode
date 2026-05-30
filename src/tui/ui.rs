@@ -985,11 +985,12 @@ pub(crate) fn last_status_area() -> Option<Rect> {
 }
 
 use frame_metrics::{
-    ChatLayoutMetrics, FLICKER_NOTICE_COPY_KEY, ViewportMetrics, finalize_frame_metrics,
-    note_body_built, note_body_cache_hit, note_body_cache_miss, note_body_incremental_reuse,
-    note_body_request, note_chat_layout, note_full_prep_built, note_full_prep_cache_hit,
-    note_full_prep_cache_miss, note_full_prep_request, note_viewport_metrics,
-    reset_frame_perf_stats, viewport_stability_hash,
+    ChatLayoutMetrics, DrawPhaseTimings, FLICKER_NOTICE_COPY_KEY, ViewportMetrics,
+    finalize_frame_metrics, note_body_built, note_body_cache_hit, note_body_cache_miss,
+    note_body_incremental_reuse, note_body_lock_wait, note_body_request, note_chat_layout,
+    note_draw_phase_timings, note_full_prep_built, note_full_prep_cache_hit,
+    note_full_prep_cache_miss, note_full_prep_lock_wait, note_full_prep_request,
+    note_viewport_metrics, reset_frame_perf_stats, viewport_stability_hash,
 };
 pub(crate) use frame_metrics::{
     debug_flicker_frame_history, debug_slow_frame_history, recent_flicker_copy_target_for_key,
@@ -1876,6 +1877,7 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
         capture.render_order.push("prepare_messages".to_string());
     }
     let prep_start = Instant::now();
+    let layout_elapsed = prep_start.duration_since(total_start);
     let chat_left_inset = left_aligned_content_inset(chat_area.width, app.centered_mode());
     let wide_prepare_width = chat_area.width.saturating_sub(chat_left_inset);
     let pinned_mermaid_aspect_ratio =
@@ -2053,6 +2055,7 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
     }
     record_layout_snapshot(messages_area, diagram_area, diff_pane_area, Some(chunks[6]));
 
+    let messages_area_start = Instant::now();
     let margins = draw_messages(
         frame,
         app,
@@ -2060,8 +2063,10 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
         prepared.clone(),
         chat_scrollbar_visible,
     );
+    let messages_area_elapsed = messages_area_start.elapsed();
 
     crate::tui::reset_pinned_diagram_debug_snapshot();
+    let side_pane_start = Instant::now();
     // Render pinned diagram if we have one
     if let (Some(diagram_info), Some(area)) = (&pinned_diagram, diagram_area) {
         if let Some(ref mut capture) = debug_capture {
@@ -2125,6 +2130,7 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
             );
         }
     }
+    let side_pane_elapsed = side_pane_start.elapsed();
 
     let messages_draw = draw_start.elapsed();
 
@@ -2156,6 +2162,7 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
         draw_inline_ui(frame, app, chunks[4]);
     }
 
+    let input_draw_start = Instant::now();
     input_ui::draw_input(
         frame,
         app,
@@ -2163,6 +2170,7 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
         user_count + pending_count + 1,
         &mut debug_capture,
     );
+    let input_draw_elapsed = input_draw_start.elapsed();
 
     if donut_height > 0 {
         animations::draw_idle_animation(frame, app, chunks[7]);
@@ -2262,6 +2270,14 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
         capture.theme = overlays::debug_palette_json();
         visual_debug::record_frame(capture.build());
     }
+
+    note_draw_phase_timings(DrawPhaseTimings {
+        layout_ms: layout_elapsed.as_secs_f64() * 1000.0,
+        messages_area_ms: messages_area_elapsed.as_secs_f64() * 1000.0,
+        side_pane_ms: side_pane_elapsed.as_secs_f64() * 1000.0,
+        input_ms: input_draw_elapsed.as_secs_f64() * 1000.0,
+        widgets_ms: widget_render_ms.unwrap_or(0.0) as f64,
+    });
 
     finalize_frame_metrics(
         app,

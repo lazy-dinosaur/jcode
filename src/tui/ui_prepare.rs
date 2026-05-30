@@ -368,6 +368,7 @@ pub(super) fn prepare_messages(
     super::note_full_prep_request();
 
     {
+        let lock_start = Instant::now();
         let cache = match full_prep_cache().lock() {
             Ok(c) => c,
             Err(poisoned) => {
@@ -376,6 +377,7 @@ pub(super) fn prepare_messages(
                 c
             }
         };
+        super::note_full_prep_lock_wait(lock_start.elapsed());
         let mut cache = cache;
         if let Some((prepared, kind)) = cache.get_exact_with_kind(&key) {
             super::note_full_prep_cache_hit(kind, prepared.as_ref());
@@ -389,7 +391,9 @@ pub(super) fn prepare_messages(
     super::note_full_prep_built(prepared.as_ref());
 
     {
+        let lock_start = Instant::now();
         if let Ok(mut cache) = full_prep_cache().lock() {
+            super::note_full_prep_lock_wait(lock_start.elapsed());
             cache.insert(key, prepared.clone());
         }
     }
@@ -536,6 +540,7 @@ fn prepare_body_cached(app: &dyn TuiState, width: u16) -> Arc<PreparedMessages> 
     };
     let msg_count = app.display_messages().len();
 
+    let lock_start = Instant::now();
     let cache = match body_cache().lock() {
         Ok(c) => c,
         Err(poisoned) => {
@@ -544,6 +549,7 @@ fn prepare_body_cached(app: &dyn TuiState, width: u16) -> Arc<PreparedMessages> 
             c
         }
     };
+    super::note_body_lock_wait(lock_start.elapsed());
 
     let mut cache = cache;
     if let Some((prepared, kind)) = cache.get_exact_with_kind(&key) {
@@ -566,10 +572,12 @@ fn prepare_body_cached(app: &dyn TuiState, width: u16) -> Arc<PreparedMessages> 
 
     super::note_body_built(prepared.as_ref());
 
+    let lock_start = Instant::now();
     let mut cache = match body_cache().lock() {
         Ok(c) => c,
         Err(poisoned) => poisoned.into_inner(),
     };
+    super::note_body_lock_wait(lock_start.elapsed());
     cache.insert(key, prepared.clone(), msg_count);
     prepared
 }
