@@ -225,6 +225,118 @@ async fn handle_get_history_falls_back_to_persisted_snapshot_when_agent_is_busy(
 }
 
 #[tokio::test]
+#[expect(
+    clippy::await_holding_lock,
+    reason = "test intentionally keeps the agent busy lock held to exercise persisted metadata fallback"
+)]
+async fn handle_get_history_metadata_only_busy_fallback_skips_transcript_payload() {
+    let _guard = crate::storage::lock_test_env();
+    let temp_home = tempfile::TempDir::new().expect("create temp home");
+    let prev_home = std::env::var_os("JCODE_HOME");
+    crate::env::set_var("JCODE_HOME", temp_home.path());
+
+    let session_id = "session_busy_metadata_only_fallback";
+    let mut session = crate::session::Session::create_with_id(
+        session_id.to_string(),
+        None,
+        Some("busy metadata fallback".to_string()),
+    );
+    session.model = Some("mock-model".to_string());
+    session.append_stored_message(crate::session::StoredMessage {
+        id: "msg-busy-metadata-fallback".to_string(),
+        role: crate::message::Role::Assistant,
+        content: vec![crate::message::ContentBlock::Text {
+            text: "this transcript should not be replayed".to_string(),
+            cache_control: None,
+        }],
+        display_role: None,
+        timestamp: None,
+        tool_duration_ms: None,
+        token_usage: None,
+    });
+    session.save().expect("save session");
+
+    let provider: Arc<dyn Provider> = Arc::new(MockProvider);
+    let registry = Registry::empty();
+    let agent = Arc::new(Mutex::new(Agent::new_with_session(
+        provider.clone(),
+        registry,
+        session,
+        None,
+    )));
+    let busy_guard = agent.lock().await;
+
+    let sessions = Arc::new(RwLock::new(HashMap::from([(
+        session_id.to_string(),
+        Arc::clone(&agent),
+    )])));
+    let client_connections = Arc::new(RwLock::new(HashMap::<String, ClientConnectionInfo>::new()));
+    let client_count = Arc::new(RwLock::new(1usize));
+    let (stream_a, mut stream_b) = crate::transport::stream_pair().expect("stream pair");
+    let (_reader_a, writer_a) = stream_a.into_split();
+    let writer = Arc::new(Mutex::new(writer_a));
+
+    handle_get_history(
+        43,
+        session_id,
+        true,
+        &agent,
+        &provider,
+        &sessions,
+        &client_connections,
+        &client_count,
+        &writer,
+        "server-name",
+        "🔥",
+        None,
+        HistoryPayloadMode::MetadataOnly,
+    )
+    .await
+    .expect("metadata-only history should be written from persisted fallback");
+
+    drop(busy_guard);
+    drop(writer);
+
+    let mut bytes = Vec::new();
+    stream_b
+        .read_to_end(&mut bytes)
+        .await
+        .expect("read history event bytes");
+    let mut cursor = std::io::Cursor::new(bytes);
+    let mut line = String::new();
+    cursor.read_line(&mut line).expect("read first line");
+    let event: crate::protocol::ServerEvent =
+        serde_json::from_str(line.trim()).expect("decode history event");
+
+    match event {
+        crate::protocol::ServerEvent::History {
+            id,
+            session_id: returned_session_id,
+            messages,
+            images,
+            provider_model,
+            activity,
+            ..
+        } => {
+            assert_eq!(id, 43);
+            assert_eq!(returned_session_id, session_id);
+            assert!(messages.is_empty());
+            assert!(images.is_empty());
+            assert_eq!(provider_model.as_deref(), Some("mock-model"));
+            let activity = activity.expect("fallback activity snapshot");
+            assert!(activity.is_processing);
+        }
+        other => panic!("expected history event, got {:?}", other),
+    }
+
+    if let Some(prev_home) = prev_home {
+        crate::env::set_var("JCODE_HOME", prev_home);
+    } else {
+        crate::env::remove_var("JCODE_HOME");
+    }
+}
+
+#[tokio::test]
 async fn handle_get_history_includes_model_routes_for_remote_picker() {
     let _guard = crate::storage::lock_test_env();
     let session_id = "session_history_model_routes";

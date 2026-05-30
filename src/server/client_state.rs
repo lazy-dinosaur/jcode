@@ -346,8 +346,12 @@ async fn send_history_from_persisted_session(
     activity: Option<SessionActivitySnapshot>,
     payload_mode: HistoryPayloadMode,
 ) -> Result<()> {
-    let session = crate::session::Session::load_for_remote_startup(session_id)
-        .or_else(|_| crate::session::Session::load_startup_stub(session_id))?;
+    let session = match payload_mode {
+        HistoryPayloadMode::Full => crate::session::Session::load_for_remote_startup(session_id)
+            .or_else(|_| crate::session::Session::load_startup_stub(session_id))?,
+        HistoryPayloadMode::MetadataOnly => crate::session::Session::load_startup_stub(session_id)
+            .or_else(|_| crate::session::Session::load_for_remote_startup(session_id))?,
+    };
     let (messages, images) = if payload_mode.includes_transcript() {
         let (rendered_messages, images) = crate::session::render_messages_and_images(&session);
         let messages = rendered_messages
