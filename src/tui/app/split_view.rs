@@ -330,37 +330,9 @@ fn capitalize_role(role: &str) -> String {
 }
 
 fn hash_str(value: &str) -> u64 {
-    const SAMPLE_BYTES: usize = 8192;
-
     let mut hasher = DefaultHasher::new();
-    value.len().hash(&mut hasher);
-
-    if value.len() <= SAMPLE_BYTES * 2 {
-        value.hash(&mut hasher);
-    } else {
-        let prefix_end = floor_char_boundary(value, SAMPLE_BYTES);
-        let suffix_start = ceil_char_boundary(value, value.len().saturating_sub(SAMPLE_BYTES));
-        value[..prefix_end].hash(&mut hasher);
-        value[suffix_start..].hash(&mut hasher);
-    }
-
+    value.hash(&mut hasher);
     hasher.finish()
-}
-
-fn floor_char_boundary(text: &str, mut idx: usize) -> usize {
-    idx = idx.min(text.len());
-    while idx > 0 && !text.is_char_boundary(idx) {
-        idx -= 1;
-    }
-    idx
-}
-
-fn ceil_char_boundary(text: &str, mut idx: usize) -> usize {
-    idx = idx.min(text.len());
-    while idx < text.len() && !text.is_char_boundary(idx) {
-        idx += 1;
-    }
-    idx
 }
 
 fn now_ms() -> u64 {
