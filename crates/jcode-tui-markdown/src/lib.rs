@@ -1152,6 +1152,108 @@ fn looks_like_line_oriented_transcript_line(line: &str) -> bool {
     matches!(trimmed.chars().next(), Some('✓' | '✗' | '┌' | '│' | '└'))
 }
 
+fn repair_glued_markdown_headings(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut in_code_fence = false;
+    let mut fence_char = '\0';
+    let mut fence_len = 0usize;
+
+    for (idx, line) in lines.iter().enumerate() {
+        if in_code_fence {
+            out.push_str(line);
+        } else {
+            out.push_str(&repair_glued_heading_markers_in_line(line));
+        }
+
+        if idx + 1 < lines.len() {
+            out.push('\n');
+        }
+
+        if in_code_fence {
+            if is_closing_fence(line, fence_char, fence_len) {
+                in_code_fence = false;
+                fence_char = '\0';
+                fence_len = 0;
+            }
+        } else if let Some((marker, min_len)) = parse_opening_fence(line) {
+            in_code_fence = true;
+            fence_char = marker;
+            fence_len = min_len;
+        }
+    }
+
+    out
+}
+
+fn repair_glued_heading_markers_in_line(line: &str) -> String {
+    let bytes = line.as_bytes();
+    let mut splits = Vec::new();
+    let mut i = 0usize;
+
+    while i < bytes.len() {
+        if bytes[i] != b'#' {
+            i += 1;
+            continue;
+        }
+
+        let mut hashes = 0usize;
+        while i + hashes < bytes.len() && bytes[i + hashes] == b'#' {
+            hashes += 1;
+        }
+
+        if (2..=6).contains(&hashes)
+            && i + hashes < bytes.len()
+            && bytes[i + hashes] == b' '
+            && i > 0
+            && !line[..i].trim().is_empty()
+            && line[..i]
+                .chars()
+                .next_back()
+                .is_some_and(|ch| !ch.is_whitespace() && ch != '`')
+            && !inside_inline_backticks(line, i)
+        {
+            splits.push(i);
+        }
+
+        i += hashes.max(1);
+    }
+
+    if splits.is_empty() {
+        return line.to_string();
+    }
+
+    let mut out = String::with_capacity(line.len() + splits.len());
+    let mut start = 0usize;
+    for split in splits {
+        out.push_str(line[start..split].trim_end());
+        out.push('\n');
+        start = split;
+    }
+    out.push_str(&line[start..]);
+    out
+}
+
+fn inside_inline_backticks(line: &str, byte_idx: usize) -> bool {
+    let mut tick_runs = 0usize;
+    let mut escaped = false;
+    for (idx, ch) in line.char_indices() {
+        if idx >= byte_idx {
+            break;
+        }
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+        } else if ch == '`' {
+            tick_runs += 1;
+        }
+    }
+    tick_runs % 2 == 1
+}
+
 fn preserve_line_oriented_softbreaks(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let lines: Vec<&str> = text.split('\n').collect();

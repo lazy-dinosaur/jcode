@@ -256,6 +256,96 @@ fn test_structured_markdown_lines_force_left_alignment() {
 }
 
 #[test]
+fn test_llm_plan_markdown_preserves_heading_list_boundaries() {
+    let md = concat!(
+        "## 2. 재현 시나리오를 4개로 고정\n",
+        "같은 조건으로 반복 측정해야 합니다.\n\n",
+        "1. **Opus 응답 streaming 중**\n",
+        "   - 긴 답변 받을 때\n",
+        "   - 스크롤 위/아래 반복\n",
+        "   - input 타이핑\n\n",
+        "### 3. 로그 분류 기준\n",
+        "이제 로그에 필드가 있으니 slow frame 하나를 이렇게 판정합니다.\n\n",
+        "- `body_misses > 0`\n",
+        "  - chat body cache miss\n",
+        "  - 큰 transcript 재준비 문제\n\n",
+        "- `draw_messages_area_ms`가 큼\n",
+        "  - visible viewport render 자체가 무거움\n"
+    );
+
+    let rendered: Vec<String> = render_markdown_with_width(md, Some(96))
+        .iter()
+        .map(line_to_string)
+        .collect();
+
+    let heading_two = rendered
+        .iter()
+        .find(|line| line.contains("2. 재현 시나리오"))
+        .unwrap_or_else(|| panic!("missing h2 heading in {rendered:?}"));
+    assert!(
+        !heading_two.contains("같은 조건"),
+        "h2 heading and following paragraph should not be joined: {rendered:?}"
+    );
+    assert!(
+        rendered.iter().any(|line| line.trim() == "같은 조건으로 반복 측정해야 합니다."),
+        "missing paragraph after heading: {rendered:?}"
+    );
+
+    let heading_three = rendered
+        .iter()
+        .find(|line| line.contains("3. 로그 분류 기준"))
+        .unwrap_or_else(|| panic!("missing h3 heading in {rendered:?}"));
+    assert!(
+        !heading_three.contains("이제 로그"),
+        "h3 heading and following paragraph should not be joined: {rendered:?}"
+    );
+    assert!(
+        rendered.iter().all(|line| !line.contains("###")),
+        "heading markers should not leak for valid headings: {rendered:?}"
+    );
+    assert!(
+        rendered.iter().any(|line| line.contains("1. Opus 응답 streaming 중")),
+        "ordered list item should render separately: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("• chat body cache miss")),
+        "nested bullet should render as its own line: {rendered:?}"
+    );
+}
+
+#[test]
+fn test_llm_plan_markdown_repairs_heading_markers_glued_after_sentence() {
+    let md = concat!(
+        "하이라이트 지연은 따로 봐야 함### 3. 로그 분류 기준\n",
+        "이제 로그에 필드가 있으니 slow frame 하나를 이렇게 판정합니다.\n",
+        "- `body_misses > 0`\n",
+        "chat body cache miss\n"
+    );
+
+    let rendered: Vec<String> = render_markdown_with_width(md, Some(96))
+        .iter()
+        .map(line_to_string)
+        .collect();
+
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim() == "하이라이트 지연은 따로 봐야 함"),
+        "prefix sentence should be kept on its own line: {rendered:?}"
+    );
+    let heading = rendered
+        .iter()
+        .find(|line| line.contains("3. 로그 분류 기준"))
+        .unwrap_or_else(|| panic!("missing repaired heading in {rendered:?}"));
+    assert!(
+        !heading.contains("###") && !heading.contains("하이라이트"),
+        "glued heading marker should be repaired into a real heading: {rendered:?}"
+    );
+}
+
+#[test]
 fn test_wrapped_left_aligned_list_items_stay_left_aligned() {
     let lines = render_markdown("- this is a long list item that should wrap");
     let wrapped = wrap_lines(lines, 12);
