@@ -407,6 +407,39 @@ fn test_prepare_body_renders_glued_assistant_ordered_list_on_separate_lines() {
 }
 
 #[test]
+fn test_prepare_body_preserves_list_item_title_continuation_break() {
+    let state = TestState {
+        display_messages: vec![DisplayMessage::assistant(
+            "5. **poll 메시지도 push 발송 유지**\npoll도 unread에 포함되므로 push가 나가야 합니다.",
+        )],
+        messages_version: 1,
+        ..Default::default()
+    };
+
+    let prepared = super::prepare::prepare_body(&state, 180, false);
+    let lines = prepared.wrapped_plain_lines.as_ref();
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.trim_start().starts_with("5. poll 메시지도 push 발송 유지")),
+        "list item title should render separately: {lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.trim_start().starts_with("poll도 unread에 포함")),
+        "list item continuation should preserve visible line break: {lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|line| !line.contains("유지 poll도") && !line.contains("유지poll도")),
+        "TUI body wrapping must not glue list item continuation: {lines:?}"
+    );
+}
+
+#[test]
 fn test_tail_update_incremental_body_matches_full_rebuild() {
     let width = 80;
     let old_state = TestState {

@@ -98,6 +98,34 @@ fn test_glued_bullet_marker_after_sentence_is_repaired() {
 }
 
 #[test]
+fn test_ordered_list_item_continuation_line_preserves_visible_break() {
+    let md = "5. **poll 메시지도 push 발송 유지**\npoll도 unread에 포함되므로 push가 나가야 합니다.";
+    let rendered: Vec<String> = render_markdown_with_width(md, Some(120))
+        .iter()
+        .map(line_to_string)
+        .collect();
+
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("5. poll 메시지도 push 발송 유지")),
+        "list item title should render on its own line: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("poll도 unread에 포함")),
+        "list item continuation should preserve the source line break: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .all(|line| !line.contains("유지 poll도") && !line.contains("유지poll도")),
+        "list item title and continuation must not be glued: {rendered:?}"
+    );
+}
+
+#[test]
 fn test_paragraph_to_fenced_code_block_starts_on_new_line_without_blank_source_line() {
     let md = "로그 추가:\n```js\nconsole.log('badge')\n```";
     let rendered: Vec<String> = render_markdown_with_width(md, Some(96))

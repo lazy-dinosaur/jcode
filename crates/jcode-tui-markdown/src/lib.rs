@@ -1626,6 +1626,74 @@ fn repair_line_oriented_markdown_boundaries(text: &str) -> String {
     out
 }
 
+fn repair_line_oriented_list_item_continuations(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut in_code_fence = false;
+    let mut fence_char = '\0';
+    let mut fence_len = 0usize;
+
+    for (idx, line) in lines.iter().enumerate() {
+        out.push_str(line);
+        if idx + 1 < lines.len() {
+            let next = lines[idx + 1];
+            if should_preserve_list_item_continuation_break(line, next, in_code_fence)
+                && !line.ends_with("  ")
+            {
+                out.push_str("  ");
+            }
+            out.push('\n');
+        }
+
+        if in_code_fence {
+            if is_closing_fence(line, fence_char, fence_len) {
+                in_code_fence = false;
+                fence_char = '\0';
+                fence_len = 0;
+            }
+        } else if let Some((marker, min_len)) = parse_opening_fence(line) {
+            in_code_fence = true;
+            fence_char = marker;
+            fence_len = min_len;
+        }
+    }
+
+    out
+}
+
+fn should_preserve_list_item_continuation_break(
+    line: &str,
+    next: &str,
+    in_code_fence: bool,
+) -> bool {
+    if in_code_fence {
+        return false;
+    }
+    let trimmed = line.trim_start();
+    let next_trimmed = next.trim_start();
+    if trimmed.is_empty() || next_trimmed.is_empty() {
+        return false;
+    }
+    if !starts_with_ordered_or_bullet_list_marker(trimmed) {
+        return false;
+    }
+    if line_starts_interrupting_markdown_block(next)
+        || starts_with_ordered_or_bullet_list_marker(next_trimmed)
+        || next.starts_with(' ')
+        || next.starts_with('\t')
+    {
+        return false;
+    }
+
+    true
+}
+
+fn starts_with_ordered_or_bullet_list_marker(line: &str) -> bool {
+    looks_like_ordered_list_item_for_boundary_repair(line)
+        || matches!(line.as_bytes(), [b'-' | b'*' | b'+', b' ' | b'\t', ..])
+        || line.starts_with("• ")
+}
+
 fn line_starts_interrupting_markdown_block(line: &str) -> bool {
     let trimmed = line.trim_start();
     if trimmed.is_empty() {

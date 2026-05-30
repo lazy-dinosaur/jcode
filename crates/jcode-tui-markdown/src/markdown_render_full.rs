@@ -8,6 +8,7 @@ pub fn render_markdown_with_width(text: &str, max_width: Option<usize>) -> Vec<L
     let text = repair_glued_list_markers(&text);
     let text = repair_glued_markdown_headings(&text);
     let text = repair_line_oriented_markdown_boundaries(&text);
+    let text = repair_line_oriented_list_item_continuations(&text);
     let text = preserve_line_oriented_softbreaks(&text);
     let text = text.as_str();
     let mut lines: Vec<Line<'static>> = Vec::new();
