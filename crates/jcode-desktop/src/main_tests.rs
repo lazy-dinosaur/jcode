@@ -1541,6 +1541,21 @@ fn single_session_tool_events_expand_context_and_collapse_previous_call() {
 }
 
 #[test]
+fn single_session_duplicate_tool_start_does_not_duplicate_active_call() {
+    let mut app = SingleSessionApp::new(None);
+    app.apply_session_event(session_launch::DesktopSessionEvent::ToolStarted {
+        name: "call".to_string(),
+    });
+    app.apply_session_event(session_launch::DesktopSessionEvent::ToolStarted {
+        name: "call".to_string(),
+    });
+
+    let body = app.body_lines().join("\n");
+    assert_eq!(body.matches("  ○ call · preparing").count(), 1);
+    assert_eq!(app.status.as_deref(), Some("preparing tool call"));
+}
+
+#[test]
 fn single_session_adjacent_tool_messages_render_as_compact_summary() {
     let mut app = SingleSessionApp::new(None);
     app.messages

@@ -4,6 +4,11 @@ pub(crate) fn is_count_wrapper_noise_line(line: &str) -> bool {
     line.trim().eq_ignore_ascii_case("count")
 }
 
+fn is_tool_call_wrapper_noise_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.eq_ignore_ascii_case("count") || trimmed.eq_ignore_ascii_case("call")
+}
+
 pub(crate) fn count_wrapper_noise_line_count(text: &str) -> usize {
     text.lines()
         .filter(|line| is_count_wrapper_noise_line(line))
@@ -30,14 +35,14 @@ fn strip_count_wrapper_noise_edges(text: &str) -> String {
 
     let mut start = 0usize;
     while start < lines.len()
-        && (lines[start].trim().is_empty() || is_count_wrapper_noise_line(lines[start]))
+        && (lines[start].trim().is_empty() || is_tool_call_wrapper_noise_line(lines[start]))
     {
         start += 1;
     }
 
     let mut end = lines.len();
     while end > start
-        && (lines[end - 1].trim().is_empty() || is_count_wrapper_noise_line(lines[end - 1]))
+        && (lines[end - 1].trim().is_empty() || is_tool_call_wrapper_noise_line(lines[end - 1]))
     {
         end -= 1;
     }
@@ -298,6 +303,25 @@ mod tests {
             other => panic!("expected text block, got {other:?}"),
         }
         assert!(matches!(normalized[1], ContentBlock::ToolUse { .. }));
+    }
+
+    #[test]
+    fn normalize_assistant_tool_call_noise_drops_call_text_block() {
+        let content = vec![
+            ContentBlock::Text {
+                text: "call\n\ncall".to_string(),
+                cache_control: None,
+            },
+            ContentBlock::ToolUse {
+                id: "tool_1".to_string(),
+                name: "read".to_string(),
+                input: serde_json::json!({"file_path":"Cargo.toml"}),
+            },
+        ];
+
+        let normalized = normalize_assistant_tool_call_noise(&Role::Assistant, content);
+        assert_eq!(normalized.len(), 1);
+        assert!(matches!(normalized[0], ContentBlock::ToolUse { .. }));
     }
 
     #[test]

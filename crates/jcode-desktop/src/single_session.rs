@@ -1658,6 +1658,12 @@ impl SingleSessionApp {
             }
             DesktopSessionEvent::ToolStarted { name } => {
                 self.reload_phase = ReloadPhase::Stable;
+                if self.active_tool_name() == Some(name.as_str())
+                    && self.active_tool_header_state() == Some("preparing")
+                {
+                    self.status = Some(format!("preparing tool {name}"));
+                    return;
+                }
                 self.collapse_active_tool_message();
                 self.active_tool_input_buffer.clear();
                 self.status = Some(format!("preparing tool {name}"));
@@ -2447,6 +2453,35 @@ impl SingleSessionApp {
                 message.content = replacement;
             }
         }
+    }
+
+    fn active_tool_name(&self) -> Option<&str> {
+        let index = self.active_tool_message_index?;
+        let message = self.messages.get(index)?;
+        if message.role != SingleSessionRole::Tool {
+            return None;
+        }
+        let first_line = message.content.lines().next()?;
+        let line = first_line.trim().trim_start_matches(['▾', '▸']).trim();
+        line.split_whitespace().next()
+    }
+
+    fn active_tool_header_state(&self) -> Option<&str> {
+        let index = self.active_tool_message_index?;
+        let message = self.messages.get(index)?;
+        if message.role != SingleSessionRole::Tool {
+            return None;
+        }
+        let first_line = message.content.lines().next()?;
+        let line = first_line.trim().trim_start_matches(['▾', '▸']).trim();
+        let mut parts = line.splitn(2, char::is_whitespace);
+        parts.next()?;
+        let rest = parts.next()?.trim();
+        rest.split_once(':')
+            .map(|(state, _)| state.trim())
+            .unwrap_or(rest)
+            .split_whitespace()
+            .next()
     }
 
     fn insert_draft_text(&mut self, text: &str) {
