@@ -359,6 +359,10 @@ pub struct UsageInfo {
     pub cache_write_tokens: Option<u64>,
     /// Output tokens per second (live streaming)
     pub output_tps: Option<f32>,
+    /// Whether subscription limit windows were successfully fetched.
+    pub has_usage_windows: bool,
+    /// Last fetch/auth error, if usage is currently unavailable.
+    pub error_message: Option<String>,
     /// Whether data was successfully fetched / available to show
     pub available: bool,
 }

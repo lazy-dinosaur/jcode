@@ -207,10 +207,13 @@ impl App {
                 cache_read_tokens: None,
                 cache_write_tokens: None,
                 output_tps,
+                has_usage_windows: false,
+                error_message: None,
                 available: self.total_input_tokens > 0 || self.total_output_tokens > 0,
             }),
             WidgetProviderKind::Anthropic => {
                 let usage = crate::usage::get_sync();
+                let error_message = usage.last_error.clone();
                 Some(crate::tui::info_widget::UsageInfo {
                     provider: crate::tui::info_widget::UsageProvider::Anthropic,
                     five_hour: usage.five_hour,
@@ -225,11 +228,15 @@ impl App {
                     cache_read_tokens: None,
                     cache_write_tokens: None,
                     output_tps,
-                    available: usage.last_error.is_none(),
+                    has_usage_windows: error_message.is_none(),
+                    error_message,
+                    available: true,
                 })
             }
             WidgetProviderKind::OpenAI => {
                 let openai_usage = crate::usage::get_openai_usage_sync();
+                let has_usage_windows = openai_usage.has_limits();
+                let error_message = openai_usage.last_error.clone();
                 Some(crate::tui::info_widget::UsageInfo {
                     provider: crate::tui::info_widget::UsageProvider::OpenAI,
                     five_hour: openai_usage
@@ -261,7 +268,9 @@ impl App {
                     cache_read_tokens: None,
                     cache_write_tokens: None,
                     output_tps,
-                    available: openai_usage.has_limits(),
+                    has_usage_windows,
+                    error_message,
+                    available: has_usage_windows || openai_usage.last_error.is_some(),
                 })
             }
             WidgetProviderKind::Gemini => None,
@@ -280,6 +289,8 @@ impl App {
                     cache_read_tokens: self.streaming_cache_read_tokens,
                     cache_write_tokens: self.streaming_cache_creation_tokens,
                     output_tps,
+                    has_usage_windows: false,
+                    error_message: None,
                     available: true,
                 })
             }

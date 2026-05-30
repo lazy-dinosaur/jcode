@@ -11,6 +11,10 @@ pub(super) fn render_usage_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Lin
         return Vec::new();
     }
 
+    if should_render_usage_error(info) {
+        return render_usage_error(info, inner.width, true);
+    }
+
     match info.provider {
         UsageProvider::Copilot => {
             vec![Line::from(vec![Span::styled(
@@ -105,6 +109,10 @@ pub(super) fn render_usage_compact(info: &UsageInfo, width: u16) -> Vec<Line<'st
         return Vec::new();
     }
 
+    if should_render_usage_error(info) {
+        return render_usage_error(info, width, false);
+    }
+
     let five_hr_used = (info.five_hour * 100.0).round().clamp(0.0, 100.0) as u8;
     let seven_day_used = (info.seven_day * 100.0).round().clamp(0.0, 100.0) as u8;
     let five_hr_left = 100u8.saturating_sub(five_hr_used);
@@ -158,6 +166,94 @@ pub(super) fn render_usage_compact(info: &UsageInfo, width: u16) -> Vec<Line<'st
         ));
     }
     lines
+}
+
+fn should_render_usage_error(info: &UsageInfo) -> bool {
+    info.error_message.is_some() && !info.has_usage_windows
+}
+
+fn render_usage_error(info: &UsageInfo, width: u16, include_detail: bool) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let label = info.provider.label();
+    if !label.is_empty() {
+        lines.push(Line::from(vec![Span::styled(
+            format!("{} limits", label),
+            Style::default()
+                .fg(rgb(140, 140, 150))
+                .add_modifier(ratatui::style::Modifier::DIM),
+        )]));
+    }
+
+    let error = info.error_message.as_deref().unwrap_or_default();
+    lines.push(Line::from(vec![Span::styled(
+        usage_error_summary(error),
+        Style::default().fg(rgb(255, 190, 120)).bold(),
+    )]));
+
+    if include_detail && width >= 18 {
+        let detail = usage_error_detail(error);
+        if !detail.is_empty() {
+            lines.push(Line::from(vec![Span::styled(
+                truncate_to_width(&detail, width as usize),
+                Style::default().fg(rgb(130, 130, 145)),
+            )]));
+        }
+    }
+
+    lines
+}
+
+fn usage_error_summary(error: &str) -> &'static str {
+    let lower = error.to_ascii_lowercase();
+    if lower.contains("re-authenticate")
+        || lower.contains("refresh_token")
+        || lower.contains("invalid_grant")
+        || lower.contains("invalid request")
+        || lower.contains("token refresh")
+    {
+        "⚠ login required"
+    } else if lower.contains("no ") && lower.contains("credentials") {
+        "⚠ no usage auth"
+    } else {
+        "⚠ usage unavailable"
+    }
+}
+
+fn usage_error_detail(error: &str) -> String {
+    let first_line = error
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("");
+    let trimmed = first_line.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    trimmed
+        .replace("OpenAI token refresh failed:", "OpenAI refresh failed")
+        .replace("Token refresh failed:", "refresh failed:")
+}
+
+fn truncate_to_width(text: &str, width: usize) -> String {
+    if UnicodeWidthStr::width(text) <= width {
+        return text.to_string();
+    }
+    if width <= 1 {
+        return "…".to_string();
+    }
+
+    let target = width.saturating_sub(1);
+    let mut out = String::new();
+    let mut used = 0usize;
+    for ch in text.chars() {
+        let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        if used + ch_width > target {
+            break;
+        }
+        out.push(ch);
+        used += ch_width;
+    }
+    out.push('…');
+    out
 }
 
 fn render_labeled_bar(

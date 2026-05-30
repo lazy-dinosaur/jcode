@@ -497,6 +497,35 @@ fn overview_requires_multiple_sections() {
 }
 
 #[test]
+fn usage_error_keeps_widget_visible_with_login_hint() {
+    let usage = UsageInfo {
+        provider: UsageProvider::OpenAI,
+        available: true,
+        has_usage_windows: false,
+        error_message: Some(
+            "Token refresh failed: OpenAI token refresh failed: refresh_token_reused - use `/login openai` to re-authenticate"
+                .to_string(),
+        ),
+        ..Default::default()
+    };
+    let data = InfoWidgetData {
+        usage_info: Some(usage.clone()),
+        ..Default::default()
+    };
+
+    assert!(data.has_data_for(WidgetKind::UsageLimits));
+
+    let lines = super::usage_render::render_usage_widget(&data, Rect::new(0, 0, 32, 6));
+    let text = lines_text(&lines);
+    assert!(text.contains("OpenAI limits"));
+    assert!(text.contains("login required"));
+
+    let compact = super::usage_render::render_usage_compact(&usage, 32);
+    let compact_text = lines_text(&compact);
+    assert!(compact_text.contains("login required"));
+}
+
+#[test]
 fn overview_widget_is_placed_when_space_allows() {
     {
         let mut guard = super::get_or_init_state();
