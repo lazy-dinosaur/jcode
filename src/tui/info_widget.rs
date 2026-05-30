@@ -1815,6 +1815,15 @@ fn render_sections(
         lines.extend(render_context_compact(data, inner));
     }
 
+    // Usage info is auth-sensitive and easy to miss when an expanded todos page
+    // consumes the bottom of the overview. Keep it above todo details so login
+    // errors and limit windows remain visible instead of being truncated away.
+    if let Some(info) = &data.usage_info
+        && info.available
+    {
+        lines.extend(render_usage_compact(info, inner.width));
+    }
+
     if !data.todos.is_empty() {
         if matches!(focus, Some(InfoPageKind::TodosExpanded)) {
             lines.extend(render_todos_expanded(data, inner));
@@ -1839,13 +1848,6 @@ fn render_sections(
         && info.running_count > 0
     {
         lines.extend(render_background_compact(info));
-    }
-
-    // Usage info (subscription limits)
-    if let Some(info) = &data.usage_info
-        && info.available
-    {
-        lines.extend(render_usage_compact(info, inner.width));
     }
 
     if let Some(cache) = data.cache_hit_info.as_ref() {

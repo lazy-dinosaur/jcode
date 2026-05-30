@@ -34,8 +34,8 @@ const OPENAI_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 /// Cache duration (refresh every 5 minutes - usage data is slow-changing)
 const CACHE_DURATION: Duration = Duration::from_secs(300);
 
-/// Error backoff duration (wait 5 minutes before retrying after auth/credential errors)
-const ERROR_BACKOFF: Duration = Duration::from_secs(300);
+/// Error backoff duration. Keep short so usage recovers quickly after re-login.
+const ERROR_BACKOFF: Duration = Duration::from_secs(15);
 
 /// Rate limit backoff duration (wait 15 minutes before retrying after 429 errors)
 const RATE_LIMIT_BACKOFF: Duration = Duration::from_secs(900);
@@ -342,6 +342,7 @@ fn enqueue_openai_usage_tasks(tasks: &mut tokio::task::JoinSet<Option<ProviderUs
     if !accounts.is_empty() {
         let active_label = auth::codex::active_account_label();
         let account_count = accounts.len();
+        let min_valid_until_ms = chrono::Utc::now().timestamp_millis() + 300_000;
         for account in accounts {
             let display_name = openai_provider_display_name(
                 &account.label,
@@ -349,14 +350,11 @@ fn enqueue_openai_usage_tasks(tasks: &mut tokio::task::JoinSet<Option<ProviderUs
                 account_count,
                 active_label.as_deref() == Some(&account.label),
             );
-            let account_label = account.label;
-            let creds = auth::codex::CodexCredentials {
-                access_token: account.access_token,
-                refresh_token: account.refresh_token,
-                id_token: account.id_token,
-                account_id: account.account_id,
-                expires_at: account.expires_at,
-            };
+            let account_label = account.label.clone();
+            let creds = auth::codex::credentials_for_account_with_allowed_legacy_fallback(
+                &account,
+                min_valid_until_ms,
+            );
             tasks.spawn(async move {
                 Some(
                     fetch_openai_usage_for_account(display_name, creds, Some(&account_label)).await,

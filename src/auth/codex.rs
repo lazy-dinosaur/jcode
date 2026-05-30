@@ -386,6 +386,57 @@ pub fn load_credentials_for_account(label: &str) -> Result<CodexCredentials> {
     Ok(credentials_from_account(account))
 }
 
+pub fn credentials_for_account_with_allowed_legacy_fallback(
+    account: &OpenAiAccount,
+    min_valid_until_ms: i64,
+) -> CodexCredentials {
+    let current = credentials_from_account(account);
+    if current
+        .expires_at
+        .map(|expires_at| expires_at > min_valid_until_ms)
+        .unwrap_or(true)
+    {
+        return current;
+    }
+
+    let Ok(legacy) = load_allowed_legacy_oauth_credentials() else {
+        return current;
+    };
+    if legacy
+        .expires_at
+        .map(|expires_at| expires_at <= min_valid_until_ms)
+        .unwrap_or(false)
+    {
+        return current;
+    }
+    if !credentials_match_account(account, &legacy) {
+        return current;
+    }
+
+    if let Err(err) = update_account_tokens(
+        &account.label,
+        &legacy.access_token,
+        &legacy.refresh_token,
+        legacy.id_token.clone(),
+        legacy.account_id.clone(),
+        legacy.expires_at,
+    ) {
+        crate::logging::warn(&format!(
+            "Failed to sync trusted Codex OAuth tokens into jcode OpenAI account '{}': {}",
+            account.label, err
+        ));
+    }
+
+    legacy
+}
+
+pub fn load_allowed_legacy_oauth_credentials() -> Result<CodexCredentials> {
+    if !legacy_auth_allowed() {
+        anyhow::bail!("Legacy Codex OAuth credentials are not trusted for jcode use");
+    }
+    load_legacy_oauth_credentials()
+}
+
 pub fn upsert_account_from_tokens(
     label: &str,
     access_token: &str,
@@ -466,6 +517,33 @@ fn credentials_from_account(account: &OpenAiAccount) -> CodexCredentials {
             .or_else(|| account.id_token.as_deref().and_then(extract_account_id)),
         expires_at: account.expires_at,
     }
+}
+
+fn credentials_match_account(account: &OpenAiAccount, credentials: &CodexCredentials) -> bool {
+    let account_id_from_token = account.id_token.as_deref().and_then(extract_account_id);
+    let credentials_account_id_from_token =
+        credentials.id_token.as_deref().and_then(extract_account_id);
+    let account_id = account
+        .account_id
+        .as_deref()
+        .or(account_id_from_token.as_deref());
+    let credentials_account_id = credentials
+        .account_id
+        .as_deref()
+        .or(credentials_account_id_from_token.as_deref());
+
+    if let (Some(account_id), Some(credentials_account_id)) = (account_id, credentials_account_id) {
+        return account_id == credentials_account_id;
+    }
+
+    let credentials_email = credentials.id_token.as_deref().and_then(extract_email);
+    if let (Some(account_email), Some(credentials_email)) =
+        (account.email.as_deref(), credentials_email)
+    {
+        return account_email.eq_ignore_ascii_case(&credentials_email);
+    }
+
+    false
 }
 
 fn credentials_from_legacy_tokens(tokens: &LegacyTokens) -> CodexCredentials {

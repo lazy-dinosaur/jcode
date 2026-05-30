@@ -1,3 +1,13 @@
+fn assert_jcode_program_name(program: &std::path::Path) {
+    let name = program
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("program should have a filename");
+    assert!(
+        name == "jcode" || name.starts_with("jcode-"),
+        "expected jcode launcher or test binary, got {name:?}"
+    );
+}
 use super::{
     build_resume_command, clear_ambient_info_cache_for_tests, extract_bracketed_system_message,
     format_countdown_until, gather_ambient_info, image_bytes_match_mime, partition_queued_messages,
@@ -148,10 +158,7 @@ fn build_resume_command_uses_imported_jcode_session_for_claude_code() {
         None,
     );
 
-    assert_eq!(
-        program.file_name().and_then(|name| name.to_str()),
-        Some("jcode")
-    );
+    assert_jcode_program_name(&program);
     assert_eq!(
         args,
         vec![
@@ -174,10 +181,7 @@ fn build_resume_command_uses_imported_jcode_session_for_codex() {
         None,
     );
 
-    assert_eq!(
-        program.file_name().and_then(|name| name.to_str()),
-        Some("jcode")
-    );
+    assert_jcode_program_name(&program);
     assert_eq!(
         args,
         vec![

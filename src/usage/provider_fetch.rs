@@ -61,6 +61,7 @@ pub(super) async fn fetch_all_openai_usage_reports() -> Vec<ProviderUsage> {
     if !accounts.is_empty() {
         let active_label = auth::codex::active_account_label();
         let mut reports = Vec::with_capacity(accounts.len());
+        let min_valid_until_ms = chrono::Utc::now().timestamp_millis() + 300_000;
         for account in &accounts {
             let display_name = openai_provider_display_name(
                 &account.label,
@@ -68,19 +69,13 @@ pub(super) async fn fetch_all_openai_usage_reports() -> Vec<ProviderUsage> {
                 accounts.len(),
                 active_label.as_deref() == Some(&account.label),
             );
+            let creds = auth::codex::credentials_for_account_with_allowed_legacy_fallback(
+                account,
+                min_valid_until_ms,
+            );
             reports.push(
-                fetch_openai_usage_for_account(
-                    display_name,
-                    auth::codex::CodexCredentials {
-                        access_token: account.access_token.clone(),
-                        refresh_token: account.refresh_token.clone(),
-                        id_token: account.id_token.clone(),
-                        account_id: account.account_id.clone(),
-                        expires_at: account.expires_at,
-                    },
-                    Some(account.label.as_str()),
-                )
-                .await,
+                fetch_openai_usage_for_account(display_name, creds, Some(account.label.as_str()))
+                    .await,
             );
         }
         return reports;

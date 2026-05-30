@@ -148,6 +148,7 @@ mod tests {
 
     #[test]
     fn usage_path_respects_jcode_home() {
+        let _global_env_lock = crate::storage::lock_test_env();
         let _env_lock = lock_env();
         clear_tracker();
         let temp = tempfile::tempdir().expect("tempdir");
@@ -158,6 +159,7 @@ mod tests {
 
     #[test]
     fn save_and_load_roundtrip_under_jcode_home() {
+        let _global_env_lock = crate::storage::lock_test_env();
         let _env_lock = lock_env();
         clear_tracker();
         let temp = tempfile::tempdir().expect("tempdir");

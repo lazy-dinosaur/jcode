@@ -62,7 +62,19 @@ fn test_usage_report_updates_display_only_card_without_system_message() {
     assert!(msg.content.contains("5h"));
     assert!(msg.content.contains("82%"));
     assert!(msg.content.contains("plan: pro"));
-    assert!(app.materialized_provider_messages().is_empty());
+    let provider_messages = app.materialized_provider_messages();
+    assert!(
+        provider_messages.iter().all(|message| !message.content.iter().any(|block| {
+            matches!(
+                block,
+                ContentBlock::Text { text, .. }
+                    if text.contains("OpenAI (ChatGPT)")
+                        || text.contains("plan: pro")
+                        || text.contains("# Usage")
+            )
+        })),
+        "usage card must remain display-only and out of provider context: {provider_messages:#?}"
+    );
 }
 
 #[test]

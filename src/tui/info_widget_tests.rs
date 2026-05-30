@@ -526,6 +526,51 @@ fn usage_error_keeps_widget_visible_with_login_hint() {
 }
 
 #[test]
+fn overview_renders_usage_before_expanded_todos() {
+    let data = InfoWidgetData {
+        model: Some("opus".to_string()),
+        provider_name: Some("claude".to_string()),
+        session_count: Some(4),
+        context_info: Some(crate::prompt::ContextInfo {
+            total_chars: 383_000,
+            ..Default::default()
+        }),
+        usage_info: Some(UsageInfo {
+            provider: UsageProvider::Anthropic,
+            five_hour: 0.45,
+            seven_day: 0.13,
+            available: true,
+            has_usage_windows: true,
+            ..Default::default()
+        }),
+        todos: (0..8)
+            .map(|idx| crate::todo::TodoItem {
+                content: format!("todo {idx}"),
+                status: "pending".to_string(),
+                priority: "high".to_string(),
+                id: format!("todo-{idx}"),
+                blocked_by: Vec::new(),
+                assigned_to: None,
+            })
+            .collect(),
+        ..Default::default()
+    };
+
+    let lines = super::render_page(
+        super::InfoPageKind::TodosExpanded,
+        &data,
+        Rect::new(0, 0, 32, 8),
+    );
+    let text = lines_text(&lines);
+    let usage_pos = text.find("Anthropic limits").expect("usage line rendered");
+    let todos_pos = text.find("Todos").expect("todos line rendered");
+    assert!(
+        usage_pos < todos_pos,
+        "usage should render before todos: {text}"
+    );
+}
+
+#[test]
 fn overview_widget_is_placed_when_space_allows() {
     {
         let mut guard = super::get_or_init_state();

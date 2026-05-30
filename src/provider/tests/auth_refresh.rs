@@ -191,9 +191,10 @@ fn test_on_auth_changed_hot_initializes_anthropic_and_marks_routes_available() {
             expires: i64::MAX,
             email: None,
             scopes: Vec::new(),
-            subscription_type: None,
+            subscription_type: Some("max".to_string()),
         })
         .expect("save test Claude auth");
+        crate::auth::claude::set_active_account_override(Some("claude-1".to_string()));
 
         provider.on_auth_changed();
 
@@ -233,9 +234,10 @@ fn test_anthropic_model_routes_keep_plain_4_6_available_without_extra_usage() {
             expires: i64::MAX,
             email: None,
             scopes: Vec::new(),
-            subscription_type: None,
+            subscription_type: Some("max".to_string()),
         })
         .expect("save test Claude auth");
+        crate::auth::claude::set_active_account_override(Some("claude-1".to_string()));
 
         provider.on_auth_changed();
 

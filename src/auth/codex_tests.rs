@@ -284,6 +284,55 @@ fn load_credentials_reads_legacy_oauth_when_allowed() {
     );
 }
 
+#[test]
+fn expired_jcode_account_uses_fresh_trusted_legacy_oauth_for_same_account() {
+    let _lock = crate::storage::lock_test_env();
+    let temp = tempfile::TempDir::new().unwrap();
+    let _home = EnvVarGuard::set_path("JCODE_HOME", temp.path());
+    let _allow = EnvVarGuard::set(ALLOW_LEGACY_AUTH_ENV, "1");
+    set_active_account_override(None);
+
+    upsert_account(OpenAiAccount {
+        label: "openai-1".to_string(),
+        access_token: "at_expired_jcode".to_string(),
+        refresh_token: "rt_expired_jcode".to_string(),
+        id_token: None,
+        account_id: Some("acct_shared".to_string()),
+        expires_at: Some(1),
+        email: Some("shared@example.com".to_string()),
+    })
+    .unwrap();
+
+    let legacy_path = temp
+        .path()
+        .join("external")
+        .join(".codex")
+        .join("auth.json");
+    std::fs::create_dir_all(legacy_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &legacy_path,
+        r#"{
+            "tokens": {
+                "access_token": "at_fresh_codex",
+                "refresh_token": "rt_fresh_codex",
+                "account_id": "acct_shared",
+                "expires_at": 4102444800000
+            }
+        }"#,
+    )
+    .unwrap();
+
+    let account = list_accounts().unwrap().pop().unwrap();
+    let creds = credentials_for_account_with_allowed_legacy_fallback(&account, 300_000);
+    assert_eq!(creds.access_token, "at_fresh_codex");
+    assert_eq!(creds.refresh_token, "rt_fresh_codex");
+
+    let saved = list_accounts().unwrap().pop().unwrap();
+    assert_eq!(saved.access_token, "at_fresh_codex");
+    assert_eq!(saved.refresh_token, "rt_fresh_codex");
+    assert_eq!(saved.account_id.as_deref(), Some("acct_shared"));
+}
+
 #[cfg(unix)]
 #[test]
 fn load_credentials_reads_legacy_oauth_without_changing_external_permissions() {
