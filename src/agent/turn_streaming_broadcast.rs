@@ -832,6 +832,24 @@ impl Agent {
                             );
                             tool_results_dirty = true;
                         }
+                        PresetToolResult::DuplicateSkipped { content } => {
+                            logging::warn(&content);
+                            let _ = event_tx.send(ServerEvent::ToolDone {
+                                id: tc.id.clone(),
+                                name: tc.name.clone(),
+                                output: content.clone(),
+                                error: None,
+                            });
+                            self.add_message(
+                                Role::User,
+                                vec![ContentBlock::ToolResult {
+                                    tool_use_id: tc.id.clone(),
+                                    content,
+                                    is_error: None,
+                                }],
+                            );
+                            tool_results_dirty = true;
+                        }
                     }
                     continue;
                 }

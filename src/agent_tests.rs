@@ -584,6 +584,59 @@ fn tool_output_to_content_blocks_preserves_labeled_images() {
 }
 
 #[tokio::test]
+async fn classify_tool_calls_skips_duplicate_local_calls() {
+    let _guard = crate::storage::lock_test_env();
+    let provider: Arc<dyn Provider> = Arc::new(DelayedProvider {
+        open_delay: Duration::from_millis(0),
+        first_event_delay: Duration::from_millis(0),
+    });
+    let registry = Registry::new(provider.clone()).await;
+    let agent = Agent::new(provider, registry);
+    let calls = vec![
+        crate::message::ToolCall {
+            id: "call_1".to_string(),
+            name: "bash".to_string(),
+            input: serde_json::json!({"command":"printf hi"}),
+            intent: None,
+        },
+        crate::message::ToolCall {
+            id: "call_2".to_string(),
+            name: "bash".to_string(),
+            input: serde_json::json!({"command":"printf hi"}),
+            intent: None,
+        },
+        crate::message::ToolCall {
+            id: "call_3".to_string(),
+            name: "bash".to_string(),
+            input: serde_json::json!({"command":"printf bye"}),
+            intent: None,
+        },
+    ];
+
+    let classified = agent
+        .classify_tool_calls(&calls, &std::collections::HashMap::new())
+        .expect("classification succeeds");
+
+    assert_eq!(
+        classified
+            .to_execute
+            .iter()
+            .map(|(index, call)| (*index, call.id.as_str()))
+            .collect::<Vec<_>>(),
+        vec![(0, "call_1"), (2, "call_3")]
+    );
+    assert_eq!(classified.presets.len(), 1);
+    assert_eq!(classified.presets[0].0, 1);
+    match &classified.presets[0].1 {
+        super::turn_execution::PresetToolResult::DuplicateSkipped { content } => {
+            assert!(content.contains("Skipped duplicate tool call"));
+            assert!(content.contains("tool call 1"));
+        }
+        other => panic!("expected duplicate skipped preset, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn run_turn_streaming_mpsc_emits_keepalive_while_provider_is_quiet() {
     let _guard = crate::storage::lock_test_env();
     let provider: Arc<dyn Provider> = Arc::new(DelayedProvider {

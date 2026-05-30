@@ -26,9 +26,16 @@ pub(super) struct ClassifiedTools {
 }
 
 #[allow(dead_code)]
+#[derive(Debug)]
 pub(super) enum PresetToolResult {
     ValidationError(String),
     SdkProvided { content: String, is_error: bool },
+    DuplicateSkipped { content: String },
+}
+
+fn duplicate_tool_call_key(tc: &ToolCall) -> String {
+    let input = serde_json::to_string(&tc.input).unwrap_or_else(|_| tc.input.to_string());
+    format!("{}\0{}", tc.name, input)
 }
 
 #[allow(dead_code)]
@@ -72,6 +79,7 @@ impl Agent {
     ) -> Result<ClassifiedTools> {
         let mut presets = Vec::new();
         let mut to_execute = Vec::new();
+        let mut seen_local_calls: HashMap<String, usize> = HashMap::new();
 
         for (index, tc) in tool_calls.iter().enumerate() {
             if let Some(error_msg) = tc.validation_error() {
@@ -95,6 +103,21 @@ impl Agent {
                 continue;
             }
 
+            let duplicate_key = duplicate_tool_call_key(tc);
+            if let Some(first_index) = seen_local_calls.get(&duplicate_key) {
+                presets.push((
+                    index,
+                    PresetToolResult::DuplicateSkipped {
+                        content: format!(
+                            "Skipped duplicate tool call: '{}' has identical parameters to tool call {} in the same assistant turn. The earlier tool result should be used instead.",
+                            tc.name,
+                            first_index + 1
+                        ),
+                    },
+                ));
+                continue;
+            }
+            seen_local_calls.insert(duplicate_key, index);
             to_execute.push((index, tc.clone()));
         }
 

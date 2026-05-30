@@ -1246,6 +1246,35 @@ impl Agent {
                             );
                             tool_results_dirty = true;
                         }
+                        PresetToolResult::DuplicateSkipped { content } => {
+                            logging::warn(&content);
+                            if trace {
+                                eprintln!(
+                                    "[trace] skipped_duplicate_tool_call name={} id={}",
+                                    tc.name, tc.id
+                                );
+                            }
+                            if print_output {
+                                println!("\n  → {}", content);
+                            }
+                            Bus::global().publish(BusEvent::ToolUpdated(ToolEvent {
+                                session_id: self.session.id.clone(),
+                                message_id: message_id.clone(),
+                                tool_call_id: tc.id.clone(),
+                                tool_name: tc.name.clone(),
+                                status: ToolStatus::Completed,
+                                title: None,
+                            }));
+                            self.add_message(
+                                Role::User,
+                                vec![ContentBlock::ToolResult {
+                                    tool_use_id: tc.id.clone(),
+                                    content,
+                                    is_error: None,
+                                }],
+                            );
+                            tool_results_dirty = true;
+                        }
                     }
                     continue;
                 }
