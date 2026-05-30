@@ -96,6 +96,7 @@ impl Provider for OpenAIProvider {
             "tool_choice": request.get("tool_choice"),
             "parallel_tool_calls": request.get("parallel_tool_calls"),
             "reasoning": request.get("reasoning"),
+            "service_tier": request.get("service_tier"),
             "context_management": request.get("context_management"),
             "include": request.get("include"),
             "prompt_cache_key": request.get("prompt_cache_key"),

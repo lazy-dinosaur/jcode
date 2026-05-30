@@ -219,3 +219,31 @@ fn test_service_tier_can_be_changed_while_a_request_snapshot_is_held() {
 
     assert_eq!(provider.service_tier(), Some("priority".to_string()));
 }
+
+#[test]
+fn test_diagnostic_state_summary_reports_effort_and_fast_tier() {
+    let provider = OpenAIProvider::new(CodexCredentials {
+        access_token: "test".to_string(),
+        refresh_token: String::new(),
+        id_token: None,
+        account_id: None,
+        expires_at: None,
+    });
+
+    provider
+        .set_reasoning_effort("xhigh")
+        .expect("set xhigh effort");
+    provider
+        .set_service_tier("fast")
+        .expect("set fast service tier");
+
+    let summary = provider.diagnostic_state_summary();
+    assert!(
+        summary.contains("reasoning_effort=xhigh"),
+        "diagnostics should expose current OpenAI effort: {summary}"
+    );
+    assert!(
+        summary.contains("service_tier=priority"),
+        "diagnostics should expose fast mode as priority tier: {summary}"
+    );
+}

@@ -327,6 +327,32 @@ fn test_build_response_request_for_gpt_5_4_1m_uses_base_model_without_extra_flag
 }
 
 #[test]
+fn test_build_response_request_for_gpt_5_5_sends_xhigh_and_priority_fast_tier() {
+    let request = build_test_response_request(
+        "gpt-5.5",
+        true,
+        Some(DEFAULT_MAX_OUTPUT_TOKENS),
+        Some("xhigh"),
+        Some("priority"),
+        None,
+        None,
+        None,
+    );
+
+    assert_eq!(request["model"], serde_json::json!("gpt-5.5"));
+    assert_eq!(
+        request["reasoning"],
+        serde_json::json!({ "effort": "xhigh" }),
+        "OpenAI xhigh effort must be sent as reasoning.effort"
+    );
+    assert_eq!(
+        request["service_tier"],
+        serde_json::json!("priority"),
+        "fast mode must be sent as OpenAI service_tier=priority"
+    );
+}
+
+#[test]
 fn test_build_response_request_omits_long_context_for_plain_gpt_5_4() {
     let request = build_test_response_request(
         "gpt-5.4",

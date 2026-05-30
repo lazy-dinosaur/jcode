@@ -814,9 +814,21 @@ impl OpenAIProvider {
             .try_read()
             .map(|mode| mode.as_str().to_string())
             .unwrap_or_else(|_| "busy".to_string());
+        let reasoning_effort = self
+            .reasoning_effort
+            .try_read()
+            .map(|effort| effort.clone().unwrap_or_else(|| "default".to_string()))
+            .unwrap_or_else(|_| "busy".to_string());
+        let service_tier = self
+            .service_tier
+            .try_read()
+            .map(|tier| tier.clone().unwrap_or_else(|| "standard".to_string()))
+            .unwrap_or_else(|_| "busy".to_string());
         format!(
-            "transport_mode={} {}",
+            "transport_mode={} reasoning_effort={} service_tier={} {}",
             transport_mode,
+            reasoning_effort,
+            service_tier,
             self.diagnostic_persistent_ws_summary()
         )
     }
