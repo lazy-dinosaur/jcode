@@ -2674,6 +2674,10 @@ impl App {
     }
 }
 
+fn is_tool_call_wrapper_noise_line(line: &str) -> bool {
+    line.eq_ignore_ascii_case("count") || line.eq_ignore_ascii_case("call")
+}
+
 pub(super) fn is_count_wrapper_noise(text: &str) -> bool {
     let trimmed = text.trim();
     !trimmed.is_empty()
@@ -2681,7 +2685,7 @@ pub(super) fn is_count_wrapper_noise(text: &str) -> bool {
             .lines()
             .map(str::trim)
             .filter(|line| !line.is_empty())
-            .all(|line| line.eq_ignore_ascii_case("count"))
+            .all(is_tool_call_wrapper_noise_line)
 }
 
 pub(super) fn strip_trailing_count_wrapper_noise_in_place(text: &mut String) {
@@ -2692,7 +2696,7 @@ pub(super) fn strip_trailing_count_wrapper_noise_in_place(text: &mut String) {
         let line_start = text[..cursor].rfind('\n').map_or(0, |idx| idx + 1);
         let line = &text[line_start..cursor];
         let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("count") {
+        if trimmed.is_empty() || is_tool_call_wrapper_noise_line(trimmed) {
             end = line_start;
             cursor = line_start.saturating_sub(1);
             continue;

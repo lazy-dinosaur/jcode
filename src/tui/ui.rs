@@ -328,9 +328,37 @@ pub(crate) fn set_last_diff_pane_effective_scroll(value: usize) {
 }
 
 pub(super) fn hash_text_for_cache(text: &str) -> u64 {
+    const SAMPLE_BYTES: usize = 8192;
+
     let mut hasher = DefaultHasher::new();
-    text.hash(&mut hasher);
+    text.len().hash(&mut hasher);
+
+    if text.len() <= SAMPLE_BYTES * 2 {
+        text.hash(&mut hasher);
+    } else {
+        let prefix_end = floor_char_boundary(text, SAMPLE_BYTES);
+        let suffix_start = ceil_char_boundary(text, text.len().saturating_sub(SAMPLE_BYTES));
+        text[..prefix_end].hash(&mut hasher);
+        text[suffix_start..].hash(&mut hasher);
+    }
+
     std::hash::Hasher::finish(&hasher)
+}
+
+fn floor_char_boundary(text: &str, mut idx: usize) -> usize {
+    idx = idx.min(text.len());
+    while idx > 0 && !text.is_char_boundary(idx) {
+        idx -= 1;
+    }
+    idx
+}
+
+fn ceil_char_boundary(text: &str, mut idx: usize) -> usize {
+    idx = idx.min(text.len());
+    while idx < text.len() && !text.is_char_boundary(idx) {
+        idx += 1;
+    }
+    idx
 }
 
 #[path = "ui_layout.rs"]

@@ -1867,6 +1867,10 @@ fn anthropic_text_or_recovered_tool_events(text: String) -> Vec<StreamEvent> {
     vec![StreamEvent::TextDelta(text)]
 }
 
+fn is_tool_call_wrapper_noise_line(line: &str) -> bool {
+    line.eq_ignore_ascii_case("count") || line.eq_ignore_ascii_case("call")
+}
+
 fn is_count_wrapper_noise(text: &str) -> bool {
     let trimmed = text.trim();
     !trimmed.is_empty()
@@ -1874,7 +1878,7 @@ fn is_count_wrapper_noise(text: &str) -> bool {
             .lines()
             .map(str::trim)
             .filter(|line| !line.is_empty())
-            .all(|line| line.eq_ignore_ascii_case("count"))
+            .all(is_tool_call_wrapper_noise_line)
 }
 
 fn parse_xml_wrapped_tool_call(text: &str) -> Option<(String, String, Value, String)> {

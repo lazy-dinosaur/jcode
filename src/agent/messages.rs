@@ -5,20 +5,19 @@ pub(crate) fn is_count_wrapper_noise_line(line: &str) -> bool {
 }
 
 fn is_tool_call_wrapper_noise_line(line: &str) -> bool {
-    let trimmed = line.trim();
-    trimmed.eq_ignore_ascii_case("count") || trimmed.eq_ignore_ascii_case("call")
+    is_count_wrapper_noise_line(line) || line.trim().eq_ignore_ascii_case("call")
 }
 
 pub(crate) fn count_wrapper_noise_line_count(text: &str) -> usize {
     text.lines()
-        .filter(|line| is_count_wrapper_noise_line(line))
+        .filter(|line| is_tool_call_wrapper_noise_line(line))
         .count()
 }
 
 pub(crate) fn strip_standalone_count_noise_lines(text: &str) -> String {
     let filtered: Vec<&str> = text
         .lines()
-        .filter(|line| !is_count_wrapper_noise_line(line))
+        .filter(|line| !is_tool_call_wrapper_noise_line(line))
         .collect();
     if filtered.len() == text.lines().count() {
         text.to_string()
@@ -351,5 +350,10 @@ mod tests {
             "count files"
         );
         assert_eq!(strip_standalone_count_noise_lines("count"), "");
+        assert_eq!(strip_standalone_count_noise_lines("call"), "");
+        assert_eq!(
+            strip_standalone_count_noise_lines("call files"),
+            "call files"
+        );
     }
 }

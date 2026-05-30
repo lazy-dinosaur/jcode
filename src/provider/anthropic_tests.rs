@@ -43,6 +43,32 @@ fn anthropic_text_delta_suppresses_standalone_count_noise() {
 }
 
 #[test]
+fn anthropic_text_delta_suppresses_standalone_call_noise() {
+    let mut current_tool_use = None;
+    let mut input_tokens = None;
+    let mut output_tokens = None;
+    let mut cache_read_input_tokens = None;
+    let mut cache_creation_input_tokens = None;
+    let event = SseEvent {
+        event_type: "content_block_delta".to_string(),
+        data: r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"call\n\n"}}"#
+            .to_string(),
+    };
+
+    let events = process_sse_event(
+        &event,
+        &mut current_tool_use,
+        &mut input_tokens,
+        &mut output_tokens,
+        &mut cache_read_input_tokens,
+        &mut cache_creation_input_tokens,
+        true,
+    );
+
+    assert!(events.is_empty());
+}
+
+#[test]
 fn anthropic_text_delta_recovers_xml_invoke_tool_call() {
     let mut current_tool_use = None;
     let mut input_tokens = None;

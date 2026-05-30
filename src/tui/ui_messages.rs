@@ -41,6 +41,10 @@ fn normalize_system_content_for_display(content: &str) -> Cow<'_, str> {
     Cow::Owned(normalized)
 }
 
+fn is_tool_call_wrapper_noise_line(line: &str) -> bool {
+    line.eq_ignore_ascii_case("count") || line.eq_ignore_ascii_case("call")
+}
+
 fn strip_count_wrapper_noise_lines(content: &str) -> Cow<'_, str> {
     let lines: Vec<&str> = content.lines().collect();
     if lines.is_empty() {
@@ -50,7 +54,7 @@ fn strip_count_wrapper_noise_lines(content: &str) -> Cow<'_, str> {
     let filtered: Vec<&str> = lines
         .iter()
         .copied()
-        .filter(|line| !line.trim().eq_ignore_ascii_case("count"))
+        .filter(|line| !is_tool_call_wrapper_noise_line(line.trim()))
         .collect();
 
     if filtered.len() == lines.len() {

@@ -117,7 +117,7 @@ fn sanitize_recovered_tool_prefix(prefix: &str) -> String {
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
-        .all(|line| line.eq_ignore_ascii_case("count"))
+        .all(is_tool_call_wrapper_noise_line)
     {
         return String::new();
     }
@@ -244,6 +244,10 @@ fn stream_text_or_recovered_tool_call(
     }
 
     Some(StreamEvent::TextDelta(text.to_string()))
+}
+
+fn is_tool_call_wrapper_noise_line(line: &str) -> bool {
+    line.eq_ignore_ascii_case("count") || line.eq_ignore_ascii_case("call")
 }
 
 fn is_count_wrapper_noise(text: &str) -> bool {

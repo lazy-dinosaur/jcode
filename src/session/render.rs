@@ -34,6 +34,10 @@ fn stored_message_renders_visible_message(msg: &super::StoredMessage) -> bool {
     })
 }
 
+fn is_tool_call_wrapper_noise_line(line: &str) -> bool {
+    line.eq_ignore_ascii_case("count") || line.eq_ignore_ascii_case("call")
+}
+
 fn is_count_wrapper_noise(text: &str) -> bool {
     let trimmed = text.trim();
     !trimmed.is_empty()
@@ -41,7 +45,7 @@ fn is_count_wrapper_noise(text: &str) -> bool {
             .lines()
             .map(str::trim)
             .filter(|line| !line.is_empty())
-            .all(|line| line.eq_ignore_ascii_case("count"))
+            .all(is_tool_call_wrapper_noise_line)
 }
 
 fn strip_trailing_count_wrapper_noise(text: &str) -> &str {
@@ -52,7 +56,7 @@ fn strip_trailing_count_wrapper_noise(text: &str) -> &str {
         let line_start = text[..cursor].rfind('\n').map_or(0, |idx| idx + 1);
         let line = &text[line_start..cursor];
         let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("count") {
+        if trimmed.is_empty() || is_tool_call_wrapper_noise_line(trimmed) {
             end = line_start;
             cursor = line_start.saturating_sub(1);
             continue;
@@ -71,14 +75,15 @@ fn strip_count_wrapper_noise_edges(text: &str) -> String {
 
     let mut start = 0usize;
     while start < lines.len()
-        && (lines[start].trim().is_empty() || lines[start].trim().eq_ignore_ascii_case("count"))
+        && (lines[start].trim().is_empty() || is_tool_call_wrapper_noise_line(lines[start].trim()))
     {
         start += 1;
     }
 
     let mut end = lines.len();
     while end > start
-        && (lines[end - 1].trim().is_empty() || lines[end - 1].trim().eq_ignore_ascii_case("count"))
+        && (lines[end - 1].trim().is_empty()
+            || is_tool_call_wrapper_noise_line(lines[end - 1].trim()))
     {
         end -= 1;
     }
@@ -420,6 +425,8 @@ mod tests {
     #[test]
     fn count_wrapper_noise_detects_repeated_count_lines() {
         assert!(is_count_wrapper_noise("count"));
+        assert!(is_count_wrapper_noise("call"));
+        assert!(is_count_wrapper_noise("CALL\n\ncall"));
         assert!(is_count_wrapper_noise("count\n\ncount\n"));
         assert!(is_count_wrapper_noise("  COUNT  \n\tcount"));
     }
@@ -428,6 +435,7 @@ mod tests {
     fn count_wrapper_noise_preserves_meaningful_text() {
         assert!(!is_count_wrapper_noise(""));
         assert!(!is_count_wrapper_noise("count files"));
+        assert!(!is_count_wrapper_noise("call files"));
         assert!(!is_count_wrapper_noise("I'll count it."));
         assert!(!is_count_wrapper_noise("count\nthen inspect"));
     }
