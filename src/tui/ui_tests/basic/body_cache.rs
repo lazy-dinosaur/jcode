@@ -131,11 +131,12 @@ fn test_body_cache_state_retains_oversized_hot_entry() {
         centered: false,
     };
     let prepared = make_oversized_prepared_messages("body-oversized-");
+    let oversized_budget = 4 * 1024 * 1024;
 
-    assert!(estimate_prepared_messages_bytes(&prepared) > BODY_CACHE_MAX_BYTES);
+    assert!(estimate_prepared_messages_bytes(&prepared) > oversized_budget);
 
     let mut cache = BodyCacheState::default();
-    cache.insert(key.clone(), prepared.clone(), 120);
+    cache.insert_with_budget(key.clone(), prepared.clone(), 120, oversized_budget);
 
     let hit = cache
         .get_exact(&key)
@@ -162,10 +163,11 @@ fn test_body_cache_state_keeps_two_oversized_width_entries_hot() {
     };
     let prepared_a = make_oversized_prepared_messages("body-oversized-a-");
     let prepared_b = make_oversized_prepared_messages("body-oversized-b-");
+    let oversized_budget = 4 * 1024 * 1024;
 
     let mut cache = BodyCacheState::default();
-    cache.insert(key_a.clone(), prepared_a.clone(), 120);
-    cache.insert(key_b.clone(), prepared_b.clone(), 120);
+    cache.insert_with_budget(key_a.clone(), prepared_a.clone(), 120, oversized_budget);
+    cache.insert_with_budget(key_b.clone(), prepared_b.clone(), 120, oversized_budget);
 
     let hit_a = cache
         .get_exact(&key_a)
@@ -189,11 +191,12 @@ fn test_body_cache_state_uses_oversized_hot_entry_as_incremental_base() {
         centered: false,
     };
     let prepared = make_oversized_prepared_messages("body-oversized-base-");
+    let oversized_budget = 4 * 1024 * 1024;
 
-    assert!(estimate_prepared_messages_bytes(&prepared) > BODY_CACHE_MAX_BYTES);
+    assert!(estimate_prepared_messages_bytes(&prepared) > oversized_budget);
 
     let mut cache = BodyCacheState::default();
-    cache.insert(key.clone(), prepared.clone(), 120);
+    cache.insert_with_budget(key.clone(), prepared.clone(), 120, oversized_budget);
 
     let base = cache
         .best_incremental_base(

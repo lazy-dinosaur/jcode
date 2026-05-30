@@ -309,6 +309,16 @@ impl App {
             self.mouse_scroll_queue = 0;
         }
 
+        let incoming_direction = direction.signum();
+        let queued_direction = self.mouse_scroll_queue.signum();
+        if queued_direction != 0 && queued_direction != incoming_direction {
+            // If rendering stalls, old wheel events can build up and keep
+            // animating in the stale direction even after the user reverses the
+            // wheel/trackpad. Treat a direction change as a fresh intent so the
+            // UI responds immediately instead of draining the old backlog first.
+            self.mouse_scroll_queue = 0;
+        }
+
         self.last_mouse_scroll = Some(Instant::now());
         let delta = direction * Self::MOUSE_SCROLL_INTENT_LINES;
         self.mouse_scroll_queue = self

@@ -636,7 +636,7 @@ struct BodyCacheEntry {
 const BODY_CACHE_MAX_ENTRIES: usize = 12;
 // Keep enough room for a single large transcript snapshot so long sessions do not
 // fall off a hard per-entry cache cliff and get rebuilt every frame.
-const BODY_CACHE_MAX_BYTES: usize = 36 * 1024 * 1024;
+const BODY_CACHE_MAX_BYTES: usize = 96 * 1024 * 1024;
 const BODY_OVERSIZED_CACHE_MAX_ENTRIES: usize = 4;
 
 #[derive(Default)]
@@ -782,8 +782,18 @@ impl BodyCacheState {
     }
 
     fn insert(&mut self, key: BodyCacheKey, prepared: Arc<PreparedMessages>, msg_count: usize) {
+        self.insert_with_budget(key, prepared, msg_count, BODY_CACHE_MAX_BYTES);
+    }
+
+    fn insert_with_budget(
+        &mut self,
+        key: BodyCacheKey,
+        prepared: Arc<PreparedMessages>,
+        msg_count: usize,
+        max_bytes: usize,
+    ) {
         let prepared_bytes = estimate_prepared_messages_bytes(&prepared);
-        if prepared_bytes > BODY_CACHE_MAX_BYTES {
+        if prepared_bytes > max_bytes {
             if let Some(pos) = self
                 .oversized_entries
                 .iter()
@@ -818,9 +828,7 @@ impl BodyCacheState {
             prepared_bytes,
             msg_count,
         });
-        while self.entries.len() > BODY_CACHE_MAX_ENTRIES
-            || self.total_bytes() > BODY_CACHE_MAX_BYTES
-        {
+        while self.entries.len() > BODY_CACHE_MAX_ENTRIES || self.total_bytes() > max_bytes {
             self.entries.pop_back();
         }
     }

@@ -219,6 +219,26 @@ fn test_scroll_render_with_mermaid() {
 }
 
 #[test]
+fn test_mouse_scroll_direction_change_discards_stale_queue() {
+    let mut app = create_test_app();
+    app.auto_scroll_paused = true;
+    app.scroll_offset = 10;
+
+    app.enqueue_mouse_scroll(MouseScrollTarget::Chat, 1);
+    app.enqueue_mouse_scroll(MouseScrollTarget::Chat, 1);
+    assert!(
+        app.mouse_scroll_queue > 0,
+        "same-direction wheel events should leave positive queued momentum"
+    );
+
+    app.enqueue_mouse_scroll(MouseScrollTarget::Chat, -1);
+    assert!(
+        app.mouse_scroll_queue < 0,
+        "reversing wheel direction should discard stale positive queue"
+    );
+}
+
+#[test]
 fn test_scroll_visual_debug_frame() {
     let _render_lock = scroll_render_test_lock();
     let (mut app, mut terminal) = create_scroll_test_app(100, 30, 1, 10);
