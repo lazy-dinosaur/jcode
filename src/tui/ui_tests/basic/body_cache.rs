@@ -370,6 +370,43 @@ fn test_prepare_body_incremental_reuses_unique_prepared_arc() {
 }
 
 #[test]
+fn test_prepare_body_renders_glued_assistant_ordered_list_on_separate_lines() {
+    let state = TestState {
+        display_messages: vec![DisplayMessage::assistant(
+            "다음은 이 순서가 제일 좋아요.1. **실제 긴 세션 런타임 검증** - 화면 확인.2. **scroll/input 밀림 전용 진단 추가** - geometry invariant.",
+        )],
+        messages_version: 1,
+        ..Default::default()
+    };
+
+    let prepared = super::prepare::prepare_body(&state, 180, false);
+    let lines = prepared.wrapped_plain_lines.as_ref();
+
+    assert_eq!(
+        lines.first().map(String::as_str),
+        Some("다음은 이 순서가 제일 좋아요.")
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.trim_start().starts_with("1. 실제 긴 세션 런타임 검증")),
+        "first ordered item should render separately: {lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.trim_start().starts_with("2. scroll/input 밀림 전용 진단 추가")),
+        "second ordered item should render separately: {lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|line| !line.contains("좋아요.1.") && !line.contains("확인.2.")),
+        "TUI body wrapping must not re-glue ordered markers: {lines:?}"
+    );
+}
+
+#[test]
 fn test_tail_update_incremental_body_matches_full_rebuild() {
     let width = 80;
     let old_state = TestState {

@@ -40,6 +40,64 @@ fn test_paragraph_to_ordered_list_starts_on_new_line_without_blank_source_line()
 }
 
 #[test]
+fn test_glued_ordered_list_marker_after_sentence_is_repaired() {
+    let md = "다음은 이 순서가 제일 좋아요.1. **실제 긴 세션 런타임 검증** - 화면 확인.2. **scroll/input 밀림 전용 진단 추가** - geometry invariant.";
+    let rendered: Vec<String> = render_markdown_with_width(md, Some(160))
+        .iter()
+        .map(line_to_string)
+        .collect();
+
+    assert_eq!(
+        rendered.first().map(String::as_str),
+        Some("다음은 이 순서가 제일 좋아요.")
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("1. 실제 긴 세션 런타임 검증")),
+        "first glued ordered item should render on its own line: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("2. scroll/input 밀림 전용 진단 추가")),
+        "second glued ordered item should render on its own line: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .all(|line| !line.contains("좋아요.1.") && !line.contains("확인.2.")),
+        "ordered markers must not remain glued to prose: {rendered:?}"
+    );
+}
+
+#[test]
+fn test_glued_bullet_marker_after_sentence_is_repaired() {
+    let md = "남은 작업은 이거예요. - body/input/status 영역 진단. • RAM cache cap 확인.";
+    let rendered: Vec<String> = render_markdown_with_width(md, Some(140))
+        .iter()
+        .map(line_to_string)
+        .collect();
+
+    assert_eq!(
+        rendered.first().map(String::as_str),
+        Some("남은 작업은 이거예요.")
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("• body/input/status 영역 진단")),
+        "hyphen bullet glued to prose should render as a bullet line: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("• RAM cache cap 확인")),
+        "unicode bullet glued to prose should render as a bullet line: {rendered:?}"
+    );
+}
+
+#[test]
 fn test_paragraph_to_fenced_code_block_starts_on_new_line_without_blank_source_line() {
     let md = "로그 추가:\n```js\nconsole.log('badge')\n```";
     let rendered: Vec<String> = render_markdown_with_width(md, Some(96))

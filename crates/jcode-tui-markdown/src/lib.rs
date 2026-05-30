@@ -1263,6 +1263,162 @@ fn repair_glued_code_fences(text: &str) -> String {
     out.join("\n")
 }
 
+fn repair_glued_list_markers(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut in_code_fence = false;
+    let mut fence_char = '\0';
+    let mut fence_len = 0usize;
+
+    for (idx, line) in text.split('\n').enumerate() {
+        if idx > 0 {
+            out.push('\n');
+        }
+
+        if in_code_fence {
+            out.push_str(line);
+            update_code_fence_state_after_line(
+                line,
+                &mut in_code_fence,
+                &mut fence_char,
+                &mut fence_len,
+            );
+            continue;
+        }
+
+        let repaired = repair_glued_list_markers_in_line(line);
+        update_code_fence_state_after_line(
+            &repaired,
+            &mut in_code_fence,
+            &mut fence_char,
+            &mut fence_len,
+        );
+        out.push_str(&repaired);
+    }
+
+    out
+}
+
+fn repair_glued_list_markers_in_line(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut cursor = 0usize;
+    let mut scan = 0usize;
+    let mut line_start = true;
+
+    while scan < line.len() {
+        if !line.is_char_boundary(scan) {
+            scan += 1;
+            continue;
+        }
+
+        if let Some(marker) = glued_list_marker_at(line, scan, line_start) {
+            out.push_str(line[cursor..scan].trim_end());
+            out.push('\n');
+            if let Some(replacement) = marker.replacement {
+                out.push_str(replacement);
+                cursor = scan + marker.len;
+                scan = cursor;
+            } else {
+                cursor = scan;
+                scan += marker.len;
+            }
+            line_start = true;
+            continue;
+        }
+
+        if let Some(ch) = line[scan..].chars().next() {
+            if ch == '\n' {
+                line_start = true;
+            } else if !ch.is_whitespace() {
+                line_start = false;
+            }
+            scan += ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+
+    out.push_str(&line[cursor..]);
+    out
+}
+
+struct GluedListMarker {
+    len: usize,
+    replacement: Option<&'static str>,
+}
+
+fn glued_list_marker_at(line: &str, idx: usize, line_start: bool) -> Option<GluedListMarker> {
+    if idx == 0 || line_start || inside_inline_backticks(line, idx) {
+        return None;
+    }
+
+    let before = previous_non_whitespace_char(line, idx)?;
+    if !is_list_glue_boundary_char(before) {
+        return None;
+    }
+
+    ordered_list_marker_len_at(line, idx).or_else(|| bullet_list_marker_at(line, idx))
+}
+
+fn previous_non_whitespace_char(line: &str, idx: usize) -> Option<char> {
+    line[..idx].chars().rev().find(|ch| !ch.is_whitespace())
+}
+
+fn ordered_list_marker_len_at(line: &str, idx: usize) -> Option<GluedListMarker> {
+    let rest = &line[idx..];
+    let mut digit_bytes = 0usize;
+    let mut digit_count = 0usize;
+    for ch in rest.chars() {
+        if ch.is_ascii_digit() {
+            digit_bytes += ch.len_utf8();
+            digit_count += 1;
+        } else {
+            break;
+        }
+    }
+    if digit_count == 0 || digit_count > 9 {
+        return None;
+    }
+
+    let marker = rest[digit_bytes..].chars().next()?;
+    if !matches!(marker, '.' | ')') {
+        return None;
+    }
+    let after_marker_idx = digit_bytes + marker.len_utf8();
+    let after_marker = rest[after_marker_idx..].chars().next()?;
+    if !after_marker.is_whitespace() {
+        return None;
+    }
+
+    Some(GluedListMarker {
+        len: after_marker_idx + after_marker.len_utf8(),
+        replacement: None,
+    })
+}
+
+fn bullet_list_marker_at(line: &str, idx: usize) -> Option<GluedListMarker> {
+    let rest = &line[idx..];
+    let marker = rest.chars().next()?;
+    if !matches!(marker, '-' | '*' | '+' | '•') {
+        return None;
+    }
+    let after_marker_idx = marker.len_utf8();
+    let after_marker = rest[after_marker_idx..].chars().next()?;
+    if !after_marker.is_whitespace() {
+        return None;
+    }
+    Some(GluedListMarker {
+        len: after_marker_idx + after_marker.len_utf8(),
+        replacement: (marker == '•').then_some("- "),
+    })
+}
+
+fn is_list_glue_boundary_char(ch: char) -> bool {
+    matches!(
+        ch,
+        ':' | ';' | '.' | '!' | '?' | ')' | ']' | '}' | '。' | '！' | '？'
+    )
+}
+
 fn update_code_fence_state_after_line(
     line: &str,
     in_code_fence: &mut bool,
