@@ -548,20 +548,11 @@ fn test_effort_suggestions_are_provider_aware_for_remote_models() {
     app.remote_provider_name = Some("claude".to_string());
     app.remote_provider_model = Some("claude-opus-4-8".to_string());
     let claude_suggestions = app.get_suggestions_for("/effort ");
-    for (cmd, label) in [
-        ("/effort low", "Low"),
-        ("/effort medium", "Medium"),
-        ("/effort high", "High"),
-        ("/effort max", "Max"),
-    ] {
-        assert!(
-            claude_suggestions
-                .iter()
-                .any(|(suggested, suggested_label)| suggested == cmd && *suggested_label == label),
-            "Claude should suggest {cmd}/{label}: {:?}",
-            claude_suggestions
-        );
-    }
+    assert!(
+        claude_suggestions.is_empty(),
+        "Claude should not expose OpenAI-style effort suggestions; choose `[1m]` via /model explicitly instead: {:?}",
+        claude_suggestions
+    );
     assert!(
         !claude_suggestions
             .iter()
@@ -571,11 +562,11 @@ fn test_effort_suggestions_are_provider_aware_for_remote_models() {
     );
     assert_eq!(
         app.active_claude_model_for_effort("high").as_deref(),
-        Some("claude-opus-4-8")
+        None
     );
     assert_eq!(
         app.active_claude_model_for_effort("max").as_deref(),
-        Some("claude-opus-4-8[1m]")
+        None
     );
     assert!(super::App::is_claude_effort_max_level("xhigh"));
     assert!(super::App::is_claude_effort_max_level("max"));
