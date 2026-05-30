@@ -13,7 +13,9 @@ use super::client_disconnect_cleanup::cleanup_client_connection;
 use super::client_session::{
     handle_clear_session, handle_reload, handle_resume_session, handle_subscribe,
 };
-use super::client_state::{handle_get_compacted_history, handle_get_history, handle_get_state};
+use super::client_state::{
+    HistoryPayloadMode, handle_get_compacted_history, handle_get_history, handle_get_state,
+};
 use super::comm_await::{CommAwaitMembersContext, handle_comm_await_members};
 use super::comm_control::{
     handle_client_debug_command, handle_client_debug_response, handle_comm_assign_next,
@@ -1713,6 +1715,7 @@ pub(super) async fn handle_client(
                             &server_name,
                             &server_icon,
                             None,
+                            HistoryPayloadMode::Full,
                         )
                         .await
                         .is_err()
@@ -1764,6 +1767,7 @@ pub(super) async fn handle_client(
                             &server_name,
                             &server_icon,
                             None,
+                            HistoryPayloadMode::Full,
                         )
                         .await
                         .is_err()
@@ -1975,6 +1979,7 @@ pub(super) async fn handle_client(
                     &server_name,
                     &server_icon,
                     None,
+                    HistoryPayloadMode::Full,
                 )
                 .await
                 .is_err()

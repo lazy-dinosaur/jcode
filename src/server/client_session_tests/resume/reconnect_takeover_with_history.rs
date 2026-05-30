@@ -1,3 +1,5 @@
+use tokio::io::AsyncReadExt as _;
+
 #[tokio::test]
 async fn handle_resume_session_allows_reconnect_takeover_with_local_history() -> Result<()> {
     let _guard = crate::storage::lock_test_env();
@@ -19,7 +21,19 @@ async fn handle_resume_session_allows_reconnect_takeover_with_local_history() ->
         provider.clone(),
         existing_registry,
         target_session_id,
-        Vec::new(),
+        vec![crate::session::StoredMessage {
+            id: "msg-live-history".to_string(),
+            role: crate::message::Role::Assistant,
+            content: vec![ContentBlock::Text {
+                text: "server transcript should not be replayed when client has local history"
+                    .to_string(),
+                cache_control: None,
+            }],
+            display_role: None,
+            timestamp: None,
+            tool_duration_ms: None,
+            token_usage: None,
+        }],
     )));
 
     let new_registry = Registry::new(provider.clone()).await;
@@ -85,7 +99,7 @@ async fn handle_resume_session_allows_reconnect_takeover_with_local_history() ->
     let swarm_plans = Arc::new(RwLock::new(HashMap::<String, VersionedPlan>::new()));
     let swarm_coordinators = Arc::new(RwLock::new(HashMap::<String, String>::new()));
     let client_count = Arc::new(RwLock::new(2usize));
-    let (writer, _peer_stream) = test_writer()?;
+    let (writer, mut peer_stream) = test_writer()?;
     let (client_event_tx, mut client_event_rx) = mpsc::unbounded_channel::<ServerEvent>();
     let event_history = Arc::new(RwLock::new(VecDeque::<SwarmEvent>::new()));
     let event_counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
@@ -154,6 +168,31 @@ async fn handle_resume_session_allows_reconnect_takeover_with_local_history() ->
             .map(|info| info.session_id.as_str()),
         Some(target_session_id)
     );
+    drop(writer);
+    let mut bytes = Vec::new();
+    peer_stream.read_to_end(&mut bytes).await?;
+    let history_line = String::from_utf8(bytes)?;
+    let history_event: ServerEvent = serde_json::from_str(
+        history_line
+            .lines()
+            .next()
+            .expect("history line should be written"),
+    )?;
+    match history_event {
+        ServerEvent::History {
+            messages, images, ..
+        } => {
+            assert!(
+                messages.is_empty(),
+                "local-history reconnect should receive metadata-only history"
+            );
+            assert!(
+                images.is_empty(),
+                "local-history reconnect should not replay image payloads"
+            );
+        }
+        other => panic!("expected history event, got {other:?}"),
+    }
 
     restore_runtime_dir(prev_runtime);
     Ok(())

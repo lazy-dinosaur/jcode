@@ -16,6 +16,13 @@ type SessionAgents = Arc<RwLock<HashMap<String, Arc<Mutex<Agent>>>>>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum HistoryPayloadMode {
     Full,
+    MetadataOnly,
+}
+
+impl HistoryPayloadMode {
+    fn includes_transcript(self) -> bool {
+        matches!(self, Self::Full)
+    }
 }
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, RwLock};
@@ -83,6 +90,7 @@ pub(super) async fn handle_get_history(
     server_name: &str,
     server_icon: &str,
     was_interrupted: Option<bool>,
+    payload_mode: HistoryPayloadMode,
 ) -> Result<()> {
     let history_start = Instant::now();
     let activity =
@@ -105,6 +113,7 @@ pub(super) async fn handle_get_history(
             server_icon,
             was_interrupted,
             activity,
+            payload_mode,
         )
         .await?;
         crate::logging::info(&format!(
@@ -126,7 +135,7 @@ pub(super) async fn handle_get_history(
         server_icon,
         was_interrupted,
         activity,
-        HistoryPayloadMode::Full,
+        payload_mode,
         true,
     )
     .await?;
@@ -335,23 +344,29 @@ async fn send_history_from_persisted_session(
     server_icon: &str,
     was_interrupted: Option<bool>,
     activity: Option<SessionActivitySnapshot>,
+    payload_mode: HistoryPayloadMode,
 ) -> Result<()> {
     let session = crate::session::Session::load_for_remote_startup(session_id)
         .or_else(|_| crate::session::Session::load_startup_stub(session_id))?;
-    let (rendered_messages, images) = crate::session::render_messages_and_images(&session);
-    let messages = rendered_messages
-        .into_iter()
-        .map(|msg| crate::protocol::HistoryMessage {
-            role: msg.role,
-            content: msg.content,
-            tool_calls: if msg.tool_calls.is_empty() {
-                None
-            } else {
-                Some(msg.tool_calls)
-            },
-            tool_data: msg.tool_data,
-        })
-        .collect();
+    let (messages, images) = if payload_mode.includes_transcript() {
+        let (rendered_messages, images) = crate::session::render_messages_and_images(&session);
+        let messages = rendered_messages
+            .into_iter()
+            .map(|msg| crate::protocol::HistoryMessage {
+                role: msg.role,
+                content: msg.content,
+                tool_calls: if msg.tool_calls.is_empty() {
+                    None
+                } else {
+                    Some(msg.tool_calls)
+                },
+                tool_data: msg.tool_data,
+            })
+            .collect();
+        (messages, images)
+    } else {
+        (Vec::new(), Vec::new())
+    };
     let side_panel = crate::side_panel::snapshot_for_session(session_id).unwrap_or_default();
 
     let (all_sessions, current_client_count) = {
@@ -458,7 +473,11 @@ pub(super) async fn send_history(
         let provider = agent_guard.provider_handle();
 
         let history_snapshot_start = Instant::now();
-        let (messages, images) = agent_guard.get_history_and_rendered_images();
+        let (messages, images) = if payload_mode.includes_transcript() {
+            agent_guard.get_history_and_rendered_images()
+        } else {
+            (Vec::new(), Vec::new())
+        };
         let history_snapshot_ms = history_snapshot_start.elapsed().as_millis();
         let image_render_ms = 0;
 

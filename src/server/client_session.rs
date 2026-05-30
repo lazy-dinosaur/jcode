@@ -1,6 +1,6 @@
 #![cfg_attr(test, allow(clippy::await_holding_lock))]
 
-use super::client_state::{handle_get_history, spawn_model_prefetch_update};
+use super::client_state::{HistoryPayloadMode, handle_get_history, spawn_model_prefetch_update};
 use super::{
     ClientConnectionInfo, ClientDebugState, FileAccess, SessionInterruptQueues, SwarmEvent,
     SwarmMember, SwarmState, VersionedPlan, broadcast_swarm_status, fanout_live_client_event,
@@ -892,6 +892,11 @@ pub(super) async fn handle_resume_session(
             server_name,
             server_icon,
             None,
+            if client_has_local_history {
+                HistoryPayloadMode::MetadataOnly
+            } else {
+                HistoryPayloadMode::Full
+            },
         )
         .await?;
         let _ = client_event_tx.send(ServerEvent::Done { id });
@@ -1158,6 +1163,11 @@ pub(super) async fn handle_resume_session(
                 server_name,
                 server_icon,
                 Some(was_interrupted),
+                if client_has_local_history {
+                    HistoryPayloadMode::MetadataOnly
+                } else {
+                    HistoryPayloadMode::Full
+                },
             )
             .await?;
             let _ = client_event_tx.send(ServerEvent::Done { id });

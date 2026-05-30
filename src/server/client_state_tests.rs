@@ -1,5 +1,5 @@
-use super::handle_get_history;
 use super::session_activity_snapshot;
+use super::{HistoryPayloadMode, handle_get_history};
 use crate::agent::Agent;
 use crate::message::{Message, ToolDefinition};
 use crate::provider::{EventStream, Provider};
@@ -180,6 +180,7 @@ async fn handle_get_history_falls_back_to_persisted_snapshot_when_agent_is_busy(
         "server-name",
         "🔥",
         None,
+        HistoryPayloadMode::Full,
     )
     .await
     .expect("history should be written from persisted fallback");
@@ -263,6 +264,7 @@ async fn handle_get_history_includes_model_routes_for_remote_picker() {
         "server-name",
         "🔥",
         None,
+        HistoryPayloadMode::Full,
     )
     .await
     .expect("history should include model routes");
