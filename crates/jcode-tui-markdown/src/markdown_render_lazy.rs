@@ -7,6 +7,7 @@ pub fn render_markdown_lazy(
 ) -> Vec<Line<'static>> {
     let text = escape_currency_dollars(text);
     let text = repair_glued_markdown_headings(&text);
+    let text = repair_line_oriented_markdown_boundaries(&text);
     let text = preserve_line_oriented_softbreaks(&text);
     let text = text.as_str();
     let mut lines: Vec<Line<'static>> = Vec::new();

@@ -11,6 +11,52 @@ fn test_code_block() {
 }
 
 #[test]
+fn test_paragraph_to_ordered_list_starts_on_new_line_without_blank_source_line() {
+    let md = "정리하면:\n1. **아이폰**에서는 새 서비스워커 적용 여부를 확인\n2. **안드로이드**도 badge API 결과를 확인";
+    let rendered: Vec<String> = render_markdown_with_width(md, Some(96))
+        .iter()
+        .map(line_to_string)
+        .collect();
+
+    assert_eq!(rendered.first().map(String::as_str), Some("정리하면:"));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("1. 아이폰")),
+        "ordered list item should render on its own line: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("2. 안드로이드")),
+        "second ordered list item should render on its own line: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .all(|line| !line.contains("정리하면: 1.")),
+        "paragraph and ordered list marker must not be glued: {rendered:?}"
+    );
+}
+
+#[test]
+fn test_paragraph_to_fenced_code_block_starts_on_new_line_without_blank_source_line() {
+    let md = "로그 추가:\n```js\nconsole.log('badge')\n```";
+    let rendered: Vec<String> = render_markdown_with_width(md, Some(96))
+        .iter()
+        .map(line_to_string)
+        .collect();
+
+    assert_eq!(rendered.first().map(String::as_str), Some("로그 추가:"));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("┌─ js")),
+        "fenced code block should render as a block: {rendered:?}"
+    );
+}
+
+#[test]
 fn test_extract_copy_targets_from_rendered_lines_for_code_block() {
     let lines = render_markdown("before\n\n```rust\nfn main() {}\nprintln!(\"hi\");\n```\n\nafter");
     let targets = extract_copy_targets_from_rendered_lines(&lines);

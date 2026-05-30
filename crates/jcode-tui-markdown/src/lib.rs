@@ -1186,6 +1186,76 @@ fn repair_glued_markdown_headings(text: &str) -> String {
     out
 }
 
+fn repair_line_oriented_markdown_boundaries(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut in_code_fence = false;
+    let mut fence_char = '\0';
+    let mut fence_len = 0usize;
+
+    for (idx, line) in lines.iter().enumerate() {
+        let prev_line = idx.checked_sub(1).map(|prev| lines[prev]);
+        if !in_code_fence
+            && line_starts_interrupting_markdown_block(line)
+            && prev_line.is_some_and(|prev| {
+                !prev.trim().is_empty() && !line_starts_interrupting_markdown_block(prev)
+            })
+            && !out.ends_with("\n\n")
+        {
+            out.push('\n');
+        }
+
+        out.push_str(line);
+        if idx + 1 < lines.len() {
+            out.push('\n');
+        }
+
+        if in_code_fence {
+            if is_closing_fence(line, fence_char, fence_len) {
+                in_code_fence = false;
+                fence_char = '\0';
+                fence_len = 0;
+            }
+        } else if let Some((marker, min_len)) = parse_opening_fence(line) {
+            in_code_fence = true;
+            fence_char = marker;
+            fence_len = min_len;
+        }
+    }
+
+    out
+}
+
+fn line_starts_interrupting_markdown_block(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    if trimmed.is_empty() {
+        return false;
+    }
+    trimmed.starts_with("- ")
+        || trimmed.starts_with("* ")
+        || trimmed.starts_with("+ ")
+        || trimmed.starts_with("- [")
+        || trimmed.starts_with("* [")
+        || trimmed.starts_with("+ [")
+        || trimmed.starts_with("> ")
+        || trimmed.starts_with("```")
+        || trimmed.starts_with("~~~")
+        || is_heading_line_for_boundary_repair(trimmed)
+        || looks_like_ordered_list_item_for_boundary_repair(trimmed)
+}
+
+fn is_heading_line_for_boundary_repair(line: &str) -> bool {
+    let hashes = line.chars().take_while(|c| *c == '#').count();
+    (1..=6).contains(&hashes) && line.chars().nth(hashes) == Some(' ')
+}
+
+fn looks_like_ordered_list_item_for_boundary_repair(line: &str) -> bool {
+    let digit_count = line.chars().take_while(|c| c.is_ascii_digit()).count();
+    digit_count > 0
+        && matches!(line.chars().nth(digit_count), Some('.' | ')'))
+        && matches!(line.chars().nth(digit_count + 1), Some(' ' | '\t'))
+}
+
 fn repair_glued_heading_markers_in_line(line: &str) -> String {
     let bytes = line.as_bytes();
     let mut splits = Vec::new();

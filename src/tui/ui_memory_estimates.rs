@@ -118,12 +118,19 @@ fn estimate_visible_copy_targets_bytes(values: &Vec<VisibleCopyTarget>) -> usize
 pub(crate) fn debug_memory_profile() -> serde_json::Value {
     use std::collections::HashSet;
 
-    let (body_entries_count, body_msg_count_sum, body_unique_prepared_bytes) = {
+    let (
+        body_entries_count,
+        body_oversized_entries_count,
+        body_msg_count_sum,
+        body_unique_prepared_bytes,
+        body_oversized_unique_prepared_bytes,
+    ) = {
         let cache = body_cache()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut seen = HashSet::new();
         let mut unique_bytes = 0usize;
+        let mut oversized_unique_bytes = 0usize;
         let mut msg_count_sum = 0usize;
         for entry in &cache.entries {
             msg_count_sum += entry.msg_count;
@@ -132,22 +139,52 @@ pub(crate) fn debug_memory_profile() -> serde_json::Value {
                 unique_bytes += estimate_prepared_messages_bytes(&entry.prepared);
             }
         }
-        (cache.entries.len(), msg_count_sum, unique_bytes)
+        for entry in &cache.oversized_entries {
+            msg_count_sum += entry.msg_count;
+            let ptr = Arc::as_ptr(&entry.prepared) as usize;
+            if seen.insert(ptr) {
+                oversized_unique_bytes += estimate_prepared_messages_bytes(&entry.prepared);
+            }
+        }
+        (
+            cache.entries.len(),
+            cache.oversized_entries.len(),
+            msg_count_sum,
+            unique_bytes,
+            oversized_unique_bytes,
+        )
     };
 
-    let (full_prep_entries_count, full_prep_unique_prepared_bytes) = {
+    let (
+        full_prep_entries_count,
+        full_prep_oversized_entries_count,
+        full_prep_unique_prepared_bytes,
+        full_prep_oversized_unique_prepared_bytes,
+    ) = {
         let cache = full_prep_cache()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut seen = HashSet::new();
         let mut unique_bytes = 0usize;
+        let mut oversized_unique_bytes = 0usize;
         for entry in &cache.entries {
             let ptr = Arc::as_ptr(&entry.prepared) as usize;
             if seen.insert(ptr) {
                 unique_bytes += estimate_prepared_chat_frame_bytes(&entry.prepared);
             }
         }
-        (cache.entries.len(), unique_bytes)
+        for entry in &cache.oversized_entries {
+            let ptr = Arc::as_ptr(&entry.prepared) as usize;
+            if seen.insert(ptr) {
+                oversized_unique_bytes += estimate_prepared_chat_frame_bytes(&entry.prepared);
+            }
+        }
+        (
+            cache.entries.len(),
+            cache.oversized_entries.len(),
+            unique_bytes,
+            oversized_unique_bytes,
+        )
     };
 
     let visible_copy_targets_bytes = {
@@ -168,18 +205,28 @@ pub(crate) fn debug_memory_profile() -> serde_json::Value {
     serde_json::json!({
         "body_cache": {
             "entries_count": body_entries_count,
+            "oversized_entries_count": body_oversized_entries_count,
             "messages_count_sum": body_msg_count_sum,
             "unique_prepared_bytes": body_unique_prepared_bytes,
+            "oversized_unique_prepared_bytes": body_oversized_unique_prepared_bytes,
+            "total_unique_prepared_bytes": body_unique_prepared_bytes
+                + body_oversized_unique_prepared_bytes,
         },
         "full_prep_cache": {
             "entries_count": full_prep_entries_count,
+            "oversized_entries_count": full_prep_oversized_entries_count,
             "unique_prepared_bytes": full_prep_unique_prepared_bytes,
+            "oversized_unique_prepared_bytes": full_prep_oversized_unique_prepared_bytes,
+            "total_unique_prepared_bytes": full_prep_unique_prepared_bytes
+                + full_prep_oversized_unique_prepared_bytes,
         },
         "visible_copy_targets": {
             "estimate_bytes": visible_copy_targets_bytes,
         },
         "total_estimate_bytes": body_unique_prepared_bytes
+            + body_oversized_unique_prepared_bytes
             + full_prep_unique_prepared_bytes
+            + full_prep_oversized_unique_prepared_bytes
             + visible_copy_targets_bytes,
     })
 }

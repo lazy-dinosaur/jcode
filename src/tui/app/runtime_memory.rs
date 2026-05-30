@@ -302,11 +302,15 @@ fn client_runtime_totals_from_profile(
         nested_u64(profile, &["markdown", "highlight_cache_estimate_bytes"]);
     let ui_body_cache_estimate_bytes = nested_u64(
         profile,
-        &["ui_render", "body_cache", "unique_prepared_bytes"],
+        &["ui_render", "body_cache", "total_unique_prepared_bytes"],
     );
     let ui_full_prep_cache_estimate_bytes = nested_u64(
         profile,
-        &["ui_render", "full_prep_cache", "unique_prepared_bytes"],
+        &[
+            "ui_render",
+            "full_prep_cache",
+            "total_unique_prepared_bytes",
+        ],
     );
     let ui_visible_copy_targets_estimate_bytes = nested_u64(
         profile,
@@ -530,14 +534,18 @@ mod tests {
             "ui_render": {
                 "body_cache": {
                     "unique_prepared_bytes": 10,
+                    "oversized_unique_prepared_bytes": 1,
+                    "total_unique_prepared_bytes": 11,
                 },
                 "full_prep_cache": {
                     "unique_prepared_bytes": 20,
+                    "oversized_unique_prepared_bytes": 2,
+                    "total_unique_prepared_bytes": 22,
                 },
                 "visible_copy_targets": {
                     "estimate_bytes": 30,
                 },
-                "total_estimate_bytes": 60,
+            "total_estimate_bytes": 63,
             },
             "side_panel_render": {
                 "pinned_cache": {
@@ -565,16 +573,16 @@ mod tests {
         let totals = client_runtime_totals_from_profile(&profile);
 
         assert_eq!(totals.remote_side_pane_images_bytes, 4096);
-        assert_eq!(totals.ui_body_cache_estimate_bytes, 10);
-        assert_eq!(totals.ui_full_prep_cache_estimate_bytes, 20);
+        assert_eq!(totals.ui_body_cache_estimate_bytes, 11);
+        assert_eq!(totals.ui_full_prep_cache_estimate_bytes, 22);
         assert_eq!(totals.ui_visible_copy_targets_estimate_bytes, 30);
-        assert_eq!(totals.ui_render_total_estimate_bytes, 60);
+        assert_eq!(totals.ui_render_total_estimate_bytes, 63);
         assert_eq!(totals.side_panel_pinned_cache_estimate_bytes, 42);
         assert_eq!(totals.side_panel_markdown_cache_estimate_bytes, 53);
         assert_eq!(totals.side_panel_render_cache_estimate_bytes, 64);
         assert_eq!(totals.side_panel_render_total_estimate_bytes, 159);
         assert_eq!(totals.mermaid_working_set_estimate_bytes, 600);
         assert_eq!(totals.mermaid_cache_metadata_estimate_bytes, 300);
-        assert_eq!(totals.total_attributed_bytes, 4096 + 60 + 159 + 600);
+        assert_eq!(totals.total_attributed_bytes, 4096 + 63 + 159 + 600);
     }
 }
