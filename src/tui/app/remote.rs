@@ -725,7 +725,10 @@ pub(super) async fn process_remote_followups(app: &mut App, remote: &mut RemoteC
     let _ = recover_stranded_soft_interrupts(app, remote).await;
 
     if app.pending_queued_dispatch {
-        return;
+        if app.is_processing {
+            return;
+        }
+        app.pending_queued_dispatch = false;
     }
 
     if !app.remote_model_switch_in_flight

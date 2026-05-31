@@ -1,6 +1,6 @@
 use super::reconnect;
 use super::{
-    RemoteRunState, auth_provider_hint_for_login_provider, handle_post_connect,
+    ProcessingStatus, RemoteRunState, auth_provider_hint_for_login_provider, handle_post_connect,
     handle_server_event, process_remote_followups,
 };
 use crate::protocol::{
@@ -200,6 +200,76 @@ fn process_remote_followups_drains_all_queued_prompts_in_one_send() {
             .collect::<Vec<_>>(),
         vec!["first queued prompt", "second queued prompt"]
     );
+}
+
+#[test]
+fn process_remote_followups_drains_pending_queued_dispatch_when_idle() {
+    let mut app = create_test_app();
+    app.is_remote = true;
+    app.enqueue_queued_message("queued after idle".to_string());
+    app.pending_queued_dispatch = true;
+
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+    remote.mark_history_loaded();
+
+    rt.block_on(process_remote_followups(&mut app, &mut remote));
+
+    assert!(
+        !app.pending_queued_dispatch,
+        "idle pending dispatch flag should be consumed immediately"
+    );
+    assert!(app.queued_messages.is_empty());
+    assert!(app.is_processing);
+    let pending = app
+        .rate_limit_pending_message
+        .as_ref()
+        .expect("queued batch should be sent as in-flight remote message");
+    assert_eq!(pending.content, "queued after idle");
+}
+
+#[test]
+fn queued_prompt_dispatches_after_tool_is_moved_to_background() {
+    let mut app = create_test_app();
+    app.is_remote = true;
+    app.is_processing = true;
+    app.current_message_id = Some(42);
+    app.status = ProcessingStatus::RunningTool("bash".to_string());
+    app.enqueue_queued_message("next turn after background".to_string());
+
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+    remote.mark_history_loaded();
+
+    handle_server_event(
+        &mut app,
+        ServerEvent::ToolDone {
+            id: "tool-bash".to_string(),
+            name: "bash".to_string(),
+            output: "Tool 'bash' was moved to background by the user (task_id: bg-1).".to_string(),
+            error: None,
+        },
+        &mut remote,
+    );
+    assert!(app.is_processing, "Done should close the foreground turn");
+
+    handle_server_event(&mut app, ServerEvent::Done { id: 42 }, &mut remote);
+    assert!(!app.is_processing);
+
+    rt.block_on(process_remote_followups(&mut app, &mut remote));
+
+    assert!(app.queued_messages.is_empty());
+    assert!(
+        app.is_processing,
+        "queued prompt should start after background handoff"
+    );
+    let pending = app
+        .rate_limit_pending_message
+        .as_ref()
+        .expect("queued followup should be in-flight");
+    assert_eq!(pending.content, "next turn after background");
 }
 
 #[test]
