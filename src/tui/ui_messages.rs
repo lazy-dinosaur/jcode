@@ -41,6 +41,13 @@ fn normalize_system_content_for_display(content: &str) -> Cow<'_, str> {
     Cow::Owned(normalized)
 }
 
+fn wrap_rendered_markdown_lines(lines: Vec<Line<'static>>, width: usize) -> Vec<Line<'static>> {
+    if width == 0 || !lines.iter().any(|line| line.width() > width) {
+        return lines;
+    }
+    markdown::wrap_lines(lines, width)
+}
+
 fn is_tool_call_wrapper_noise_line(line: &str) -> bool {
     line.eq_ignore_ascii_case("count") || line.eq_ignore_ascii_case("call")
 }
@@ -73,6 +80,7 @@ pub(crate) fn render_assistant_message(
     let wrap_width = centered_wrap_width(width, centered, 96);
     let content = strip_count_wrapper_noise_lines(&msg.content);
     let mut lines = markdown::render_markdown_with_width(content.as_ref(), Some(wrap_width));
+    lines = wrap_rendered_markdown_lines(lines, wrap_width);
     if centered {
         markdown::recenter_structured_blocks_for_display(&mut lines, width as usize);
     }
@@ -204,6 +212,7 @@ pub(crate) fn render_system_message(
     let wrap_width = centered_wrap_width(width.saturating_sub(4), centered, 96);
     let display_content = normalize_system_content_for_display(&msg.content);
     let mut lines = markdown::render_markdown_with_width(&display_content, Some(wrap_width));
+    lines = wrap_rendered_markdown_lines(lines, wrap_width);
     if centered {
         left_pad_lines_for_centered_mode(&mut lines, width);
     }

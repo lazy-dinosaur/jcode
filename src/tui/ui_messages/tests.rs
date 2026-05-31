@@ -65,6 +65,56 @@ fn render_system_message_does_not_fall_back_to_raw_markdown_when_wide() {
         !plain.contains("|---|"),
         "raw table separator leaked after wide markdown fallback: {plain}"
     );
+    assert!(
+        lines.iter().all(|line| line.width() <= 64),
+        "rendered markdown lines should wrap instead of overflowing: {:?}",
+        lines.iter().map(extract_line_text).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn render_system_message_wraps_parsed_long_lines_without_raw_fallback() {
+    let msg = DisplayMessage::system(
+        "점검 결과: 많이 쌓였습니다. 이제 `thin data`는 아닙니다. Medivance: hook timings `17176`, route decisions `452`, graph `254`, host-owned/changed records `183`",
+    );
+
+    let lines = render_system_message(&msg, 72, crate::config::DiffDisplayMode::Off);
+    let plain = lines
+        .iter()
+        .map(extract_line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(plain.contains("thin data"));
+    assert!(
+        lines.iter().all(|line| line.width() <= 72),
+        "system markdown should wrap parsed spans within viewport: {:?}",
+        lines.iter().map(extract_line_text).collect::<Vec<_>>()
+    );
+    assert!(!plain.contains("```"));
+    assert!(!plain.contains("|---|"));
+}
+
+#[test]
+fn render_assistant_message_wraps_parsed_long_lines() {
+    let msg = DisplayMessage::assistant(
+        "네, 둘 다 확인했습니다. `~/dev/medivance`: record-audit ok=true, hook timings `17,176`, route decisions `452`, host-owned/changed `183`\n\n- `~/dev/medivance-pwa`: record-audit ok=true, hook timings `3,649`, route decisions `68`, host-owned/changed `67`",
+    );
+
+    let lines = render_assistant_message(&msg, 72, crate::config::DiffDisplayMode::Off);
+    let plain = lines
+        .iter()
+        .map(extract_line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(plain.contains("medivance"));
+    assert!(plain.contains("medivance-pwa"));
+    assert!(
+        lines.iter().all(|line| line.width() <= 72),
+        "assistant markdown should wrap parsed spans within viewport: {:?}",
+        lines.iter().map(extract_line_text).collect::<Vec<_>>()
+    );
 }
 
 #[test]
