@@ -357,18 +357,8 @@ pub(in crate::tui::app) fn handle_server_event(
                 ));
             }
             if !app.pending_soft_interrupts.is_empty() {
-                let mut recovered_interrupts = std::mem::take(&mut app.pending_soft_interrupts);
-                let mut recovered_meta: Vec<QueuedPromptMeta> = recovered_interrupts
-                    .iter()
-                    .map(|_| QueuedPromptMeta::soft_interrupt())
-                    .collect();
-                let mut recovered_images = vec![Vec::new(); recovered_interrupts.len()];
-                recovered_interrupts.append(&mut app.queued_messages);
-                recovered_images.append(&mut app.queued_message_images);
-                app.queued_messages = recovered_interrupts;
-                app.queued_message_images = recovered_images;
-                recovered_meta.append(&mut app.queued_message_meta);
-                app.queued_message_meta = recovered_meta;
+                let recovered_interrupts = std::mem::take(&mut app.pending_soft_interrupts);
+                app.prepend_recovered_soft_interrupts_unique(recovered_interrupts);
                 app.pending_soft_interrupt_requests.clear();
             }
             // Interrupt should only stop the active turn. Messages that the user

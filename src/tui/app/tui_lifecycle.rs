@@ -1,6 +1,35 @@
 use super::state_ui::RestoredReloadInput;
 use super::*;
 use crate::tui::{backend, keybind};
+use std::collections::HashSet;
+
+fn prepend_recovered_reload_followups_unique(
+    queued_messages: &mut Vec<String>,
+    queued_message_images: &mut Vec<Vec<(String, String)>>,
+    recovered_followups: Vec<String>,
+) -> bool {
+    let mut seen: HashSet<String> = queued_messages.iter().cloned().collect();
+    let mut recovered_queue = Vec::new();
+    let mut recovered_images = Vec::new();
+
+    for followup in recovered_followups {
+        if followup.trim().is_empty() || !seen.insert(followup.clone()) {
+            continue;
+        }
+        recovered_queue.push(followup);
+        recovered_images.push(Vec::new());
+    }
+
+    if recovered_queue.is_empty() {
+        return false;
+    }
+
+    recovered_queue.append(queued_messages);
+    recovered_images.append(queued_message_images);
+    *queued_messages = recovered_queue;
+    *queued_message_images = recovered_images;
+    true
+}
 
 fn sync_process_cwd_from_session(session: &Session) {
     let Some(working_dir) = session.working_dir.as_deref() else {
@@ -80,13 +109,13 @@ impl App {
             recovered_followups.extend(recovered_interrupts);
         }
         if !recovered_followups.is_empty() {
-            let mut recovered_queue = recovered_followups;
-            let mut recovered_images = vec![Vec::new(); recovered_queue.len()];
-            recovered_queue.append(&mut queued_messages);
-            recovered_images.append(&mut queued_message_images);
-            queued_messages = recovered_queue;
-            queued_message_images = recovered_images;
-            self.set_status_notice("Recovered pending prompts after reload");
+            if prepend_recovered_reload_followups_unique(
+                &mut queued_messages,
+                &mut queued_message_images,
+                recovered_followups,
+            ) {
+                self.set_status_notice("Recovered pending prompts after reload");
+            }
         }
 
         self.queued_messages = queued_messages;

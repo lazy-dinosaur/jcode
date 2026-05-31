@@ -912,6 +912,38 @@ fn test_remote_interrupted_recovers_pending_interleaves_in_order() {
 }
 
 #[test]
+fn test_remote_interrupted_dedupes_same_pending_and_local_interleave() {
+    let mut app = create_test_app();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+    remote.mark_history_loaded();
+
+    app.is_processing = true;
+    app.status = ProcessingStatus::Streaming;
+    app.current_message_id = Some(42);
+    app.interleave_message = Some("duplicate interleave".to_string());
+    app.pending_soft_interrupts = vec!["duplicate interleave".to_string()];
+    app.pending_soft_interrupt_requests = vec![(55, "duplicate interleave".to_string())];
+    app.queued_messages.push("queued later".to_string());
+
+    app.handle_server_event(crate::protocol::ServerEvent::Interrupted, &mut remote);
+
+    assert_eq!(
+        app.queued_messages(),
+        &["duplicate interleave", "queued later"],
+        "same logical interleave recovered from local and pending sources must not be queued twice"
+    );
+    assert_eq!(
+        app.queued_messages()
+            .iter()
+            .filter(|msg| msg.as_str() == "duplicate interleave")
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn test_remote_done_recovers_stranded_soft_interrupt_as_queued_followup() {
     let mut app = create_test_app();
     let rt = tokio::runtime::Runtime::new().unwrap();
@@ -967,6 +999,44 @@ fn test_remote_done_recovers_stranded_soft_interrupt_as_queued_followup() {
         .map(|msg| msg.content.as_str())
         .collect();
     assert_eq!(user_messages, vec!["late interleave", "queued later"]);
+}
+
+#[test]
+fn test_remote_done_dedupes_stranded_soft_interrupt_already_in_queue() {
+    let mut app = create_test_app();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+    remote.mark_history_loaded();
+
+    app.is_processing = true;
+    app.status = ProcessingStatus::Streaming;
+    app.current_message_id = Some(42);
+    app.pending_soft_interrupts = vec!["same followup".to_string()];
+    app.pending_soft_interrupt_requests = vec![(55, "same followup".to_string())];
+    app.queued_messages.push("same followup".to_string());
+    app.queued_messages.push("queued later".to_string());
+
+    app.handle_server_event(crate::protocol::ServerEvent::Done { id: 42 }, &mut remote);
+    rt.block_on(remote::process_remote_followups(&mut app, &mut remote));
+
+    assert!(app.pending_soft_interrupts.is_empty());
+    assert!(app.pending_soft_interrupt_requests.is_empty());
+    assert!(app.interleave_message.is_none());
+    let user_messages: Vec<&str> = app
+        .display_messages()
+        .iter()
+        .filter(|msg| msg.role == "user")
+        .map(|msg| msg.content.as_str())
+        .collect();
+    assert_eq!(
+        user_messages
+            .iter()
+            .filter(|content| **content == "same followup")
+            .count(),
+        1,
+        "stranded soft interrupt already queued should not be sent/displayed twice: {user_messages:?}"
+    );
 }
 
 #[test]

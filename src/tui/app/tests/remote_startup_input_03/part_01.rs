@@ -933,6 +933,35 @@ fn test_new_for_remote_requeues_restored_pending_soft_interrupts() {
 }
 
 #[test]
+fn test_new_for_remote_dedupes_restored_recovery_sources() {
+    let mut app = create_test_app();
+    let session_id = format!("test-remote-restore-dedupe-{}", std::process::id());
+
+    app.interleave_message = Some("same restored followup".to_string());
+    app.pending_soft_interrupts = vec!["same restored followup".to_string()];
+    app.pending_soft_interrupt_requests = vec![(101, "same restored followup".to_string())];
+    app.queued_messages.push("same restored followup".to_string());
+    app.queued_messages.push("queued later".to_string());
+    app.save_input_for_reload(&session_id);
+
+    let restored = App::new_for_remote(Some(session_id));
+    assert!(restored.interleave_message.is_none());
+    assert_eq!(
+        restored.queued_messages(),
+        &["same restored followup", "queued later"],
+        "same logical prompt restored from interleave, pending soft interrupt, and queue should appear once"
+    );
+    assert_eq!(
+        restored
+            .queued_messages()
+            .iter()
+            .filter(|msg| msg.as_str() == "same restored followup")
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn test_new_for_remote_restored_interleave_triggers_dispatch_state() {
     let mut app = create_test_app();
     let session_id = format!("test-remote-interleave-dispatch-{}", std::process::id());

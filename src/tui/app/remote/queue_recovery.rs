@@ -91,12 +91,11 @@ pub(super) fn recover_local_interleave_to_queue(app: &mut App, reason: &str) -> 
         "Recovering unsent interleave into queued follow-ups after {}",
         reason
     ));
-    let meta = QueuedPromptMeta::user(&interleave);
-    app.queued_messages.insert(0, interleave);
-    app.queued_message_images.insert(0, Vec::new());
-    app.queued_message_meta.insert(0, meta);
-    app.batch_recovered_soft_interrupts_with_queue = true;
-    true
+    let inserted = app.prepend_recovered_user_followups_unique(vec![interleave]);
+    if inserted {
+        app.batch_recovered_soft_interrupts_with_queue = true;
+    }
+    inserted
 }
 
 pub(super) async fn recover_stranded_soft_interrupts(
@@ -135,19 +134,19 @@ pub(super) async fn recover_stranded_soft_interrupts(
 
     if app.batch_recovered_soft_interrupts_with_queue {
         app.batch_recovered_soft_interrupts_with_queue = false;
-        let mut recovered_meta: Vec<QueuedPromptMeta> = recovered_interrupts
-            .iter()
-            .map(|_| QueuedPromptMeta::soft_interrupt())
-            .collect();
-        let mut recovered_queue = recovered_interrupts;
-        let mut recovered_images = vec![Vec::new(); recovered_queue.len()];
-        recovered_queue.append(&mut app.queued_messages);
-        recovered_images.append(&mut app.queued_message_images);
-        app.queued_messages = recovered_queue;
-        app.queued_message_images = recovered_images;
-        recovered_meta.append(&mut app.queued_message_meta);
-        app.queued_message_meta = recovered_meta;
+        app.prepend_recovered_soft_interrupts_unique(recovered_interrupts);
     } else {
+        let mut seen: std::collections::HashSet<String> =
+            app.queued_messages.iter().cloned().collect();
+        if let Some(existing) = app.interleave_message.as_ref()
+            && !existing.trim().is_empty()
+        {
+            seen.insert(existing.clone());
+        }
+        let recovered_interrupts: Vec<String> = recovered_interrupts
+            .into_iter()
+            .filter(|interrupt| !interrupt.trim().is_empty() && seen.insert(interrupt.clone()))
+            .collect();
         let recovered = recovered_interrupts.join("\n\n");
         if recovered.trim().is_empty() {
             return false;

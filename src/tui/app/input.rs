@@ -939,6 +939,57 @@ impl App {
             .push(QueuedPromptMeta::hidden_system());
     }
 
+    pub(super) fn prepend_recovered_user_followups_unique(
+        &mut self,
+        followups: Vec<String>,
+    ) -> bool {
+        self.prepend_recovered_followups_unique(followups, QueuedPromptMeta::user)
+    }
+
+    pub(super) fn prepend_recovered_soft_interrupts_unique(
+        &mut self,
+        followups: Vec<String>,
+    ) -> bool {
+        self.prepend_recovered_followups_unique(followups, |_| QueuedPromptMeta::soft_interrupt())
+    }
+
+    fn prepend_recovered_followups_unique<F>(
+        &mut self,
+        followups: Vec<String>,
+        mut meta_for: F,
+    ) -> bool
+    where
+        F: FnMut(&str) -> QueuedPromptMeta,
+    {
+        self.ensure_queue_metadata();
+        let mut seen: std::collections::HashSet<String> =
+            self.queued_messages.iter().cloned().collect();
+        let mut recovered_messages = Vec::new();
+        let mut recovered_images = Vec::new();
+        let mut recovered_meta = Vec::new();
+
+        for followup in followups {
+            if followup.trim().is_empty() || !seen.insert(followup.clone()) {
+                continue;
+            }
+            recovered_meta.push(meta_for(&followup));
+            recovered_messages.push(followup);
+            recovered_images.push(Vec::new());
+        }
+
+        if recovered_messages.is_empty() {
+            return false;
+        }
+
+        recovered_messages.append(&mut self.queued_messages);
+        recovered_images.append(&mut self.queued_message_images);
+        recovered_meta.append(&mut self.queued_message_meta);
+        self.queued_messages = recovered_messages;
+        self.queued_message_images = recovered_images;
+        self.queued_message_meta = recovered_meta;
+        true
+    }
+
     pub(super) fn take_all_queued_followups(&mut self) -> QueuedFollowupBatch {
         self.ensure_queue_metadata();
 
