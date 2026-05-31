@@ -252,6 +252,58 @@ fn test_reject_stateful_parallel_subcalls_allows_cwd_show() {
 }
 
 #[test]
+fn test_reject_parallel_scratch_read_after_bash_blocks_tmp_read_race() {
+    let subcalls = vec![
+        (
+            0,
+            "bash".to_string(),
+            json!({"command": "rg foo src > /tmp/gl.txt"}),
+        ),
+        (1, "read".to_string(), json!({"file_path": "/tmp/gl.txt"})),
+    ];
+
+    let err = reject_parallel_scratch_read_after_bash(&subcalls).unwrap_err();
+    let message = err.to_string();
+    assert!(message.contains("Cannot read scratch file '/tmp/gl.txt'"));
+    assert!(message.contains("batch subcalls run in parallel"));
+    assert!(message.contains("bash item 1"));
+    assert!(message.contains("item 2"));
+}
+
+#[test]
+fn test_reject_parallel_scratch_read_after_bash_blocks_mcp_tmp_read_race() {
+    let subcalls = vec![
+        (
+            0,
+            "Bash".to_string(),
+            json!({"command": "printf ok > /var/tmp/output.txt"}),
+        ),
+        (
+            1,
+            "mcp__filesystem__read_text_file".to_string(),
+            json!({"path": "/var/tmp/output.txt"}),
+        ),
+    ];
+
+    let err = reject_parallel_scratch_read_after_bash(&subcalls).unwrap_err();
+    assert!(err.to_string().contains("/var/tmp/output.txt"));
+}
+
+#[test]
+fn test_reject_parallel_scratch_read_after_bash_allows_independent_reads() {
+    let subcalls = vec![
+        (
+            0,
+            "bash".to_string(),
+            json!({"command": "printf ok > /tmp/other.txt"}),
+        ),
+        (1, "read".to_string(), json!({"file_path": "src/lib.rs"})),
+    ];
+
+    reject_parallel_scratch_read_after_bash(&subcalls).unwrap();
+}
+
+#[test]
 fn test_duplicate_subcall_key_canonicalizes_object_order() {
     let a = duplicate_subcall_key("bash", &json!({"command": "cargo check", "timeout": 1}));
     let b = duplicate_subcall_key("bash", &json!({"timeout": 1, "command": "cargo check"}));

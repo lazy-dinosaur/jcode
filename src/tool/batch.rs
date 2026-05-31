@@ -275,6 +275,65 @@ fn reject_duplicate_subcalls(subcalls: &[(usize, String, Value)]) -> Result<()> 
     Ok(())
 }
 
+fn batch_read_target_path<'a>(tool_name: &str, parameters: &'a Value) -> Option<&'a str> {
+    match Registry::resolve_tool_name(tool_name) {
+        "read" => parameters.get("file_path").and_then(Value::as_str),
+        "mcp__filesystem__read_file"
+        | "mcp__filesystem__read_text_file"
+        | "mcp__filesystem__read_media_file"
+        | "mcp__filesystem__get_file_info" => parameters.get("path").and_then(Value::as_str),
+        _ => None,
+    }
+}
+
+fn is_ephemeral_scratch_path(path: &str) -> bool {
+    path.starts_with("/tmp/") || path.starts_with("/var/tmp/") || path.starts_with("/dev/shm/")
+}
+
+fn reject_parallel_scratch_read_after_bash(subcalls: &[(usize, String, Value)]) -> Result<()> {
+    let bash_commands: Vec<(usize, &str)> = subcalls
+        .iter()
+        .filter_map(|(index, tool_name, parameters)| {
+            (Registry::resolve_tool_name(tool_name) == "bash")
+                .then(|| {
+                    parameters
+                        .get("command")
+                        .and_then(Value::as_str)
+                        .map(|cmd| (*index, cmd))
+                })
+                .flatten()
+        })
+        .collect();
+
+    if bash_commands.is_empty() {
+        return Ok(());
+    }
+
+    for (read_index, tool_name, parameters) in subcalls {
+        let Some(path) = batch_read_target_path(tool_name, parameters) else {
+            continue;
+        };
+        if !is_ephemeral_scratch_path(path) {
+            continue;
+        }
+
+        for (bash_index, command) in &bash_commands {
+            if *bash_index == *read_index || !command.contains(path) {
+                continue;
+            }
+
+            return Err(anyhow::anyhow!(
+                "Cannot read scratch file '{}' inside the same batch as bash item {} because batch subcalls run in parallel and the read at item {} may race before the file exists. Run the bash tool first and read the file in a later tool call, or have bash print the needed output directly.",
+                path,
+                bash_index + 1,
+                read_index + 1,
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 #[async_trait]
 impl Tool for BatchTool {
     fn name(&self) -> &str {
@@ -325,6 +384,7 @@ impl Tool for BatchTool {
             .collect();
         reject_stateful_parallel_subcalls(&subcalls)?;
         reject_duplicate_subcalls(&subcalls)?;
+        reject_parallel_scratch_read_after_bash(&subcalls)?;
 
         let mut running: HashMap<usize, ToolCall> = subcalls
             .iter()
