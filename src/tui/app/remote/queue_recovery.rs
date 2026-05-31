@@ -93,6 +93,7 @@ pub(super) fn recover_local_interleave_to_queue(app: &mut App, reason: &str) -> 
     ));
     let meta = QueuedPromptMeta::user(&interleave);
     app.queued_messages.insert(0, interleave);
+    app.queued_message_images.insert(0, Vec::new());
     app.queued_message_meta.insert(0, meta);
     app.batch_recovered_soft_interrupts_with_queue = true;
     true
@@ -139,8 +140,11 @@ pub(super) async fn recover_stranded_soft_interrupts(
             .map(|_| QueuedPromptMeta::soft_interrupt())
             .collect();
         let mut recovered_queue = recovered_interrupts;
+        let mut recovered_images = vec![Vec::new(); recovered_queue.len()];
         recovered_queue.append(&mut app.queued_messages);
+        recovered_images.append(&mut app.queued_message_images);
         app.queued_messages = recovered_queue;
+        app.queued_message_images = recovered_images;
         recovered_meta.append(&mut app.queued_message_meta);
         app.queued_message_meta = recovered_meta;
     } else {

@@ -901,9 +901,10 @@ pub(super) async fn process_remote_followups(app: &mut App, remote: &mut RemoteC
         if queued_batch.is_empty() {
             return;
         }
-        let (messages, reminder, display_system_messages) =
-            super::helpers::partition_queued_messages(
+        let (messages, images, reminder, display_system_messages) =
+            super::helpers::partition_queued_messages_with_images(
                 queued_batch.queued_messages.clone(),
+                queued_batch.queued_images.clone(),
                 queued_batch.hidden_reminders.clone(),
             );
         let combined = messages.join("\n\n");
@@ -925,7 +926,7 @@ pub(super) async fn process_remote_followups(app: &mut App, remote: &mut RemoteC
             }
         }
         if let Err(error) =
-            begin_remote_send(app, remote, combined, vec![], true, reminder, auto_retry, 0).await
+            begin_remote_send(app, remote, combined, images, true, reminder, auto_retry, 0).await
         {
             queued_batch.mark_failed(error.to_string());
             app.restore_queued_followups_front(queued_batch);
@@ -1158,7 +1159,7 @@ fn queue_message_for_reconnect(app: &mut App) {
     }
 
     let prepared = input::take_prepared_input(app);
-    app.enqueue_queued_message(prepared.expanded);
+    app.enqueue_queued_message_with_images(prepared.expanded, prepared.images);
 
     let queued_count = app.queued_messages.len();
     app.set_status_notice(format!(
@@ -1209,6 +1210,8 @@ fn handle_disconnected_key_internal(
             KeyCode::Char('l') if !app.diff_pane_visible() => {
                 app.clear_display_messages();
                 app.queued_messages.clear();
+                app.queued_message_images.clear();
+                app.queued_message_meta.clear();
                 return Ok(());
             }
             _ => {

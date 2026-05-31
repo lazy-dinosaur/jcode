@@ -634,6 +634,7 @@ pub struct App {
     should_quit: bool,
     // Message queueing
     queued_messages: Vec<String>,
+    queued_message_images: Vec<Vec<(String, String)>>,
     queued_message_meta: Vec<QueuedPromptMeta>,
     hidden_queued_system_messages: Vec<String>,
     hidden_queued_system_meta: Vec<QueuedPromptMeta>,

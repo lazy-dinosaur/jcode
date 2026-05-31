@@ -784,11 +784,12 @@ pub(super) fn expand_paste_placeholders(app: &mut App, input: &str) -> String {
 
 pub(super) fn queue_message(app: &mut App) {
     let prepared = take_prepared_input(app);
-    app.enqueue_queued_message(prepared.expanded);
+    app.enqueue_queued_message_with_images(prepared.expanded, prepared.images);
 }
 
 pub(super) struct QueuedFollowupBatch {
     pub queued_messages: Vec<String>,
+    pub queued_images: Vec<Vec<(String, String)>>,
     pub queued_meta: Vec<QueuedPromptMeta>,
     pub hidden_reminders: Vec<String>,
     pub hidden_meta: Vec<QueuedPromptMeta>,
@@ -830,6 +831,9 @@ pub(super) fn retrieve_pending_message_for_edit(app: &mut App) -> bool {
         parts.push(msg);
     }
     parts.extend(std::mem::take(&mut app.queued_messages));
+    for images in std::mem::take(&mut app.queued_message_images) {
+        app.pending_images.extend(images);
+    }
     app.queued_message_meta.clear();
 
     if !parts.is_empty() {
@@ -876,6 +880,10 @@ impl App {
             self.queued_message_meta
                 .truncate(self.queued_messages.len());
         }
+        if self.queued_message_images.len() > self.queued_messages.len() {
+            self.queued_message_images
+                .truncate(self.queued_messages.len());
+        }
         while self.queued_message_meta.len() < self.queued_messages.len() {
             let idx = self.queued_message_meta.len();
             let text = self
@@ -884,6 +892,9 @@ impl App {
                 .map(String::as_str)
                 .unwrap_or("");
             self.queued_message_meta.push(QueuedPromptMeta::user(text));
+        }
+        while self.queued_message_images.len() < self.queued_messages.len() {
+            self.queued_message_images.push(Vec::new());
         }
         if self.hidden_queued_system_meta.len() > self.hidden_queued_system_messages.len() {
             self.hidden_queued_system_meta
@@ -896,8 +907,17 @@ impl App {
     }
 
     pub(super) fn enqueue_queued_message(&mut self, content: String) {
+        self.enqueue_queued_message_with_images(content, Vec::new());
+    }
+
+    pub(super) fn enqueue_queued_message_with_images(
+        &mut self,
+        content: String,
+        images: Vec<(String, String)>,
+    ) {
         let meta = QueuedPromptMeta::user(&content);
         self.queued_messages.push(content);
+        self.queued_message_images.push(images);
         self.queued_message_meta.push(meta);
     }
 
@@ -921,6 +941,7 @@ impl App {
 
         QueuedFollowupBatch {
             queued_messages: std::mem::take(&mut self.queued_messages),
+            queued_images: std::mem::take(&mut self.queued_message_images),
             queued_meta: std::mem::take(&mut self.queued_message_meta),
             hidden_reminders: std::mem::take(&mut self.hidden_queued_system_messages),
             hidden_meta: std::mem::take(&mut self.hidden_queued_system_meta),
@@ -953,6 +974,7 @@ impl App {
 
         QueuedFollowupBatch {
             queued_messages: self.queued_messages.drain(..queued_count).collect(),
+            queued_images: self.queued_message_images.drain(..queued_count).collect(),
             queued_meta: self.queued_message_meta.drain(..queued_count).collect(),
             hidden_reminders: self
                 .hidden_queued_system_messages
@@ -968,6 +990,9 @@ impl App {
     pub(super) fn restore_queued_followups_front(&mut self, mut batch: QueuedFollowupBatch) {
         batch.queued_messages.append(&mut self.queued_messages);
         self.queued_messages = batch.queued_messages;
+
+        batch.queued_images.append(&mut self.queued_message_images);
+        self.queued_message_images = batch.queued_images;
 
         batch.queued_meta.append(&mut self.queued_message_meta);
         self.queued_message_meta = batch.queued_meta;
@@ -2582,9 +2607,10 @@ impl App {
             if queued_batch.is_empty() {
                 break;
             }
-            let (messages, reminder, display_system_messages) =
-                super::helpers::partition_queued_messages(
+            let (messages, images, reminder, display_system_messages) =
+                super::helpers::partition_queued_messages_with_images(
                     queued_batch.queued_messages,
+                    queued_batch.queued_images,
                     queued_batch.hidden_reminders,
                 );
             let combined = messages.join("\n\n");
@@ -2606,14 +2632,27 @@ impl App {
             self.current_turn_system_reminder = reminder;
 
             if has_combined {
-                self.add_provider_message(Message::user(&combined));
-                self.session.add_message(
-                    Role::User,
-                    vec![ContentBlock::Text {
+                if images.is_empty() {
+                    self.add_provider_message(Message::user(&combined));
+                    self.session.add_message(
+                        Role::User,
+                        vec![ContentBlock::Text {
+                            text: combined.clone(),
+                            cache_control: None,
+                        }],
+                    );
+                } else {
+                    self.add_provider_message(Message::user_with_images(&combined, images.clone()));
+                    let mut blocks: Vec<ContentBlock> = images
+                        .into_iter()
+                        .map(|(media_type, data)| ContentBlock::Image { media_type, data })
+                        .collect();
+                    blocks.push(ContentBlock::Text {
                         text: combined.clone(),
                         cache_control: None,
-                    }],
-                );
+                    });
+                    self.session.add_message(Role::User, blocks);
+                }
             }
             self.session_save_pending = true;
             self.clear_streaming_render_state();

@@ -633,8 +633,11 @@ fn test_save_and_restore_reload_state_preserves_queued_messages() {
 
     app.input = "draft".to_string();
     app.cursor_pos = 3;
-    app.queued_messages.push("queued one".to_string());
-    app.queued_messages.push("queued two".to_string());
+    app.enqueue_queued_message_with_images(
+        "queued one".to_string(),
+        vec![("image/png".to_string(), "queued-image".to_string())],
+    );
+    app.enqueue_queued_message("queued two".to_string());
     app.hidden_queued_system_messages
         .push("continue silently".to_string());
     app.save_input_for_reload(&session_id);
@@ -643,6 +646,13 @@ fn test_save_and_restore_reload_state_preserves_queued_messages() {
     assert_eq!(restored.input, "draft");
     assert_eq!(restored.cursor, 3);
     assert_eq!(restored.queued_messages, vec!["queued one", "queued two"]);
+    assert_eq!(
+        restored.queued_message_images,
+        vec![
+            vec![("image/png".to_string(), "queued-image".to_string())],
+            vec![],
+        ]
+    );
     assert_eq!(
         restored.hidden_queued_system_messages,
         vec!["continue silently"]
@@ -656,14 +666,24 @@ fn test_new_for_remote_restored_queued_messages_stay_queued_until_remote_idle() 
     let mut app = create_test_app();
     let session_id = format!("test-remote-queued-restore-{}", std::process::id());
 
-    app.queued_messages.push("queued one".to_string());
-    app.queued_messages.push("queued two".to_string());
+    app.enqueue_queued_message_with_images(
+        "queued one".to_string(),
+        vec![("image/png".to_string(), "queued-image".to_string())],
+    );
+    app.enqueue_queued_message("queued two".to_string());
     app.hidden_queued_system_messages
         .push("continue silently".to_string());
     app.save_input_for_reload(&session_id);
 
     let restored = App::new_for_remote(Some(session_id));
     assert_eq!(restored.queued_messages(), &["queued one", "queued two"]);
+    assert_eq!(
+        restored.queued_message_images,
+        vec![
+            vec![("image/png".to_string(), "queued-image".to_string())],
+            vec![],
+        ]
+    );
     assert_eq!(
         restored.hidden_queued_system_messages,
         vec!["continue silently"]

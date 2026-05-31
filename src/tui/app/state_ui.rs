@@ -9,6 +9,7 @@ pub(super) struct RestoredReloadInput {
     pub pending_images: Vec<(String, String)>,
     pub submit_on_restore: bool,
     pub queued_messages: Vec<String>,
+    pub queued_message_images: Vec<Vec<(String, String)>>,
     pub hidden_queued_system_messages: Vec<String>,
     pub startup_status_notice: Option<String>,
     pub startup_display_message: Option<(String, String)>,
@@ -25,6 +26,34 @@ pub(super) struct RestoredReloadInput {
 }
 
 impl App {
+    fn parse_queued_message_images(value: &serde_json::Value) -> Vec<Vec<(String, String)>> {
+        value
+            .get("queued_message_images")
+            .and_then(|v| v.as_array())
+            .map(|message_images| {
+                message_images
+                    .iter()
+                    .map(|images| {
+                        images
+                            .as_array()
+                            .map(|items| {
+                                items
+                                    .iter()
+                                    .filter_map(|item| {
+                                        Some((
+                                            item.get("media_type")?.as_str()?.to_string(),
+                                            item.get("data")?.as_str()?.to_string(),
+                                        ))
+                                    })
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default()
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    }
+
     fn recompute_display_message_stats(&mut self) {
         self.display_user_message_count = self
             .display_messages
@@ -156,6 +185,12 @@ impl App {
                 })).collect::<Vec<_>>(),
                 "submit_on_restore": resume_prompt.is_some(),
                 "queued_messages": self.queued_messages,
+                "queued_message_images": self.queued_message_images.iter().map(|images| {
+                    images.iter().map(|(media_type, data)| serde_json::json!({
+                        "media_type": media_type,
+                        "data": data,
+                    })).collect::<Vec<_>>()
+                }).collect::<Vec<_>>(),
                 "hidden_queued_system_messages": self.hidden_queued_system_messages,
                 "interleave_message": self.interleave_message,
                 "pending_soft_interrupts": self.pending_soft_interrupts,
@@ -185,6 +220,7 @@ impl App {
                 "pending_images": [],
                 "submit_on_restore": false,
                 "queued_messages": [],
+                "queued_message_images": [],
                 "hidden_queued_system_messages": [message],
                 "startup_status_notice": inferred_hints.as_ref().map(|(status, _)| status.clone()),
                 "startup_display_message_title": inferred_hints.as_ref().map(|(_, (title, _))| title.clone()),
@@ -223,6 +259,7 @@ impl App {
                 })).collect::<Vec<_>>(),
                 "submit_on_restore": true,
                 "queued_messages": [],
+                "queued_message_images": [],
                 "hidden_queued_system_messages": [],
                 "startup_status_notice": "Startup prompt queued",
                 "startup_display_message_title": serde_json::Value::Null,
@@ -287,6 +324,7 @@ impl App {
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
+            let queued_message_images = Self::parse_queued_message_images(&value);
             let hidden_queued_system_messages = value
                 .get("hidden_queued_system_messages")
                 .and_then(|v| v.as_array())
@@ -420,6 +458,7 @@ impl App {
                 pending_images,
                 submit_on_restore,
                 queued_messages,
+                queued_message_images,
                 hidden_queued_system_messages,
                 startup_status_notice,
                 startup_display_message,
@@ -445,6 +484,7 @@ impl App {
             pending_images: Vec::new(),
             submit_on_restore: false,
             queued_messages: Vec::new(),
+            queued_message_images: Vec::new(),
             hidden_queued_system_messages: Vec::new(),
             startup_status_notice: None,
             startup_display_message: None,

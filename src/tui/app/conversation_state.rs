@@ -766,6 +766,8 @@ impl App {
         self.clear_provider_messages();
         self.clear_display_messages();
         self.queued_messages.clear();
+        self.queued_message_images.clear();
+        self.queued_message_meta.clear();
         self.pasted_contents.clear();
         self.pending_images.clear();
         self.active_skill = None;

@@ -273,6 +273,8 @@ pub(super) fn reset_current_session(app: &mut App) {
     app.clear_provider_messages();
     app.clear_display_messages();
     app.queued_messages.clear();
+    app.queued_message_images.clear();
+    app.queued_message_meta.clear();
     app.pasted_contents.clear();
     app.pending_images.clear();
     app.active_skill = None;

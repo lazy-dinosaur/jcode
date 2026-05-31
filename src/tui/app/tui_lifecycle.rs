@@ -49,6 +49,7 @@ impl App {
         self.set_todos_view_enabled(restored.todos_view_enabled, restored.todos_view_enabled);
 
         let mut queued_messages = restored.queued_messages;
+        let mut queued_message_images = restored.queued_message_images;
         let mut recovered_followups = Vec::new();
         let mut should_dispatch_remote_restore =
             self.submit_input_on_startup || had_startup_notice || had_startup_display_message;
@@ -80,12 +81,16 @@ impl App {
         }
         if !recovered_followups.is_empty() {
             let mut recovered_queue = recovered_followups;
+            let mut recovered_images = vec![Vec::new(); recovered_queue.len()];
             recovered_queue.append(&mut queued_messages);
+            recovered_images.append(&mut queued_message_images);
             queued_messages = recovered_queue;
+            queued_message_images = recovered_images;
             self.set_status_notice("Recovered pending prompts after reload");
         }
 
         self.queued_messages = queued_messages;
+        self.queued_message_images = queued_message_images;
         self.queued_message_meta.clear();
         self.ensure_queue_metadata();
         if self.has_queued_followups() {
@@ -338,6 +343,7 @@ impl App {
             streaming_text_version: 0,
             should_quit: false,
             queued_messages: Vec::new(),
+            queued_message_images: Vec::new(),
             queued_message_meta: Vec::new(),
             hidden_queued_system_messages: Vec::new(),
             hidden_queued_system_meta: Vec::new(),
@@ -734,6 +740,7 @@ impl App {
             streaming_text_version: 0,
             should_quit: false,
             queued_messages: Vec::new(),
+            queued_message_images: Vec::new(),
             queued_message_meta: Vec::new(),
             hidden_queued_system_messages: Vec::new(),
             hidden_queued_system_meta: Vec::new(),

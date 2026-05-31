@@ -49,20 +49,40 @@ pub(super) fn launch_client_executable() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("jcode"))
 }
 
+#[cfg(test)]
 pub(super) fn partition_queued_messages(
     messages: Vec<String>,
     reminders: Vec<String>,
 ) -> (Vec<String>, Option<String>, Vec<String>) {
+    let (user_messages, _images, reminder, display_system_messages) =
+        partition_queued_messages_with_images(messages, Vec::new(), reminders);
+    (user_messages, reminder, display_system_messages)
+}
+
+pub(super) fn partition_queued_messages_with_images(
+    messages: Vec<String>,
+    message_images: Vec<Vec<(String, String)>>,
+    reminders: Vec<String>,
+) -> (
+    Vec<String>,
+    Vec<(String, String)>,
+    Option<String>,
+    Vec<String>,
+) {
     let mut user_messages = Vec::new();
+    let mut user_images = Vec::new();
     let mut display_system_messages = Vec::new();
     let mut reminder_parts = reminders;
 
-    for message in messages {
+    for (idx, message) in messages.into_iter().enumerate() {
         if let Some(system_message) = extract_bracketed_system_message(&message) {
             reminder_parts.push(system_message.clone());
             display_system_messages.push(system_message);
         } else {
             user_messages.push(message);
+            if let Some(images) = message_images.get(idx) {
+                user_images.extend(images.clone());
+            }
         }
     }
 
@@ -72,7 +92,12 @@ pub(super) fn partition_queued_messages(
         Some(reminder_parts.join("\n\n"))
     };
 
-    (user_messages, reminder, display_system_messages)
+    (
+        user_messages,
+        user_images,
+        reminder,
+        display_system_messages,
+    )
 }
 
 #[cfg(target_os = "macos")]

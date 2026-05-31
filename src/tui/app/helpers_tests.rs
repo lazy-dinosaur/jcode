@@ -11,7 +11,7 @@ fn assert_jcode_program_name(program: &std::path::Path) {
 use super::{
     build_resume_command, clear_ambient_info_cache_for_tests, extract_bracketed_system_message,
     format_countdown_until, gather_ambient_info, image_bytes_match_mime, partition_queued_messages,
-    resume_invocation_args,
+    partition_queued_messages_with_images, resume_invocation_args,
 };
 use crate::ambient::{AmbientManager, Priority, ScheduleRequest, ScheduleTarget};
 use crate::terminal_launch::{detected_resume_terminal, shell_command};
@@ -76,6 +76,38 @@ fn partition_queued_messages_moves_system_messages_into_reminders() {
     assert_eq!(
         reminder.as_deref(),
         Some("hidden reminder\n\nContinue where you left off.")
+    );
+}
+
+#[test]
+fn partition_queued_messages_with_images_keeps_user_images_aligned() {
+    let (user_messages, images, reminder, display_system_messages) =
+        partition_queued_messages_with_images(
+            vec![
+                "first user".to_string(),
+                "[SYSTEM: Continue silently.]".to_string(),
+                "second user".to_string(),
+            ],
+            vec![
+                vec![("image/png".to_string(), "first-image".to_string())],
+                vec![("image/png".to_string(), "system-image".to_string())],
+                vec![("image/jpeg".to_string(), "second-image".to_string())],
+            ],
+            vec!["hidden reminder".to_string()],
+        );
+
+    assert_eq!(user_messages, vec!["first user", "second user"]);
+    assert_eq!(
+        images,
+        vec![
+            ("image/png".to_string(), "first-image".to_string()),
+            ("image/jpeg".to_string(), "second-image".to_string()),
+        ]
+    );
+    assert_eq!(display_system_messages, vec!["Continue silently."]);
+    assert_eq!(
+        reminder.as_deref(),
+        Some("hidden reminder\n\nContinue silently.")
     );
 }
 

@@ -362,8 +362,11 @@ pub(in crate::tui::app) fn handle_server_event(
                     .iter()
                     .map(|_| QueuedPromptMeta::soft_interrupt())
                     .collect();
+                let mut recovered_images = vec![Vec::new(); recovered_interrupts.len()];
                 recovered_interrupts.append(&mut app.queued_messages);
+                recovered_images.append(&mut app.queued_message_images);
                 app.queued_messages = recovered_interrupts;
+                app.queued_message_images = recovered_images;
                 recovered_meta.append(&mut app.queued_message_meta);
                 app.queued_message_meta = recovered_meta;
                 app.pending_soft_interrupt_requests.clear();
@@ -766,6 +769,8 @@ pub(in crate::tui::app) fn handle_server_event(
                 app.follow_chat_bottom();
                 if prev_session_id.is_some() {
                     app.queued_messages.clear();
+                    app.queued_message_images.clear();
+                    app.queued_message_meta.clear();
                     app.interleave_message = None;
                     app.clear_pending_soft_interrupt_tracking();
                 }
