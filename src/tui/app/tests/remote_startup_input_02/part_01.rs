@@ -745,6 +745,60 @@ fn test_image_prompt_during_processing_queues_instead_of_text_only_interleave() 
 }
 
 #[test]
+fn test_text_prompt_does_not_overtake_existing_queued_image_prompt() {
+    let mut app = create_test_app();
+    app.is_processing = true;
+    app.queue_mode = false;
+    app.input = "image first [image 1]".to_string();
+    app.cursor_pos = app.input.len();
+    app.pending_images
+        .push(("image/png".to_string(), "base64-image".to_string()));
+
+    app.handle_key(KeyCode::Enter, KeyModifiers::empty())
+        .unwrap();
+    app.handle_key(KeyCode::Char('t'), KeyModifiers::empty())
+        .unwrap();
+    app.handle_key(KeyCode::Char('e'), KeyModifiers::empty())
+        .unwrap();
+    app.handle_key(KeyCode::Char('x'), KeyModifiers::empty())
+        .unwrap();
+    app.handle_key(KeyCode::Char('t'), KeyModifiers::empty())
+        .unwrap();
+    app.handle_key(KeyCode::Char(' '), KeyModifiers::empty())
+        .unwrap();
+    app.handle_key(KeyCode::Char('s'), KeyModifiers::empty())
+        .unwrap();
+    app.handle_key(KeyCode::Char('e'), KeyModifiers::empty())
+        .unwrap();
+    app.handle_key(KeyCode::Char('c'), KeyModifiers::empty())
+        .unwrap();
+    app.handle_key(KeyCode::Char('o'), KeyModifiers::empty())
+        .unwrap();
+    app.handle_key(KeyCode::Char('n'), KeyModifiers::empty())
+        .unwrap();
+    app.handle_key(KeyCode::Char('d'), KeyModifiers::empty())
+        .unwrap();
+    app.handle_key(KeyCode::Enter, KeyModifiers::empty())
+        .unwrap();
+
+    assert_eq!(app.interleave_message.as_deref(), None);
+    assert_eq!(
+        app.queued_messages(),
+        &[
+            "image first [image 1]".to_string(),
+            "text second".to_string(),
+        ]
+    );
+    assert_eq!(
+        app.queued_message_images,
+        vec![
+            vec![("image/png".to_string(), "base64-image".to_string())],
+            vec![],
+        ]
+    );
+}
+
+#[test]
 fn test_ctrl_enter_image_prompt_in_queue_mode_still_queues_to_preserve_image() {
     let mut app = create_test_app();
     app.is_processing = true;

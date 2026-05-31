@@ -1439,10 +1439,33 @@ fn alpha_option_marker_at(
     previous_boundary: char,
 ) -> Option<GluedListMarker> {
     let previous_char = line[..idx].chars().next_back()?;
-    if !previous_char.is_whitespace() && !matches!(previous_char, ':' | ';' | '：') {
+    if !previous_char.is_whitespace()
+        && !matches!(
+            previous_char,
+            ':' | ';' | '：' | '?' | '？' | '!' | '！' | '.' | '。'
+        )
+    {
         return None;
     }
 
+    let (marker_letter, marker_len) = alpha_option_label_at(line, idx)?;
+
+    if !alpha_option_mode
+        && !matches!(previous_boundary, ':' | ';' | '：')
+        && !looks_like_alpha_option_run(line, idx, marker_letter, marker_len)
+    {
+        return None;
+    }
+
+    Some(GluedListMarker {
+        len: marker_len,
+        replacement: None,
+        enables_alpha_option_mode: true,
+        requires_hardbreak_before: true,
+    })
+}
+
+fn alpha_option_label_at(line: &str, idx: usize) -> Option<(char, usize)> {
     let rest = &line[idx..];
     let marker_letter = rest.chars().next()?;
     if !matches!(marker_letter, 'A'..='H') {
@@ -1450,42 +1473,94 @@ fn alpha_option_marker_at(
     }
     let marker_idx = marker_letter.len_utf8();
     let marker = rest[marker_idx..].chars().next()?;
-    if !matches!(marker, '.' | ')') {
-        return None;
+
+    if matches!(marker, '.' | ')') {
+        let after_marker_idx = marker_idx + marker.len_utf8();
+        let after_marker = rest[after_marker_idx..].chars().next()?;
+        return after_marker
+            .is_whitespace()
+            .then_some((marker_letter, after_marker_idx + after_marker.len_utf8()));
     }
-    let after_marker_idx = marker_idx + marker.len_utf8();
-    let after_marker = rest[after_marker_idx..].chars().next()?;
-    if !after_marker.is_whitespace() {
+
+    if matches!(marker, ':' | '：') {
+        let after_marker_idx = marker_idx + marker.len_utf8();
+        let after_marker = rest[after_marker_idx..].chars().next()?;
+        return after_marker
+            .is_whitespace()
+            .then_some((marker_letter, after_marker_idx + after_marker.len_utf8()));
+    }
+
+    if !marker.is_whitespace() {
         return None;
     }
 
-    if !alpha_option_mode && !matches!(previous_boundary, ':' | ';' | '：') {
+    let mut after_space_idx = marker_idx + marker.len_utf8();
+    while let Some(ch) = rest[after_space_idx..].chars().next() {
+        if !ch.is_whitespace() {
+            break;
+        }
+        after_space_idx += ch.len_utf8();
+    }
+    if rest[after_space_idx..].chars().next()? != '(' {
         return None;
     }
+    let close_rel = rest[after_space_idx..].find(')')?;
+    let close_idx = after_space_idx + close_rel;
+    if close_idx == after_space_idx + '('.len_utf8()
+        || close_idx.saturating_sub(after_space_idx) > 48
+    {
+        return None;
+    }
+    let after_close_idx = close_idx + ')'.len_utf8();
+    let delimiter = rest[after_close_idx..].chars().next()?;
+    if !matches!(delimiter, ':' | '：') {
+        return None;
+    }
+    let after_delim_idx = after_close_idx + delimiter.len_utf8();
+    let after_delim = rest[after_delim_idx..].chars().next()?;
+    after_delim
+        .is_whitespace()
+        .then_some((marker_letter, after_delim_idx + after_delim.len_utf8()))
+}
 
-    Some(GluedListMarker {
-        len: after_marker_idx + after_marker.len_utf8(),
-        replacement: None,
-        enables_alpha_option_mode: true,
-        requires_hardbreak_before: true,
-    })
+fn looks_like_alpha_option_run(
+    line: &str,
+    idx: usize,
+    marker_letter: char,
+    marker_len: usize,
+) -> bool {
+    if marker_letter != 'A' {
+        return false;
+    }
+
+    let next_letter = 'B';
+    let mut search = idx.saturating_add(marker_len);
+    while search < line.len() {
+        if !line.is_char_boundary(search) {
+            search += 1;
+            continue;
+        }
+        let Some(ch) = line[search..].chars().next() else {
+            break;
+        };
+        if ch == next_letter {
+            let previous_char = line[..search].chars().next_back();
+            let previous_boundary = previous_non_whitespace_char(line, search);
+            if previous_char.is_some_and(|prev| prev.is_whitespace())
+                && previous_boundary.is_some_and(is_list_glue_boundary_char)
+                && alpha_option_label_at(line, search)
+                    .is_some_and(|(letter, _)| letter == next_letter)
+            {
+                return true;
+            }
+        }
+        search += ch.len_utf8();
+    }
+    false
 }
 
 fn starts_with_alpha_option_marker(line: &str) -> Option<usize> {
-    let marker_letter = line.chars().next()?;
-    if !matches!(marker_letter, 'A'..='H') {
-        return None;
-    }
-    let marker_idx = marker_letter.len_utf8();
-    let marker = line[marker_idx..].chars().next()?;
-    if !matches!(marker, '.' | ')') {
-        return None;
-    }
-    let after_marker_idx = marker_idx + marker.len_utf8();
-    let after_marker = line[after_marker_idx..].chars().next()?;
-    after_marker
-        .is_whitespace()
-        .then_some(after_marker_idx + after_marker.len_utf8())
+    alpha_option_label_at(line, 0).map(|(_, len)| len)
 }
 
 fn is_list_glue_boundary_char(ch: char) -> bool {

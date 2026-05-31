@@ -78,7 +78,7 @@ fn rendered_user_input_images(images: &[(String, String)]) -> Vec<crate::session
         .collect()
 }
 
-fn append_origin_user_images(app: &mut App, images: &[(String, String)]) {
+pub(in crate::tui::app) fn append_origin_user_images(app: &mut App, images: &[(String, String)]) {
     if images.is_empty() {
         return;
     }

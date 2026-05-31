@@ -332,6 +332,54 @@ fn test_chat_native_scrollbar_hides_scroll_counters() {
 }
 
 #[test]
+fn test_centered_user_prompt_rail_stays_next_to_text_not_right_gutter() {
+    let _lock = scroll_render_test_lock();
+
+    let mut app = create_test_app();
+    app.set_centered(true);
+    app.display_messages = vec![DisplayMessage::user("short prompt")];
+    app.bump_display_messages_version();
+    app.session.short_name = Some("test".to_string());
+    app.is_processing = false;
+    app.status = ProcessingStatus::Idle;
+
+    let backend = ratatui::backend::TestBackend::new(120, 16);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create test terminal");
+    terminal
+        .draw(|f| crate::tui::ui::draw(f, &app))
+        .expect("draw failed");
+
+    let buf = terminal.backend().buffer();
+    let rows = (0..buf.area.height)
+        .map(|y| {
+            (0..buf.area.width)
+                .map(|x| buf[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+    let rendered = rows.join("\n");
+    let row = rows
+        .iter()
+        .find(|line| line.contains("short prompt"))
+        .unwrap_or_else(|| panic!("expected rendered prompt line:\n{rendered}"));
+    let prompt_end = row.find("short prompt").unwrap() + "short prompt".len();
+    let rail_col = row
+        .char_indices()
+        .filter_map(|(idx, ch)| (ch == '│').then_some(idx))
+        .next_back()
+        .expect("expected user prompt rail");
+
+    assert!(
+        rail_col <= prompt_end + 2,
+        "user prompt rail should sit next to the prompt text, not float in the right gutter: rail_col={rail_col}, prompt_end={prompt_end}, row={row:?}"
+    );
+    assert!(
+        rail_col < buf.area.width as usize - 8,
+        "user prompt rail should not be rendered as a far-right scrollbar-like gutter: rail_col={rail_col}, row={row:?}"
+    );
+}
+
+#[test]
 fn test_streaming_repaint_does_not_leave_bracket_artifact() {
     let mut app = create_test_app();
     let backend = ratatui::backend::TestBackend::new(90, 20);

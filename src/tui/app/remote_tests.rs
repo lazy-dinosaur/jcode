@@ -240,6 +240,19 @@ fn process_remote_followups_forwards_images_from_queued_prompts() {
             ("image/jpeg".to_string(), "second-image".to_string()),
         ]
     );
+    assert_eq!(app.remote_side_pane_images.len(), 2);
+    assert_eq!(app.remote_side_pane_images[0].media_type, "image/png");
+    assert_eq!(app.remote_side_pane_images[0].data, "first-image");
+    assert_eq!(
+        app.remote_side_pane_images[0].label.as_deref(),
+        Some("image 1")
+    );
+    assert_eq!(app.remote_side_pane_images[1].media_type, "image/jpeg");
+    assert_eq!(app.remote_side_pane_images[1].data, "second-image");
+    assert_eq!(
+        app.remote_side_pane_images[1].label.as_deref(),
+        Some("image 2")
+    );
 }
 
 #[test]

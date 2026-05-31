@@ -162,6 +162,76 @@ fn test_alpha_option_marker_glued_directly_after_colon_is_repaired() {
 }
 
 #[test]
+fn test_alpha_option_markers_after_question_prompt_are_repaired() {
+    let md = "어느 방향으로 갈까요? A. 큐 이미지 순서부터 고치기 B. A/B 줄바꿈부터 고치기 C. 둘 다 바로 고치기";
+    let rendered: Vec<String> = render_markdown_with_width(md, Some(180))
+        .iter()
+        .map(line_to_string)
+        .collect();
+
+    assert_eq!(rendered.first().map(String::as_str), Some("어느 방향으로 갈까요?"));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("A. 큐 이미지 순서")),
+        "A option should render on its own line after a question prompt: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("B. A/B 줄바꿈")),
+        "B option should render on its own line: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("C. 둘 다")),
+        "C option should render on its own line: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .all(|line| !line.contains("갈까요? A.") && !line.contains("고치기 B.")),
+        "alphabetic options must not remain glued to the question prompt: {rendered:?}"
+    );
+}
+
+#[test]
+fn test_alpha_option_labels_with_recommended_and_colons_are_repaired() {
+    let md = "이어서 갈까요? A (Recommended): 전체보기 전용 스크롤 클래스를 만든다 - padding-right 0, margin-right만 유지. B: 전체보기에서 콘텐츠 width를 동적으로 맞춘다. C: 직접 입력";
+    let rendered: Vec<String> = render_markdown_with_width(md, Some(180))
+        .iter()
+        .map(line_to_string)
+        .collect();
+
+    assert_eq!(rendered.first().map(String::as_str), Some("이어서 갈까요?"));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("A (Recommended): 전체보기")),
+        "A recommended option should render on its own line: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("B: 전체보기에서")),
+        "B colon option should render on its own line: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("C: 직접 입력")),
+        "C colon option should render on its own line: {rendered:?}"
+    );
+    assert!(
+        rendered.iter().all(|line| !line.contains("갈까요? A")
+            && !line.contains("유지. B:")
+            && !line.contains("맞춘다. C:")),
+        "recommended/colon options must not remain glued to prose: {rendered:?}"
+    );
+}
+
+#[test]
 fn test_source_newlines_before_alphabetic_option_markers_are_preserved() {
     let md = "선택지:\nA. 내가 중복 함수 하나만 제거 (Recommended)\nB. 네가 직접 getRecipientChatBadge 중복 블록 하나 삭제\nC. 우선 그대로 둠";
     let rendered: Vec<String> = render_markdown_with_width(md, Some(160))

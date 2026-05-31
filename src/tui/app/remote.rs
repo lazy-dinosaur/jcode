@@ -931,6 +931,7 @@ pub(super) async fn process_remote_followups(app: &mut App, remote: &mut RemoteC
                 app.visible_turn_started = Some(Instant::now());
             }
         }
+        let images_for_side_pane = images.clone();
         if let Err(error) =
             begin_remote_send(app, remote, combined, images, true, reminder, auto_retry, 0).await
         {
@@ -941,6 +942,8 @@ pub(super) async fn process_remote_followups(app: &mut App, remote: &mut RemoteC
                 error
             )));
             app.set_status_notice("Queued message failed — edit or retry");
+        } else {
+            input_dispatch::append_origin_user_images(app, &images_for_side_pane);
         }
     }
 }

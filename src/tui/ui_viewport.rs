@@ -645,7 +645,7 @@ pub(super) fn draw_messages(
         );
     }
 
-    frame.render_widget(Paragraph::new(visible_lines), content_area);
+    frame.render_widget(Paragraph::new(visible_lines.clone()), content_area);
 
     let centered = app.centered_mode();
     let diagram_mode = app.diagram_mode();
@@ -727,12 +727,16 @@ pub(super) fn draw_messages(
         }
     }
 
-    let right_x = render_area.x + render_area.width.saturating_sub(1);
     for &line_idx in &wrapped_user_indices[visible_user_start..visible_user_end] {
         if line_idx >= scroll && line_idx < scroll + visible_height {
-            let screen_y = content_area.y + (line_idx - scroll) as u16;
+            let rel_idx = line_idx - scroll;
+            let screen_y = content_area.y + rel_idx as u16;
+            let rail_x = visible_lines
+                .get(rel_idx)
+                .map(|line| user_prompt_rail_x(line, content_area, app.centered_mode()))
+                .unwrap_or_else(|| content_area.x + content_area.width.saturating_sub(1));
             let bar_area = Rect {
-                x: right_x,
+                x: rail_x,
                 y: screen_y,
                 width: 1,
                 height: 1,
@@ -864,6 +868,28 @@ pub(super) fn draw_messages(
     }
 
     margins
+}
+
+fn user_prompt_rail_x(line: &Line<'_>, area: Rect, centered: bool) -> u16 {
+    if area.width == 0 {
+        return area.x;
+    }
+
+    let line_width = line.width().min(area.width as usize) as u16;
+    let alignment = if centered {
+        line.alignment.unwrap_or(Alignment::Center)
+    } else {
+        line.alignment.unwrap_or(Alignment::Left)
+    };
+    let start = match alignment {
+        Alignment::Left => 0,
+        Alignment::Center => area.width.saturating_sub(line_width).div_ceil(2),
+        Alignment::Right => area.width.saturating_sub(line_width),
+    };
+    let rail_offset = start
+        .saturating_add(line_width)
+        .min(area.width.saturating_sub(1));
+    area.x.saturating_add(rail_offset)
 }
 
 fn compute_prompt_preview_line_count(

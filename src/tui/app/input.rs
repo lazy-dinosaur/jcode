@@ -866,6 +866,9 @@ pub(super) fn send_action(app: &App, alternate_shortcut: bool) -> SendAction {
     if app.input.trim().starts_with('/') || app.input.trim().starts_with('!') {
         return SendAction::Submit;
     }
+    if !app.queued_messages.is_empty() || !app.hidden_queued_system_messages.is_empty() {
+        return SendAction::Queue;
+    }
     if alternate_shortcut {
         if app.queue_mode {
             SendAction::Interleave
