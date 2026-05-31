@@ -258,6 +258,34 @@ fn test_incremental_renderer_streaming() {
 }
 
 #[test]
+fn test_incremental_renderer_preserves_paragraph_to_pipe_table_boundary() {
+    let mut renderer = IncrementalMarkdownRenderer::new(Some(180));
+    let prefix = "응, 이해했어. 정책은 이렇게 정리하면 맞지?\n| 방 종류 | 예시 | 이름 변경 방식 |\n";
+    let _ = renderer.update(prefix);
+    let lines = renderer.update(
+        "응, 이해했어. 정책은 이렇게 정리하면 맞지?\n| 방 종류 | 예시 | 이름 변경 방식 |\n| --- | --- | --- |\n| 전체/시스템성 부서방 | 전체 채팅 | 개인화 alias |\n핵심 구현 방향",
+    );
+    let rendered: Vec<String> = lines.iter().map(line_to_string).collect();
+
+    assert_eq!(
+        rendered.first().map(String::as_str),
+        Some("응, 이해했어. 정책은 이렇게 정리하면 맞지?")
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("방 종류") && line.contains("예시")),
+        "streaming renderer should keep table header separate: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .all(|line| !line.contains("맞지?|") && !line.contains("alias핵심")),
+        "streaming renderer must not glue table rows to prose: {rendered:?}"
+    );
+}
+
+#[test]
 fn test_incremental_renderer_streaming_heading_does_not_duplicate() {
     let mut renderer = IncrementalMarkdownRenderer::new(Some(80));
 

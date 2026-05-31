@@ -362,6 +362,65 @@ fn test_table_render_basic() {
 }
 
 #[test]
+fn test_paragraph_to_pipe_table_preserves_visible_boundary() {
+    let md = "응, 이해했어. 정책은 이렇게 정리하면 맞지?\n| 방 종류 | 예시 | 이름 변경 방식 |\n| --- | --- | --- |\n| 전체/시스템성 부서방 | 전체 채팅 | 개인화 alias |\n핵심 구현 방향";
+    let rendered: Vec<String> = render_markdown_with_width(md, Some(180))
+        .iter()
+        .map(line_to_string)
+        .collect();
+
+    assert_eq!(
+        rendered.first().map(String::as_str),
+        Some("응, 이해했어. 정책은 이렇게 정리하면 맞지?")
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("방 종류") && line.contains("예시")),
+        "table header should render separately from preceding prose: {rendered:?}"
+    );
+    assert!(
+        rendered.iter().any(|line| line.contains("핵심 구현 방향")),
+        "text after table should render separately: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .all(|line| !line.contains("맞지?|") && !line.contains("alias핵심")),
+        "table rows must not be glued to surrounding prose: {rendered:?}"
+    );
+}
+
+#[test]
+fn test_nonstandard_pipe_table_rows_preserve_source_newlines() {
+    let md = "정리하면 맞지?\n| 방 종류 | 예시 | 이름 변경 방식 |\n|—|—|—|\n| 일반 채팅 | 1:1 방 | 개인화 alias |\n핵심 구현 방향";
+    let rendered: Vec<String> = render_markdown_with_width(md, Some(180))
+        .iter()
+        .map(line_to_string)
+        .collect();
+
+    assert_eq!(rendered.first().map(String::as_str), Some("정리하면 맞지?"));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("| 방 종류 |")),
+        "nonstandard table header row should keep its own line: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("|—|—|—|")),
+        "nonstandard separator row should keep its own line: {rendered:?}"
+    );
+    assert!(
+        rendered.iter().all(|line| {
+            !line.contains("맞지?| 방") && !line.contains("|—|—|—||") && !line.contains("alias핵심")
+        }),
+        "pipe rows must preserve source newlines even when not parsed as a table: {rendered:?}"
+    );
+}
+
+#[test]
 fn test_table_width_truncation() {
     let md = "| Column | Value |\n| - | - |\n| very_long_cell_value | 1234567890 |";
     let lines = render_markdown_with_width(md, Some(20));

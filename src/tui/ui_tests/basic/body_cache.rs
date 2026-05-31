@@ -549,6 +549,41 @@ fn test_prepare_body_does_not_glue_nested_bullet_to_next_numbered_item() {
 }
 
 #[test]
+fn test_prepare_body_preserves_paragraph_to_pipe_table_boundary() {
+    let state = TestState {
+        display_messages: vec![DisplayMessage::assistant(
+            "응, 이해했어. 정책은 이렇게 정리하면 맞지?\n| 방 종류 | 예시 | 이름 변경 방식 |\n| --- | --- | --- |\n| 전체/시스템성 부서방 | 전체 채팅 | 개인화 alias |\n핵심 구현 방향",
+        )],
+        messages_version: 1,
+        ..Default::default()
+    };
+
+    let prepared = super::prepare::prepare_body(&state, 220, false);
+    let lines = prepared.wrapped_plain_lines.as_ref();
+
+    assert_eq!(
+        lines.first().map(String::as_str),
+        Some("응, 이해했어. 정책은 이렇게 정리하면 맞지?")
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("방 종류") && line.contains("예시")),
+        "table header should render separately from preceding prose: {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("핵심 구현 방향")),
+        "text after table should render separately: {lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|line| !line.contains("맞지?|") && !line.contains("alias핵심")),
+        "TUI body wrapping must not glue table rows to prose: {lines:?}"
+    );
+}
+
+#[test]
 fn test_tail_update_incremental_body_matches_full_rebuild() {
     let width = 80;
     let old_state = TestState {

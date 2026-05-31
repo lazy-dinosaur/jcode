@@ -1714,7 +1714,8 @@ fn repair_line_oriented_list_item_continuations(text: &str) -> String {
         if idx + 1 < lines.len() {
             let next = lines[idx + 1];
             if (should_preserve_list_item_continuation_break(line, next, in_code_fence)
-                || should_preserve_alpha_option_line_break(line, next, in_code_fence))
+                || should_preserve_alpha_option_line_break(line, next, in_code_fence)
+                || should_preserve_pipe_table_row_break(line, next, in_code_fence))
                 && !line.ends_with("  ")
             {
                 out.push_str("  ");
@@ -1736,6 +1737,17 @@ fn repair_line_oriented_list_item_continuations(text: &str) -> String {
     }
 
     out
+}
+
+fn should_preserve_pipe_table_row_break(line: &str, next: &str, in_code_fence: bool) -> bool {
+    if in_code_fence {
+        return false;
+    }
+    let current_is_table_row = looks_like_pipe_table_row_for_boundary_repair(line);
+    let next_is_table_row = looks_like_pipe_table_row_for_boundary_repair(next);
+    (current_is_table_row || next_is_table_row)
+        && !line.trim().is_empty()
+        && !next.trim().is_empty()
 }
 
 fn should_preserve_alpha_option_line_break(line: &str, next: &str, in_code_fence: bool) -> bool {
@@ -1805,6 +1817,7 @@ fn line_starts_interrupting_markdown_block(line: &str) -> bool {
         || trimmed.starts_with("> ")
         || trimmed.starts_with("```")
         || trimmed.starts_with("~~~")
+        || looks_like_pipe_table_row_for_boundary_repair(trimmed)
         || is_heading_line_for_boundary_repair(trimmed)
         || looks_like_ordered_list_item_for_boundary_repair(trimmed)
 }
@@ -1819,6 +1832,14 @@ fn looks_like_ordered_list_item_for_boundary_repair(line: &str) -> bool {
     digit_count > 0
         && matches!(line.chars().nth(digit_count), Some('.' | ')'))
         && matches!(line.chars().nth(digit_count + 1), Some(' ' | '\t'))
+}
+
+fn looks_like_pipe_table_row_for_boundary_repair(line: &str) -> bool {
+    let trimmed = line.trim();
+    if !trimmed.starts_with('|') || !trimmed.ends_with('|') {
+        return false;
+    }
+    trimmed.matches('|').count() >= 3
 }
 
 fn repair_glued_heading_markers_in_line(line: &str) -> String {
