@@ -846,6 +846,11 @@ impl SingleSessionApp {
             1 => " · 1 queued".to_string(),
             count => format!(" · {count} queued"),
         };
+        let queued_images = match self.queued_draft_image_count() {
+            0 => String::new(),
+            1 => " · 1 queued image".to_string(),
+            count => format!(" · {count} queued images"),
+        };
         let stdin = self
             .stdin_response
             .as_ref()
@@ -870,7 +875,7 @@ impl SingleSessionApp {
                     .unwrap_or_else(|| format!(" · model {model}"))
             })
             .unwrap_or_default();
-        format!("{status}{images}{queued}{stdin}{model}{scroll} · {mode}")
+        format!("{status}{images}{queued}{queued_images}{stdin}{model}{scroll} · {mode}")
     }
 
     #[cfg(test)]
@@ -2119,9 +2124,15 @@ impl SingleSessionApp {
             return KeyOutcome::None;
         }
         let images = std::mem::take(&mut self.pending_images);
+        let image_count = images.len();
         self.queued_drafts.push((message.clone(), images));
+        let image_suffix = match image_count {
+            0 => String::new(),
+            1 => " · 1 image".to_string(),
+            count => format!(" · {count} images"),
+        };
         self.messages.push(SingleSessionMessage::meta(format!(
-            "queued prompt: {message}"
+            "queued prompt: {message}{image_suffix}"
         )));
         self.draft.clear();
         self.draft_cursor = 0;
@@ -2160,6 +2171,13 @@ impl SingleSessionApp {
         let (message, images) = self.queued_drafts.remove(0);
         self.record_user_submit(&message);
         Some((message, images))
+    }
+
+    fn queued_draft_image_count(&self) -> usize {
+        self.queued_drafts
+            .iter()
+            .map(|(_, images)| images.len())
+            .sum()
     }
 
     pub(crate) fn begin_selection(&mut self, point: SelectionPoint) {
@@ -3050,11 +3068,12 @@ fn session_info_inline_styled_lines(app: &SingleSessionApp) -> Vec<SingleSession
         ),
         styled_line(
             format!(
-                "│ composer     prompt #{} · draft {} chars · {} image(s) · {} queued · stdin {}",
+                "│ composer     prompt #{} · draft {} chars · {} image(s) · {} queued · {} queued image(s) · stdin {}",
                 app.next_prompt_number(),
                 app.draft.len(),
                 app.pending_images.len(),
                 app.queued_drafts.len(),
+                app.queued_draft_image_count(),
                 stdin
             ),
             SingleSessionLineStyle::Overlay,

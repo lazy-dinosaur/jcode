@@ -2000,6 +2000,56 @@ fn single_session_ctrl_enter_queues_while_processing_then_dequeues() {
     assert!(app.is_processing);
 }
 
+#[test]
+fn single_session_queued_image_is_visible_in_status_and_session_info() {
+    let mut app = SingleSessionApp::new(None);
+    app.is_processing = true;
+    app.apply_session_event(session_launch::DesktopSessionEvent::TextDelta(
+        "working".to_string(),
+    ));
+    app.attach_image("image/png".to_string(), "abc123".to_string());
+    app.handle_key(KeyInput::Character("describe queued image".to_string()));
+
+    assert_eq!(app.handle_key(KeyInput::QueueDraft), KeyOutcome::Redraw);
+    assert!(app.pending_images.is_empty());
+
+    let status = app.composer_status_line();
+    assert!(status.contains("1 queued"), "status: {status}");
+    assert!(
+        status.contains("1 queued image"),
+        "queued image count should remain visible after the draft leaves pending images: {status}"
+    );
+
+    let body = app.body_lines().join("\n");
+    assert!(
+        body.contains("queued prompt: describe queued image · 1 image"),
+        "queued transcript meta row should show images: {body}"
+    );
+
+    assert_eq!(
+        app.handle_key(KeyInput::ToggleSessionInfo),
+        KeyOutcome::Redraw
+    );
+    let info = app
+        .inline_widget_styled_lines()
+        .into_iter()
+        .map(|line| line.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        info.contains("1 queued image(s)"),
+        "pinned/session info should show queued image count: {info}"
+    );
+
+    app.is_processing = false;
+    let (message, images) = app.take_next_queued_draft().expect("queued draft");
+    assert_eq!(message, "describe queued image");
+    assert_eq!(
+        images,
+        vec![("image/png".to_string(), "abc123".to_string())]
+    );
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum QueueTraceAction {
     TypeA,
