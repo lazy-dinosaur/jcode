@@ -218,6 +218,41 @@ fn render_assistant_message_avoids_orphaned_korean_token_before_option_label() {
 }
 
 #[test]
+fn render_assistant_message_splits_recommended_colon_options() {
+    let msg = DisplayMessage::assistant(
+        "이건 분석+결정 게이트입니다. 슬롯 너비를 키우는 방향 옵션:\n\nA (Recommended): MIN_ROOM_SLOT_WIDTH = 34 → 38. inset(4px)을 더해 칩이 정확히 Figma 34px가 되게 함. 가장 정확. B: MIN_ROOM_SLOT_WIDTH는 34 유지하되 셀 좌우 inset(2px씩)을 줄이거나 칩 px-2를 px-1로. C: 직접 입력",
+    );
+
+    let lines = render_assistant_message(&msg, 120, crate::config::DiffDisplayMode::Off);
+    let plain_lines = lines.iter().map(extract_line_text).collect::<Vec<_>>();
+
+    assert!(
+        plain_lines
+            .iter()
+            .any(|line| line.trim_start().starts_with("A (Recommended): MIN_ROOM")),
+        "A recommended option should render as a distinct line: {plain_lines:?}"
+    );
+    assert!(
+        plain_lines
+            .iter()
+            .any(|line| line.trim_start().starts_with("B: MIN_ROOM_SLOT_WIDTH")),
+        "B colon option should render as a distinct line: {plain_lines:?}"
+    );
+    assert!(
+        plain_lines
+            .iter()
+            .any(|line| line.trim_start().starts_with("C: 직접 입력")),
+        "C colon option should render as a distinct line: {plain_lines:?}"
+    );
+    assert!(
+        plain_lines
+            .iter()
+            .all(|line| !line.contains("정확. B:") && !line.contains("px-1로. C:")),
+        "B/C options must not remain glued inside the A option line: {plain_lines:?}"
+    );
+}
+
+#[test]
 fn render_system_message_centered_mode_left_aligns_with_padding() {
     let saved = crate::tui::markdown::center_code_blocks();
     crate::tui::markdown::set_center_code_blocks(true);
