@@ -82,6 +82,25 @@ pub async fn get() -> UsageData {
     current_data.display_snapshot()
 }
 
+pub fn invalidate_anthropic_usage_cache_and_refresh() {
+    clear_anthropic_usage_cache();
+    crate::logging::info("Anthropic usage cache invalidated; scheduling refresh");
+
+    if let Some(usage) = USAGE.get() {
+        if let Ok(mut data) = usage.try_write() {
+            *data = UsageData::default();
+        }
+        try_spawn_refresh(usage.clone());
+        return;
+    }
+
+    if tokio::runtime::Handle::try_current().is_ok() {
+        tokio::spawn(async {
+            let _ = get().await;
+        });
+    }
+}
+
 static OPENAI_USAGE: tokio::sync::OnceCell<Arc<RwLock<OpenAIUsageData>>> =
     tokio::sync::OnceCell::const_new();
 static OPENAI_REFRESH_IN_FLIGHT: AtomicBool = AtomicBool::new(false);

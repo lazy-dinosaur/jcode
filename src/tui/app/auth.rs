@@ -2148,6 +2148,11 @@ impl App {
         if login.success {
             self.recent_authenticated_provider = Some((login.provider.clone(), Instant::now()));
             self.invalidate_model_picker_cache();
+            if login.provider.trim().eq_ignore_ascii_case("claude")
+                || login.provider.trim().eq_ignore_ascii_case("anthropic")
+            {
+                crate::usage::invalidate_anthropic_usage_cache_and_refresh();
+            }
             self.push_display_message(DisplayMessage::system(login.message));
             self.set_status_notice(format!("Login: {} ready", login.provider));
             if Self::login_provider_is_azure(&login.provider) {

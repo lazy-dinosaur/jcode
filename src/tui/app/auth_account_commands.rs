@@ -387,6 +387,7 @@ async fn execute_account_command_remote(
                     return Ok(());
                 }
                 crate::auth::AuthStatus::invalidate_cache();
+                crate::usage::invalidate_anthropic_usage_cache_and_refresh();
                 app.context_limit = app.provider.context_window() as u64;
                 app.context_warning_shown = false;
                 remote.switch_anthropic_account(&label).await?;
@@ -435,6 +436,7 @@ async fn execute_account_command_remote(
                         return Ok(());
                     }
                     crate::auth::AuthStatus::invalidate_cache();
+                    crate::usage::invalidate_anthropic_usage_cache_and_refresh();
                     app.context_limit = app.provider.context_window() as u64;
                     app.context_warning_shown = false;
                     remote.switch_anthropic_account(&label).await?;

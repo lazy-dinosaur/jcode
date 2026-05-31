@@ -67,6 +67,12 @@ pub(super) fn store_anthropic_usage(cache_key: String, data: UsageData) {
     }
 }
 
+pub(super) fn clear_anthropic_usage_cache() {
+    if let Ok(mut map) = anthropic_usage_cache().lock() {
+        map.clear();
+    }
+}
+
 pub(super) fn cached_openai_usage(cache_key: &str) -> Option<OpenAIUsageData> {
     let cache = openai_usage_cache();
     let map = cache.lock().ok()?;

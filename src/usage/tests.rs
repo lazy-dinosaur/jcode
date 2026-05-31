@@ -45,6 +45,28 @@ fn test_get_openai_usage_sync_without_runtime_does_not_panic() {
 }
 
 #[test]
+fn test_invalidate_anthropic_usage_cache_clears_cached_error_without_runtime() {
+    let key = "label:test-invalidate-anthropic-usage-cache".to_string();
+    store_anthropic_usage(
+        key.clone(),
+        UsageData {
+            fetched_at: Some(Instant::now()),
+            last_error: Some("temporary reconnect error".to_string()),
+            ..Default::default()
+        },
+    );
+
+    assert!(cached_anthropic_usage(&key).is_some());
+
+    invalidate_anthropic_usage_cache_and_refresh();
+
+    assert!(
+        cached_anthropic_usage(&key).is_none(),
+        "auth/reconnect invalidation should clear cached Claude usage errors immediately"
+    );
+}
+
+#[test]
 fn test_usage_data_becomes_stale_when_reset_time_has_passed() {
     let data = UsageData {
         five_hour: 0.42,

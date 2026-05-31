@@ -641,6 +641,9 @@ pub(in crate::tui::app) async fn handle_post_connect<B: ratatui::backend::Backen
             "✓ Reconnected successfully.{}",
             reload_details
         )));
+        if should_refresh_anthropic_usage_after_reconnect(app) {
+            crate::usage::invalidate_anthropic_usage_cache_and_refresh();
+        }
     }
 
     let reload_ctx_available = hints.reload_ctx_for_session.is_some();
@@ -721,6 +724,23 @@ pub(in crate::tui::app) async fn handle_post_connect<B: ratatui::backend::Backen
     }
 
     Ok(PostConnectOutcome::Ready)
+}
+
+fn should_refresh_anthropic_usage_after_reconnect(app: &App) -> bool {
+    let provider_matches = app
+        .remote_provider_name
+        .as_deref()
+        .unwrap_or_else(|| app.provider.name())
+        .to_ascii_lowercase();
+    if provider_matches.contains("anthropic") || provider_matches.contains("claude") {
+        return true;
+    }
+
+    app.remote_provider_model
+        .as_deref()
+        .or(app.session.model.as_deref())
+        .map(|model| model.to_ascii_lowercase().starts_with("claude"))
+        .unwrap_or(false)
 }
 
 fn write_client_reload_pending_marker(app: &App, session_id: &str) {
