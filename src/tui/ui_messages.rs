@@ -204,21 +204,6 @@ pub(crate) fn render_system_message(
     let wrap_width = centered_wrap_width(width.saturating_sub(4), centered, 96);
     let display_content = normalize_system_content_for_display(&msg.content);
     let mut lines = markdown::render_markdown_with_width(&display_content, Some(wrap_width));
-    if lines.iter().any(|line| line.width() > wrap_width) {
-        lines = display_content
-            .lines()
-            .flat_map(|line| {
-                if line.is_empty() {
-                    vec![Line::from("")]
-                } else {
-                    split_by_display_width(line, wrap_width)
-                        .into_iter()
-                        .map(Line::from)
-                        .collect::<Vec<_>>()
-                }
-            })
-            .collect();
-    }
     if centered {
         left_pad_lines_for_centered_mode(&mut lines, width);
     }

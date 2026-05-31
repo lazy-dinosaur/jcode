@@ -392,6 +392,76 @@ fn test_paragraph_to_pipe_table_preserves_visible_boundary() {
 }
 
 #[test]
+fn test_ordered_list_code_fences_then_table_do_not_render_as_raw_markdown() {
+    let md = concat!(
+        "찾아보니 구분이 필요합니다.\n\n",
+        "1. **OpenAI 공식 API의 reasoning**\n",
+        "   - `adaptive`라는 파라미터는 없습니다.\n",
+        "   - 설정값은 보통:\n",
+        "     ```text\n",
+        "     none, minimal, low, medium, high, xhigh\n",
+        "     ```\n",
+        "   - 즉 OpenAI는:\n",
+        "     ```json\n",
+        "     {\n",
+        "       \"reasoning\": { \"effort\": \"high\" }\n",
+        "     }\n",
+        "     ```\n",
+        "     이런 식이지, Claude처럼:\n",
+        "     ```json\n",
+        "     {\n",
+        "       \"thinking\": { \"type\": \"adaptive\" }\n",
+        "     }\n",
+        "     ```\n\n",
+        "2. **OpenAI 공식 API의 auto model routing**\n",
+        "   - 공식 OpenAI API에서 `model: \"auto\"` 같은 자동 모델 라우터는 못 찾았습니다.\n\n",
+        "정리하면:\n\n",
+        "| 구분 | OpenAI 공식 API | Microsoft Foundry | OpenRouter |\n",
+        "|---|---:|---:|---:|\n",
+        "| reasoning effort | 있음 | 있음 | 있음 |\n",
+        "| adaptive thinking 파라미터 | 없음 | 없음/모델별 | 없음/모델별 |\n",
+        "| 모델 자동 라우팅 | 공식 OpenAI API에는 확인 안 됨 | `model-router` 있음 | `openrouter/auto` 있음 |\n"
+    );
+
+    for width in [180, 96, 72, 48] {
+        let rendered: Vec<String> = render_markdown_with_width(md, Some(width))
+            .iter()
+            .map(line_to_string)
+            .collect();
+        assert_rendered_response_shape(&rendered, width);
+    }
+
+    let lazy_rendered: Vec<String> = render_markdown_lazy(md, Some(96), 0..usize::MAX)
+        .iter()
+        .map(line_to_string)
+        .collect();
+    assert_rendered_response_shape(&lazy_rendered, 96);
+}
+
+fn assert_rendered_response_shape(rendered: &[String], width: usize) {
+    let joined = rendered.join("\n");
+
+    assert!(
+        joined.contains("┌─ json") && joined.contains("reasoning"),
+        "json fence should render as a code block at width {width}: {rendered:?}"
+    );
+    assert!(
+        joined.contains("구분") && joined.contains('│') && joined.contains("OpenAI 공식 API"),
+        "pipe table should render as a table, not raw markdown at width {width}: {rendered:?}"
+    );
+    assert!(
+        rendered.iter().all(|line| !line.contains("```")),
+        "fence markers must not leak as raw markdown at width {width}: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .all(|line| !line.contains("정리하면:|") && !line.contains("|---|")),
+        "table source must not glue to prose or leak raw separator at width {width}: {rendered:?}"
+    );
+}
+
+#[test]
 fn test_nonstandard_pipe_table_rows_preserve_source_newlines() {
     let md = "정리하면 맞지?\n| 방 종류 | 예시 | 이름 변경 방식 |\n|—|—|—|\n| 일반 채팅 | 1:1 방 | 개인화 alias |\n핵심 구현 방향";
     let rendered: Vec<String> = render_markdown_with_width(md, Some(180))

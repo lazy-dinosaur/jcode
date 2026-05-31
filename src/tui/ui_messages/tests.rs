@@ -35,6 +35,39 @@ fn render_system_message_forces_system_color_on_all_spans() {
 }
 
 #[test]
+fn render_system_message_does_not_fall_back_to_raw_markdown_when_wide() {
+    let long_value = "x".repeat(120);
+    let msg = DisplayMessage::system(format!(
+        "System note:\n\n```json\n{{\"long\":\"{}\"}}\n```\n\n| A | B |\n|---|---|\n| value | `{}` |",
+        long_value, long_value
+    ));
+
+    let lines = render_system_message(&msg, 64, crate::config::DiffDisplayMode::Off);
+    let plain = lines
+        .iter()
+        .map(extract_line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        plain.contains("┌─ json"),
+        "code block should stay rendered: {plain}"
+    );
+    assert!(
+        plain.contains("A") && plain.contains('│'),
+        "table should stay rendered: {plain}"
+    );
+    assert!(
+        !plain.contains("```json"),
+        "raw code fence leaked after wide markdown fallback: {plain}"
+    );
+    assert!(
+        !plain.contains("|---|"),
+        "raw table separator leaked after wide markdown fallback: {plain}"
+    );
+}
+
+#[test]
 fn render_system_message_centered_mode_left_aligns_with_padding() {
     let saved = crate::tui::markdown::center_code_blocks();
     crate::tui::markdown::set_center_code_blocks(true);
