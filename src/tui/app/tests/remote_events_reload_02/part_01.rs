@@ -80,6 +80,70 @@ fn test_remote_poke_queues_when_turn_is_in_progress() {
 }
 
 #[test]
+fn test_remote_image_prompt_during_processing_queues_instead_of_text_only_interleave() {
+    with_temp_jcode_home(|| {
+        let mut app = create_test_app();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _guard = rt.enter();
+        let mut remote = crate::tui::backend::RemoteConnection::dummy();
+
+        app.is_remote = true;
+        app.is_processing = true;
+        app.status = ProcessingStatus::Streaming;
+        app.current_message_id = Some(42);
+        app.queue_mode = false;
+        app.input = "d[image 1]".to_string();
+        app.cursor_pos = app.input.len();
+        app.pending_images
+            .push(("image/png".to_string(), "base64-image".to_string()));
+
+        rt.block_on(app.handle_remote_key(KeyCode::Enter, KeyModifiers::empty(), &mut remote))
+            .expect("image prompt should queue behind current remote turn");
+
+        assert_eq!(app.interleave_message.as_deref(), None);
+        assert_eq!(app.queued_messages(), &["d[image 1]".to_string()]);
+        assert_eq!(
+            app.queued_message_images,
+            vec![vec![("image/png".to_string(), "base64-image".to_string())]]
+        );
+        assert!(app.pending_images.is_empty());
+        assert!(app.input().is_empty());
+    });
+}
+
+#[test]
+fn test_remote_ctrl_enter_image_prompt_preserves_images_in_queue() {
+    with_temp_jcode_home(|| {
+        let mut app = create_test_app();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _guard = rt.enter();
+        let mut remote = crate::tui::backend::RemoteConnection::dummy();
+
+        app.is_remote = true;
+        app.is_processing = true;
+        app.status = ProcessingStatus::Streaming;
+        app.current_message_id = Some(42);
+        app.queue_mode = false;
+        app.input = "d[image 1]".to_string();
+        app.cursor_pos = app.input.len();
+        app.pending_images
+            .push(("image/png".to_string(), "base64-image".to_string()));
+
+        rt.block_on(app.handle_remote_key(KeyCode::Enter, KeyModifiers::CONTROL, &mut remote))
+            .expect("Ctrl+Enter image prompt should queue with images");
+
+        assert_eq!(app.interleave_message.as_deref(), None);
+        assert_eq!(app.queued_messages(), &["d[image 1]".to_string()]);
+        assert_eq!(
+            app.queued_message_images,
+            vec![vec![("image/png".to_string(), "base64-image".to_string())]]
+        );
+        assert!(app.pending_images.is_empty());
+        assert!(app.input().is_empty());
+    });
+}
+
+#[test]
 fn test_remote_ctrl_p_toggles_auto_poke() {
     with_temp_jcode_home(|| {
         let mut app = create_test_app();

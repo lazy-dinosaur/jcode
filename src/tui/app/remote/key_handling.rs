@@ -613,10 +613,14 @@ async fn handle_remote_key_internal(
             match app.send_action(true) {
                 SendAction::Submit => submit_prepared_remote_input(app, remote, prepared).await?,
                 SendAction::Queue => {
-                    app.enqueue_queued_message(prepared.expanded);
+                    input::queue_prepared_message(app, prepared);
                 }
                 SendAction::Interleave => {
-                    app.send_interleave_now(prepared.expanded, remote).await;
+                    if prepared.images.is_empty() {
+                        app.send_interleave_now(prepared.expanded, remote).await;
+                    } else {
+                        input::queue_image_prompt_after_current_turn(app, prepared);
+                    }
                 }
             }
         }
@@ -2352,10 +2356,14 @@ async fn handle_remote_key_internal(
                         submit_prepared_remote_input(app, remote, prepared).await?
                     }
                     SendAction::Queue => {
-                        app.enqueue_queued_message(prepared.expanded);
+                        input::queue_prepared_message(app, prepared);
                     }
                     SendAction::Interleave => {
-                        app.send_interleave_now(prepared.expanded, remote).await;
+                        if prepared.images.is_empty() {
+                            app.send_interleave_now(prepared.expanded, remote).await;
+                        } else {
+                            input::queue_image_prompt_after_current_turn(app, prepared);
+                        }
                     }
                 }
             }

@@ -784,7 +784,16 @@ pub(super) fn expand_paste_placeholders(app: &mut App, input: &str) -> String {
 
 pub(super) fn queue_message(app: &mut App) {
     let prepared = take_prepared_input(app);
+    queue_prepared_message(app, prepared);
+}
+
+pub(super) fn queue_prepared_message(app: &mut App, prepared: PreparedInput) {
     app.enqueue_queued_message_with_images(prepared.expanded, prepared.images);
+}
+
+pub(super) fn queue_image_prompt_after_current_turn(app: &mut App, prepared: PreparedInput) {
+    queue_prepared_message(app, prepared);
+    app.set_status_notice("Image prompt queued until current response completes");
 }
 
 pub(super) struct QueuedFollowupBatch {
@@ -1189,7 +1198,11 @@ pub(super) fn handle_alternate_enter(app: &mut App) {
         SendAction::Queue => queue_message(app),
         SendAction::Interleave => {
             let prepared = take_prepared_input(app);
-            stage_local_interleave(app, prepared.expanded);
+            if prepared.images.is_empty() {
+                stage_local_interleave(app, prepared.expanded);
+            } else {
+                queue_image_prompt_after_current_turn(app, prepared);
+            }
         }
     }
 }
@@ -1702,7 +1715,11 @@ pub(super) fn handle_enter(app: &mut App) -> bool {
             SendAction::Queue => queue_message(app),
             SendAction::Interleave => {
                 let prepared = take_prepared_input(app);
-                stage_local_interleave(app, prepared.expanded);
+                if prepared.images.is_empty() {
+                    stage_local_interleave(app, prepared.expanded);
+                } else {
+                    queue_image_prompt_after_current_turn(app, prepared);
+                }
             }
         }
     }

@@ -722,6 +722,52 @@ fn test_ctrl_enter_opposite_send_mode() {
 }
 
 #[test]
+fn test_image_prompt_during_processing_queues_instead_of_text_only_interleave() {
+    let mut app = create_test_app();
+    app.is_processing = true;
+    app.queue_mode = false;
+    app.input = "d[image 1]".to_string();
+    app.cursor_pos = app.input.len();
+    app.pending_images
+        .push(("image/png".to_string(), "base64-image".to_string()));
+
+    app.handle_key(KeyCode::Enter, KeyModifiers::empty())
+        .unwrap();
+
+    assert_eq!(app.interleave_message.as_deref(), None);
+    assert_eq!(app.queued_messages(), &["d[image 1]".to_string()]);
+    assert_eq!(
+        app.queued_message_images,
+        vec![vec![("image/png".to_string(), "base64-image".to_string())]]
+    );
+    assert!(app.pending_images.is_empty());
+    assert!(app.input().is_empty());
+}
+
+#[test]
+fn test_ctrl_enter_image_prompt_in_queue_mode_still_queues_to_preserve_image() {
+    let mut app = create_test_app();
+    app.is_processing = true;
+    app.queue_mode = true;
+    app.input = "d[image 1]".to_string();
+    app.cursor_pos = app.input.len();
+    app.pending_images
+        .push(("image/png".to_string(), "base64-image".to_string()));
+
+    app.handle_key(KeyCode::Enter, KeyModifiers::CONTROL)
+        .unwrap();
+
+    assert_eq!(app.interleave_message.as_deref(), None);
+    assert_eq!(app.queued_messages(), &["d[image 1]".to_string()]);
+    assert_eq!(
+        app.queued_message_images,
+        vec![vec![("image/png".to_string(), "base64-image".to_string())]]
+    );
+    assert!(app.pending_images.is_empty());
+    assert!(app.input().is_empty());
+}
+
+#[test]
 fn test_typing_during_processing() {
     let mut app = create_test_app();
     app.is_processing = true;

@@ -318,7 +318,11 @@ fn submit_transcript_input(app: &mut App) {
         SendAction::Queue => queue_transcript_input(app),
         SendAction::Interleave => {
             let prepared = input::take_prepared_input(app);
-            input::stage_local_interleave(app, prepared.expanded);
+            if prepared.images.is_empty() {
+                input::stage_local_interleave(app, prepared.expanded);
+            } else {
+                input::queue_image_prompt_after_current_turn(app, prepared);
+            }
         }
     }
 }
@@ -365,7 +369,11 @@ async fn submit_remote_transcript_input(
         SendAction::Queue => queue_transcript_input(app),
         SendAction::Interleave => {
             let prepared = input::take_prepared_input(app);
-            app.send_interleave_now(prepared.expanded, remote).await;
+            if prepared.images.is_empty() {
+                app.send_interleave_now(prepared.expanded, remote).await;
+            } else {
+                input::queue_image_prompt_after_current_turn(app, prepared);
+            }
         }
     }
 
