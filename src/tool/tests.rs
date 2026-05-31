@@ -65,6 +65,17 @@ fn test_resolve_skill_aliases_to_skill_manage() {
     assert_eq!(Registry::resolve_tool_name("skill_manage"), "skill_manage");
 }
 
+#[test]
+fn test_resolve_claude_style_pascal_case_tool_names() {
+    assert_eq!(Registry::resolve_tool_name("Bash"), "bash");
+    assert_eq!(Registry::resolve_tool_name("Read"), "read");
+    assert_eq!(Registry::resolve_tool_name("ApplyPatch"), "apply_patch");
+    assert_eq!(Registry::resolve_tool_name("ToolSearch"), "codesearch");
+    assert_eq!(Registry::resolve_tool_name("Task"), "subagent");
+    assert_eq!(Registry::resolve_tool_name("Agent"), "subagent");
+    assert_eq!(Registry::resolve_tool_name("Batch"), "batch");
+}
+
 struct BareSchemaTool;
 
 #[async_trait]

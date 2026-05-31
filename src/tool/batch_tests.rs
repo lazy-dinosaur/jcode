@@ -124,6 +124,32 @@ fn test_resolved_parameters_strips_default_api_tool_namespace() {
 }
 
 #[test]
+fn test_resolved_parameters_accepts_claude_style_pascal_case_tool_names() {
+    let input = json!({
+        "tool_calls": [
+            {"tool": "Bash", "parameters": {"command": "pwd"}},
+            {"tool": "Read", "parameters": {"file_path": "Cargo.toml"}},
+            {"tool": "ToolSearch", "parameters": {"query": "tokio::spawn"}}
+        ]
+    });
+
+    let normalized = normalize_batch_input(input);
+    let parsed: BatchInput = serde_json::from_value(normalized).unwrap();
+    let calls: Vec<(String, Value)> = parsed
+        .tool_calls
+        .into_iter()
+        .map(|call| call.resolved_parameters())
+        .collect();
+
+    assert_eq!(calls[0].0, "bash");
+    assert_eq!(calls[0].1["command"], "pwd");
+    assert_eq!(calls[1].0, "read");
+    assert_eq!(calls[1].1["file_path"], "Cargo.toml");
+    assert_eq!(calls[2].0, "codesearch");
+    assert_eq!(calls[2].1["query"], "tokio::spawn");
+}
+
+#[test]
 fn test_normalize_merges_sibling_args_into_existing_parameters() {
     let input = json!({
         "tool_calls": [
