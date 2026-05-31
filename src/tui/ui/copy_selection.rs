@@ -82,7 +82,7 @@ pub(super) fn copy_selection_text_from_raw_lines(
         out.push(display_col_slice(&text, start_col, end_col).to_string());
     }
 
-    Some(out.join("\n"))
+    Some(strip_large_display_padding(&out.join("\n")))
 }
 
 pub(super) fn link_target_from_snapshot(
@@ -113,4 +113,48 @@ fn raw_selection_point(
                 .saturating_sub(display_copy_start)
                 .min(segment_width),
     })
+}
+
+fn strip_large_display_padding(text: &str) -> String {
+    let mut out: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim_start_matches(' ');
+        let leading = line.len().saturating_sub(trimmed.len());
+        let normalized = if leading >= 8 { trimmed } else { line };
+        let normalized_leading = normalized
+            .len()
+            .saturating_sub(normalized.trim_start().len());
+        let normalized_trimmed = normalized.trim_start();
+
+        if normalized_leading > 0
+            && !normalized_trimmed.is_empty()
+            && !starts_structural_copy_line(normalized_trimmed)
+            && let Some(prev) = out.last_mut()
+            && !prev.trim().is_empty()
+        {
+            if !prev.ends_with(char::is_whitespace) {
+                prev.push(' ');
+            }
+            prev.push_str(normalized_trimmed);
+            continue;
+        }
+
+        out.push(normalized.to_string());
+    }
+    out.join("\n")
+}
+
+fn starts_structural_copy_line(text: &str) -> bool {
+    if text.starts_with('•') || text.starts_with('-') || text.starts_with('*') {
+        return true;
+    }
+    let mut chars = text.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if first.is_ascii_alphabetic() || first.is_ascii_digit() {
+        matches!(chars.next(), Some('.'))
+    } else {
+        false
+    }
 }

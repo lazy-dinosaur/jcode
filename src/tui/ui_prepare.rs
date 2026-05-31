@@ -41,8 +41,20 @@ fn map_display_lines_to_logical_lines(
 
         let logical_text = logical_plain_lines.get(logical_idx)?;
         let logical_width = unicode_width::UnicodeWidthStr::width(logical_text.as_str());
-        let display_width = line.width();
+        let display_text = ui::line_plain_text(line);
+        let trimmed = display_text.trim_start_matches(' ');
+        let trimmed_width = unicode_width::UnicodeWidthStr::width(trimmed);
+        let mut display_width = if !trimmed.is_empty() {
+            trimmed_width
+        } else {
+            line.width()
+        };
         let remaining = logical_width.saturating_sub(logical_col);
+        if display_width > remaining {
+            if trimmed_width <= remaining {
+                display_width = trimmed_width;
+            }
+        }
         if display_width > remaining {
             return None;
         }
@@ -1161,10 +1173,12 @@ pub(super) fn prepare_body(
                 for target in message_copy_targets {
                     copy_targets.push(offset_copy_target(target, lines.len()));
                 }
-                let content_lines = markdown::render_markdown_with_width(
-                    &msg.content,
-                    Some(content_width as usize),
-                );
+                let logical_content_width =
+                    jcode_tui_messages::centered_wrap_width(content_width, centered, 96);
+                let saved_centering = markdown::center_code_blocks();
+                markdown::set_center_code_blocks(false);
+                let content_lines =
+                    markdown::render_markdown_with_width(&msg.content, Some(logical_content_width));
                 let content_line_count = content_lines.len().min(cached.len());
                 let logical_plain_lines: Vec<String> =
                     if content_prefers_display_as_logical_lines(&msg.content) {
@@ -1179,6 +1193,7 @@ pub(super) fn prepare_body(
                             .map(|line| ui::line_plain_text(&align_if_unset(line, align)))
                             .collect()
                     };
+                markdown::set_center_code_blocks(saved_centering);
                 let raw_base = raw_plain_lines.len();
                 raw_plain_lines.extend(logical_plain_lines.iter().cloned());
                 let content_maps = map_display_lines_to_logical_lines(

@@ -118,6 +118,79 @@ fn render_assistant_message_wraps_parsed_long_lines() {
 }
 
 #[test]
+fn render_assistant_message_keeps_nested_summary_bullets_on_separate_lines() {
+    let msg = DisplayMessage::assistant(
+        "1. **Markdown/list/option 렌더링 문제들**\n   - glued markdown list marker 복구\n   - markdown list continuation 줄바꿈 보존\n   - A., B. 선택지 앞 줄바꿈 보존\n   - 다음은 선택지입니다:A.처럼 콜론 뒤에 바로 붙은 A. 분리\n   - markdown table boundary 보존\n   - CJK wrap에서 한 글자/토큰이 이상하게 고아처럼 남는 문제\n\n2. **큐/백그라운드 prompt 문제**\n   - tool backgrounding 후 queued prompt가 dispatch 안 되던 문제\n   - queued prompt에 붙은 이미지가 전송에서 빠지던 문제\n   - reload/recovery/remote follow-up에서도 queued image metadata가 안 어긋나게 수정",
+    );
+
+    let lines = render_assistant_message(&msg, 96, crate::config::DiffDisplayMode::Off);
+    let plain_lines = lines.iter().map(extract_line_text).collect::<Vec<_>>();
+
+    assert!(
+        plain_lines.iter().any(|line| line
+            .trim_start()
+            .starts_with("1. Markdown/list/option 렌더링 문제들")),
+        "first numbered heading should render: {plain_lines:?}"
+    );
+    assert!(
+        plain_lines.iter().any(|line| line
+            .trim_start()
+            .starts_with("• glued markdown list marker 복구")),
+        "nested bullet should render on its own line: {plain_lines:?}"
+    );
+    assert!(
+        plain_lines.iter().any(|line| line
+            .trim_start()
+            .starts_with("2. 큐/백그라운드 prompt 문제")),
+        "second numbered heading should render separately: {plain_lines:?}"
+    );
+    assert!(
+        plain_lines
+            .iter()
+            .all(|line| !line.contains("문제들 -") && !line.contains("문제2.")),
+        "nested bullet and next marker must not be glued: {plain_lines:?}"
+    );
+}
+
+#[test]
+fn render_assistant_message_keeps_nested_summary_bullets_in_centered_mode() {
+    let saved = crate::tui::markdown::center_code_blocks();
+    crate::tui::markdown::set_center_code_blocks(true);
+    let msg = DisplayMessage::assistant(
+        "1. **Markdown/list/option 렌더링 문제들**\n   - glued markdown list marker 복구\n   - markdown list continuation 줄바꿈 보존\n   - A., B. 선택지 앞 줄바꿈 보존\n   - 다음은 선택지입니다:A.처럼 콜론 뒤에 바로 붙은 A. 분리\n   - markdown table boundary 보존\n   - CJK wrap에서 한 글자/토큰이 이상하게 고아처럼 남는 문제\n\n2. **큐/백그라운드 prompt 문제**\n   - tool backgrounding 후 queued prompt가 dispatch 안 되던 문제\n   - queued prompt에 붙은 이미지가 전송에서 빠지던 문제\n   - reload/recovery/remote follow-up에서도 queued image metadata가 안 어긋나게 수정",
+    );
+
+    let lines = render_assistant_message(&msg, 140, crate::config::DiffDisplayMode::Off);
+    crate::tui::markdown::set_center_code_blocks(saved);
+    let plain_lines = lines.iter().map(extract_line_text).collect::<Vec<_>>();
+
+    assert!(
+        plain_lines.iter().any(|line| line
+            .trim_start()
+            .starts_with("1. Markdown/list/option 렌더링 문제들")),
+        "first numbered heading should render: {plain_lines:?}"
+    );
+    assert!(
+        plain_lines.iter().any(|line| line
+            .trim_start()
+            .starts_with("• glued markdown list marker 복구")),
+        "nested bullet should render on its own line in centered mode: {plain_lines:?}"
+    );
+    assert!(
+        plain_lines.iter().any(|line| line
+            .trim_start()
+            .starts_with("2. 큐/백그라운드 prompt 문제")),
+        "second numbered heading should render separately: {plain_lines:?}"
+    );
+    assert!(
+        plain_lines
+            .iter()
+            .all(|line| !line.contains("문제들 -") && !line.contains("문제2.")),
+        "nested bullet and next marker must not be glued in centered mode: {plain_lines:?}"
+    );
+}
+
+#[test]
 fn render_assistant_message_avoids_orphaned_korean_token_before_option_label() {
     let msg = DisplayMessage::assistant(
         "맞아요. record 기준으로 **Phase 3 hook replacement 말고 남은 큰 축이 하나 더 있습니다.**가장 가능성 높은 건 A. Capability Registry dogfood evaluation (Recommended next check)\n\n- lazy capability audit/list/resolve 돌려서\n- Medivance 실제 workflow에서 capability가 잘 잡히는지 봅니다.",

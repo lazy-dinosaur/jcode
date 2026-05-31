@@ -277,6 +277,40 @@ fn test_nested_bullets_do_not_glue_to_next_numbered_item() {
 }
 
 #[test]
+fn test_nested_status_summary_bullets_do_not_render_inline() {
+    let md = "1. **Markdown/list/option 렌더링 문제들**\n   - glued markdown list marker 복구\n   - markdown list continuation 줄바꿈 보존\n   - A., B. 선택지 앞 줄바꿈 보존\n   - 다음은 선택지입니다:A.처럼 콜론 뒤에 바로 붙은 A. 분리\n   - markdown table boundary 보존\n   - CJK wrap에서 한 글자/토큰이 이상하게 고아처럼 남는 문제\n\n2. **큐/백그라운드 prompt 문제**\n   - tool backgrounding 후 queued prompt가 dispatch 안 되던 문제\n   - queued prompt에 붙은 이미지가 전송에서 빠지던 문제\n   - reload/recovery/remote follow-up에서도 queued image metadata가 안 어긋나게 수정\n\n3. **Claude/OpenAI provider 설정 문제**\n   - Claude context / reasoning effort 분리\n   - Claude reasoning effort 복구";
+    let rendered: Vec<String> = render_markdown_with_width(md, Some(96))
+        .iter()
+        .map(line_to_string)
+        .collect();
+
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("1. Markdown/list/option 렌더링 문제들")),
+        "first numbered heading should render: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("• glued markdown list marker 복구")),
+        "nested bullet should render on its own line: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("2. 큐/백그라운드 prompt 문제")),
+        "second numbered heading should render separately: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .all(|line| !line.contains("문제들 -") && !line.contains("문제2.")),
+        "nested bullet and next marker must not be glued into previous line: {rendered:?}"
+    );
+}
+
+#[test]
 fn test_paragraph_to_fenced_code_block_starts_on_new_line_without_blank_source_line() {
     let md = "로그 추가:\n```js\nconsole.log('badge')\n```";
     let rendered: Vec<String> = render_markdown_with_width(md, Some(96))

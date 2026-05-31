@@ -335,6 +335,104 @@ fn test_copy_selection_centered_list_keeps_logical_list_text() {
 }
 
 #[test]
+fn test_viewport_centered_nested_summary_list_keeps_bullets_on_separate_lines() {
+    let _render_lock = scroll_render_test_lock();
+    let mut app = create_test_app();
+    app.set_centered(true);
+    app.display_messages = vec![DisplayMessage {
+        role: "assistant".to_string(),
+        content: concat!(
+            "1. **Markdown/list/option 렌더링 문제들**\n",
+            "   - glued markdown list marker 복구\n",
+            "   - markdown list continuation 줄바꿈 보존\n",
+            "   - A., B. 선택지 앞 줄바꿈 보존\n",
+            "   - 다음은 선택지입니다:A.처럼 콜론 뒤에 바로 붙은 A. 분리\n",
+            "   - markdown table boundary 보존\n",
+            "   - CJK wrap에서 한 글자/토큰이 이상하게 고아처럼 남는 문제\n",
+            "\n",
+            "2. **큐/백그라운드 prompt 문제**\n",
+            "   - tool backgrounding 후 queued prompt가 dispatch 안 되던 문제\n",
+            "   - queued prompt에 붙은 이미지가 전송에서 빠지던 문제\n",
+            "   - reload/recovery/remote follow-up에서도 queued image metadata가 안 어긋나게 수정\n",
+        )
+        .to_string(),
+        tool_calls: vec![],
+        duration_secs: None,
+        title: None,
+        tool_data: None,
+    }];
+    app.bump_display_messages_version();
+
+    let backend = ratatui::backend::TestBackend::new(120, 30);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create test terminal");
+    let rendered = render_and_snap(&app, &mut terminal);
+
+    assert!(
+        rendered.contains("1. Markdown/list/option"),
+        "first numbered heading should render: {rendered}"
+    );
+    assert!(
+        rendered.contains("• glued markdown list marker"),
+        "nested bullet should render as its own viewport line: {rendered}"
+    );
+    assert!(
+        rendered.contains("2. 큐") && rendered.contains("prompt 문"),
+        "second numbered heading should render separately: {rendered}"
+    );
+    assert!(
+        !rendered.contains("문제들 -") && !rendered.contains("문제2."),
+        "viewport must not glue nested bullets or following markers: {rendered}"
+    );
+
+    let (visible_start, visible_end) =
+        crate::tui::ui::copy_viewport_visible_range().expect("visible copy range");
+    let visible_lines: Vec<(usize, String)> = (visible_start..visible_end)
+        .filter_map(|abs_line| {
+            let text = crate::tui::ui::copy_viewport_line_text(abs_line)?;
+            (!text.is_empty()).then_some((abs_line, text))
+        })
+        .collect();
+    let (start_idx, _) = visible_lines
+        .iter()
+        .find(|(_, text)| text.contains("1. Markdown/list/option"))
+        .expect("first heading copy line");
+    let (end_idx, end_text) = visible_lines
+        .iter()
+        .rev()
+        .find(|(_, text)| text.contains("image metadata"))
+        .expect("last bullet copy line");
+    app.copy_selection_anchor = Some(crate::tui::CopySelectionPoint {
+        pane: crate::tui::CopySelectionPane::Chat,
+        abs_line: *start_idx,
+        column: 0,
+    });
+    app.copy_selection_cursor = Some(crate::tui::CopySelectionPoint {
+        pane: crate::tui::CopySelectionPane::Chat,
+        abs_line: *end_idx,
+        column: unicode_width::UnicodeWidthStr::width(end_text.as_str()),
+    });
+    let selected = app
+        .current_copy_selection_text()
+        .expect("expected selected nested summary text");
+    assert!(
+        selected.starts_with("1. Markdown/list/option"),
+        "copied selection should not include centered display padding: {selected:?}"
+    );
+    assert!(
+        selected.contains("\n• glued markdown list marker"),
+        "copied selection should keep nested bullet line breaks: {selected:?}"
+    );
+    assert!(
+        selected.contains("\n2. 큐/백그라운드 prompt 문제"),
+        "copied selection should keep numbered item line break: {selected:?}"
+    );
+    assert!(
+        !selected.contains("문제들 -") && !selected.contains("문제2."),
+        "copied selection must not glue nested bullets or following markers: {selected:?}"
+    );
+}
+
+#[test]
 fn test_copy_selection_mouse_drag_extracts_expected_multiline_range() {
     let _render_lock = scroll_render_test_lock();
     let (mut app, mut terminal) = create_copy_test_app();
