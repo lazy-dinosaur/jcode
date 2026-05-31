@@ -179,12 +179,7 @@ pub(super) async fn handle_tick(app: &mut App, remote: &mut RemoteConnection) ->
         }
     }
 
-    if app.pending_queued_dispatch {
-        if app.is_processing {
-            return needs_redraw;
-        }
-        app.pending_queued_dispatch = false;
-        process_remote_followups(app, remote).await;
+    if maybe_process_pending_queued_dispatch(app, remote).await {
         needs_redraw = true;
     }
 
@@ -198,6 +193,17 @@ pub(super) async fn handle_tick(app: &mut App, remote: &mut RemoteConnection) ->
 
     detect_and_cancel_stall(app, remote).await;
     needs_redraw
+}
+
+pub(super) async fn maybe_process_pending_queued_dispatch(
+    app: &mut App,
+    remote: &mut RemoteConnection,
+) -> bool {
+    if !app.pending_queued_dispatch || app.is_processing {
+        return false;
+    }
+    process_remote_followups(app, remote).await;
+    true
 }
 
 pub(super) async fn handle_awaiting_history_timeout(

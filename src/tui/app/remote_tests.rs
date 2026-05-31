@@ -1,7 +1,7 @@
 use super::reconnect;
 use super::{
     ProcessingStatus, RemoteRunState, auth_provider_hint_for_login_provider, handle_post_connect,
-    handle_server_event, process_remote_followups,
+    handle_server_event, maybe_process_pending_queued_dispatch, process_remote_followups,
 };
 use crate::protocol::{
     MemoryActivitySnapshot, MemoryPipelineSnapshot, MemoryStateSnapshot, MemoryStepStatusSnapshot,
@@ -267,6 +267,53 @@ fn process_remote_followups_drains_pending_queued_dispatch_when_idle() {
         .as_ref()
         .expect("queued batch should be sent as in-flight remote message");
     assert_eq!(pending.content, "queued after idle");
+}
+
+#[test]
+fn pending_queued_dispatch_survives_background_tool_until_turn_goes_idle() {
+    let mut app = create_test_app();
+    app.is_remote = true;
+    app.is_processing = true;
+    app.current_message_id = Some(42);
+    app.status = ProcessingStatus::RunningTool("bash".to_string());
+    app.enqueue_queued_message("next turn after background".to_string());
+    app.pending_queued_dispatch = true;
+
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+    remote.mark_history_loaded();
+
+    let drained_while_busy =
+        rt.block_on(maybe_process_pending_queued_dispatch(&mut app, &mut remote));
+    assert!(!drained_while_busy);
+    assert!(
+        app.pending_queued_dispatch,
+        "busy turn must keep pending dispatch flag so the next idle loop can send it"
+    );
+    assert_eq!(
+        app.queued_messages(),
+        &["next turn after background".to_string()]
+    );
+
+    app.is_processing = false;
+    app.status = ProcessingStatus::Idle;
+    app.current_message_id = None;
+    let drained_when_idle =
+        rt.block_on(maybe_process_pending_queued_dispatch(&mut app, &mut remote));
+
+    assert!(drained_when_idle);
+    assert!(!app.pending_queued_dispatch);
+    assert!(app.queued_messages.is_empty());
+    assert!(
+        app.is_processing,
+        "queued prompt should start once foreground turn is idle"
+    );
+    let pending = app
+        .rate_limit_pending_message
+        .as_ref()
+        .expect("queued followup should be in-flight");
+    assert_eq!(pending.content, "next turn after background");
 }
 
 #[test]
