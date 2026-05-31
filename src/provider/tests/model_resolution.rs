@@ -1018,7 +1018,7 @@ fn test_context_limit_dynamic_cache() {
 
 // M47-C1: providers without a reasoning-effort surface must silently accept
 // set_reasoning_effort calls. Previously this returned an anyhow error which
-// produced a noisy `error!` log on every Claude/Gemini session that carried
+// produced a noisy `error!` log on every Gemini/Bedrock session that carried
 // an OpenAI-style effort key in config/session state.
 
 fn make_provider_with_active(active: ActiveProvider) -> MultiProvider {
@@ -1040,11 +1040,42 @@ fn make_provider_with_active(active: ActiveProvider) -> MultiProvider {
 }
 
 #[test]
-fn set_reasoning_effort_silently_skips_on_claude() {
+fn set_reasoning_effort_silently_skips_on_uninitialized_claude() {
     let provider = make_provider_with_active(ActiveProvider::Claude);
     provider
         .set_reasoning_effort("xhigh")
-        .expect("Claude must silently accept effort set (M47-C1)");
+        .expect("Uninitialized Claude must silently accept effort set (M47-C1)");
+}
+
+#[test]
+fn set_reasoning_effort_applies_to_initialized_claude_anthropic_provider() {
+    let anthropic = Arc::new(anthropic::AnthropicProvider::new());
+    anthropic
+        .set_model("claude-opus-4-8")
+        .expect("set Claude model");
+    let provider = MultiProvider {
+        claude: RwLock::new(None),
+        anthropic: RwLock::new(Some(Arc::clone(&anthropic))),
+        openai: RwLock::new(None),
+        copilot_api: RwLock::new(None),
+        antigravity: RwLock::new(None),
+        gemini: RwLock::new(None),
+        cursor: RwLock::new(None),
+        bedrock: RwLock::new(None),
+        openrouter: RwLock::new(None),
+        active: RwLock::new(ActiveProvider::Claude),
+        use_claude_cli: false,
+        startup_notices: RwLock::new(Vec::new()),
+        forced_provider: None,
+    };
+
+    provider
+        .set_reasoning_effort("max")
+        .expect("Claude max effort should apply to Anthropic provider");
+
+    assert_eq!(provider.reasoning_effort().as_deref(), Some("max"));
+    assert_eq!(provider.available_efforts(), vec!["none", "low", "medium", "high", "max"]);
+    assert_eq!(provider.model(), "claude-opus-4-8");
 }
 
 #[test]

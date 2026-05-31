@@ -190,17 +190,21 @@ impl App {
 
     pub(super) fn active_claude_model_for_effort(&self, level: &str) -> Option<String> {
         let _ = level;
-        // Anthropic/Claude does not expose an OpenAI-style reasoning effort
-        // knob. The old UI mapped "max" to the `[1m]` long-context model,
-        // which silently changed the selected model from regular Opus to Opus
-        // 1m. Keep model/context selection explicit via `/model ...[1m]`.
+        // Never map `/effort` to Claude's `[1m]` long-context model. Claude
+        // effort is Anthropic thinking budget; context selection stays explicit
+        // via `/model ...[1m]`.
         None
     }
 
     pub(super) fn active_reasoning_efforts(&self) -> Vec<&'static str> {
         if !self.is_remote {
             if self.active_claude_base_model().is_some() {
-                return Vec::new();
+                let efforts = self.provider.available_efforts();
+                return if efforts.is_empty() {
+                    vec!["none", "low", "medium", "high", "max"]
+                } else {
+                    efforts
+                };
             }
             return self.provider.available_efforts();
         }
@@ -224,7 +228,7 @@ impl App {
             || model.starts_with("claude-")
             || model.starts_with("anthropic/")
         {
-            return Vec::new();
+            return vec!["none", "low", "medium", "high", "max"];
         }
 
         if provider.contains("deepseek") || model.contains("deepseek") {

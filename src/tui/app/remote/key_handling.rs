@@ -36,7 +36,11 @@ async fn apply_remote_effort_direction(
     remote: &mut RemoteConnection,
     direction: i8,
 ) -> Result<()> {
-    let efforts = ["none", "low", "medium", "high", "xhigh"];
+    let efforts = app.active_reasoning_efforts();
+    if efforts.is_empty() {
+        app.set_status_notice("Reasoning effort not available for this provider");
+        return Ok(());
+    }
     let current = app.remote_reasoning_effort.as_deref();
     let current_index = current
         .and_then(|c| efforts.iter().position(|e| *e == c))
@@ -994,7 +998,7 @@ async fn handle_remote_key_internal(
                     let efforts = app.active_reasoning_efforts();
                     if efforts.is_empty() {
                         app.push_display_message(DisplayMessage::system(
-                            "Reasoning effort not available for this provider. For Claude Max, use a `[1m]` model such as `/model claude-opus-4-8[1m]`.".to_string(),
+                            "Reasoning effort not available for this provider.".to_string(),
                         ));
                         return Ok(());
                     }
@@ -1048,7 +1052,7 @@ async fn handle_remote_key_internal(
                             efforts.join("|")
                         };
                         app.push_display_message(DisplayMessage::error(format!(
-                            "Failed to set effort: `{}` is {}. For Claude Max, use `/model claude-opus-4-8[1m]`.",
+                            "Failed to set effort: `{}` is {}.",
                             level, available
                         )));
                         return Ok(());

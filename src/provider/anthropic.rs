@@ -576,6 +576,7 @@ struct CachedCredentials {
 pub struct AnthropicProvider {
     client: Client,
     model: Arc<std::sync::RwLock<String>>,
+    reasoning_effort: Arc<std::sync::RwLock<Option<String>>>,
     /// Cached OAuth credentials (None if using API key)
     credentials: Arc<RwLock<Option<CachedCredentials>>>,
     max_tokens: u32,
@@ -584,6 +585,47 @@ pub struct AnthropicProvider {
 }
 
 impl AnthropicProvider {
+    const EFFORTS: [&'static str; 5] = ["none", "low", "medium", "high", "max"];
+
+    fn normalize_reasoning_effort(effort: &str) -> Option<&'static str> {
+        match effort.trim().to_ascii_lowercase().as_str() {
+            "none" | "off" | "disable" | "disabled" => Some("none"),
+            "low" => Some("low"),
+            "medium" | "med" => Some("medium"),
+            "high" => Some("high"),
+            "max" | "xhigh" => Some("max"),
+            _ => None,
+        }
+    }
+
+    fn thinking_budget_for_effort(effort: &str) -> Option<u32> {
+        match Self::normalize_reasoning_effort(effort)? {
+            "none" => None,
+            "low" => Some(1_024),
+            "medium" => Some(4_096),
+            "high" => Some(8_192),
+            "max" => Some(16_384),
+            _ => None,
+        }
+    }
+
+    fn current_thinking_config(&self) -> Option<ApiThinking> {
+        let effort = self
+            .reasoning_effort
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()?;
+        let requested_budget = Self::thinking_budget_for_effort(&effort)?;
+        let max_budget = self.max_tokens.saturating_sub(1);
+        if max_budget == 0 {
+            return None;
+        }
+        Some(ApiThinking {
+            kind: "enabled",
+            budget_tokens: requested_budget.min(max_budget),
+        })
+    }
+
     fn is_usage_exhausted() -> bool {
         let usage = crate::usage::get_sync();
         usage.five_hour >= 0.99 && usage.seven_day >= 0.99
@@ -613,6 +655,7 @@ impl AnthropicProvider {
         Self {
             client: crate::provider::shared_http_client(),
             model: Arc::new(std::sync::RwLock::new(model)),
+            reasoning_effort: Arc::new(std::sync::RwLock::new(None)),
             credentials: Arc::new(RwLock::new(None)),
             max_tokens,
             oauth_session_id: Uuid::new_v4().to_string(),
@@ -1014,6 +1057,7 @@ fn log_anthropic_canonical_input(
         "messages": messages_value,
         "tools": tools_value.as_ref(),
         "temperature": request.temperature,
+        "thinking": request.thinking,
     });
 
     super::fingerprint::log_provider_canonical_input(
@@ -1075,6 +1119,12 @@ impl Provider for AnthropicProvider {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone();
         let api_model = strip_1m_suffix(&model).to_string();
+        let thinking = self.current_thinking_config();
+        let temperature = if is_oauth || thinking.is_some() {
+            Some(1.0)
+        } else {
+            None
+        };
 
         // Format request
         let api_messages = self.format_messages(messages, is_oauth);
@@ -1095,7 +1145,8 @@ impl Provider for AnthropicProvider {
             } else {
                 None
             },
-            temperature: if is_oauth { Some(1.0) } else { None },
+            temperature,
+            thinking,
             stream: true,
         };
 
@@ -1244,6 +1295,46 @@ impl Provider for AnthropicProvider {
         true
     }
 
+    fn reasoning_effort(&self) -> Option<String> {
+        self.reasoning_effort
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    fn set_reasoning_effort(&self, effort: &str) -> Result<()> {
+        let normalized = Self::normalize_reasoning_effort(effort).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Unsupported Claude effort '{}'; expected none|low|medium|high|max",
+                effort
+            )
+        })?;
+        *self
+            .reasoning_effort
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(normalized.to_string());
+        Ok(())
+    }
+
+    fn available_efforts(&self) -> Vec<&'static str> {
+        Self::EFFORTS.to_vec()
+    }
+
+    fn thinking_enabled(&self) -> Option<bool> {
+        Some(
+            self.reasoning_effort
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .as_deref()
+                .and_then(Self::thinking_budget_for_effort)
+                .is_some(),
+        )
+    }
+
+    fn set_thinking(&self, enabled: bool) -> Result<()> {
+        self.set_reasoning_effort(if enabled { "medium" } else { "none" })
+    }
+
     fn available_models(&self) -> Vec<&'static str> {
         AVAILABLE_MODELS.to_vec()
     }
@@ -1304,6 +1395,12 @@ impl Provider for AnthropicProvider {
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .clone(),
             )),
+            reasoning_effort: Arc::new(std::sync::RwLock::new(
+                self.reasoning_effort
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone(),
+            )),
             credentials: Arc::new(RwLock::new(None)),
             max_tokens: self.max_tokens,
             oauth_session_id: self.oauth_session_id.clone(),
@@ -1348,6 +1445,12 @@ impl Provider for AnthropicProvider {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone();
         let api_model = strip_1m_suffix(&model).to_string();
+        let thinking = self.current_thinking_config();
+        let temperature = if is_oauth || thinking.is_some() {
+            Some(1.0)
+        } else {
+            None
+        };
 
         // Format request
         let api_messages = self.format_messages(messages, is_oauth);
@@ -1368,7 +1471,8 @@ impl Provider for AnthropicProvider {
             } else {
                 None
             },
-            temperature: if is_oauth { Some(1.0) } else { None },
+            temperature,
+            thinking,
             stream: true,
         };
 
@@ -2120,7 +2224,16 @@ struct ApiRequest {
     metadata: Option<ApiMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<ApiThinking>,
     stream: bool,
+}
+
+#[derive(Serialize, Clone, Copy)]
+struct ApiThinking {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    budget_tokens: u32,
 }
 
 #[derive(Serialize, Clone)]

@@ -1544,7 +1544,10 @@ impl Provider for MultiProvider {
 
     fn reasoning_effort(&self) -> Option<String> {
         match self.active_provider() {
-            ActiveProvider::Claude => None,
+            ActiveProvider::Claude => self
+                .anthropic_provider()
+                .and_then(|a| a.reasoning_effort())
+                .or_else(|| self.claude_provider().and_then(|c| c.reasoning_effort())),
             ActiveProvider::OpenAI => self.openai_provider().and_then(|o| o.reasoning_effort()),
             ActiveProvider::Copilot => None,
             ActiveProvider::Antigravity => None,
@@ -1559,6 +1562,19 @@ impl Provider for MultiProvider {
 
     fn set_reasoning_effort(&self, effort: &str) -> Result<()> {
         match self.active_provider() {
+            ActiveProvider::Claude => {
+                if let Some(anthropic) = self.anthropic_provider() {
+                    anthropic.set_reasoning_effort(effort)
+                } else if let Some(claude) = self.claude_provider() {
+                    claude.set_reasoning_effort(effort)
+                } else {
+                    crate::logging::debug(&format!(
+                        "reasoning_effort '{}' ignored: Claude provider not initialized",
+                        effort
+                    ));
+                    Ok(())
+                }
+            }
             ActiveProvider::OpenAI => self
                 .openai_provider()
                 .ok_or_else(|| anyhow::anyhow!("OpenAI provider not available"))?
@@ -1568,7 +1584,7 @@ impl Provider for MultiProvider {
                 .ok_or_else(|| anyhow::anyhow!("OpenAI-compatible provider not available"))?
                 .set_reasoning_effort(effort),
             // M47-C1: silently skip on providers that do not expose a reasoning
-            // effort surface (Anthropic, Gemini, Bedrock, Copilot, ...). The
+            // effort surface (Gemini, Bedrock, Copilot, ...). The
             // historical hard error here caused a noisy `error!` log every time
             // a session was restored on a Claude/Gemini model while config or
             // session state still carried an OpenAI `reasoning_effort` value.
@@ -1588,6 +1604,11 @@ impl Provider for MultiProvider {
 
     fn available_efforts(&self) -> Vec<&'static str> {
         match self.active_provider() {
+            ActiveProvider::Claude => self
+                .anthropic_provider()
+                .map(|a| a.available_efforts())
+                .or_else(|| self.claude_provider().map(|c| c.available_efforts()))
+                .unwrap_or_default(),
             ActiveProvider::OpenAI => self
                 .openai_provider()
                 .map(|o| o.available_efforts())

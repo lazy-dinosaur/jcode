@@ -1046,6 +1046,62 @@ async fn anthropic_supports_thinking_is_true() {
     assert!(provider.supports_thinking());
 }
 
+#[test]
+fn anthropic_reasoning_effort_maps_to_thinking_budget_without_changing_model() {
+    let provider = AnthropicProvider::new();
+    provider
+        .set_model("claude-opus-4-8")
+        .expect("set base model");
+
+    assert_eq!(
+        provider.available_efforts(),
+        vec!["none", "low", "medium", "high", "max"]
+    );
+
+    provider
+        .set_reasoning_effort("max")
+        .expect("Claude max thinking effort");
+
+    assert_eq!(provider.model(), "claude-opus-4-8");
+    assert_eq!(provider.reasoning_effort().as_deref(), Some("max"));
+    assert_eq!(provider.thinking_enabled(), Some(true));
+
+    let thinking = provider
+        .current_thinking_config()
+        .expect("max effort enables thinking");
+    assert_eq!(thinking.kind, "enabled");
+    assert_eq!(
+        thinking.budget_tokens,
+        16_384.min(provider.max_tokens.saturating_sub(1))
+    );
+
+    provider
+        .set_reasoning_effort("none")
+        .expect("disable thinking effort");
+    assert_eq!(provider.model(), "claude-opus-4-8");
+    assert_eq!(provider.reasoning_effort().as_deref(), Some("none"));
+    assert_eq!(provider.thinking_enabled(), Some(false));
+    assert!(provider.current_thinking_config().is_none());
+}
+
+#[test]
+fn anthropic_reasoning_effort_accepts_xhigh_as_max_alias() {
+    let provider = AnthropicProvider::new();
+
+    provider
+        .set_reasoning_effort("xhigh")
+        .expect("legacy xhigh alias");
+
+    assert_eq!(provider.reasoning_effort().as_deref(), Some("max"));
+    assert_eq!(
+        provider
+            .current_thinking_config()
+            .expect("alias enables thinking")
+            .budget_tokens,
+        16_384.min(provider.max_tokens.saturating_sub(1))
+    );
+}
+
 #[tokio::test]
 async fn anthropic_set_context_preference_accepts_aliases() {
     let provider = AnthropicProvider::new();

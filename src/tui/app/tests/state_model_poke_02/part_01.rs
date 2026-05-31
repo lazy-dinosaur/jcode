@@ -547,10 +547,12 @@ fn test_effort_suggestions_are_provider_aware_for_remote_models() {
 
     app.remote_provider_name = Some("claude".to_string());
     app.remote_provider_model = Some("claude-opus-4-8".to_string());
-    let claude_suggestions = app.get_suggestions_for("/effort ");
+    let claude_suggestions = app.get_suggestions_for("/effort m");
     assert!(
-        claude_suggestions.is_empty(),
-        "Claude should not expose OpenAI-style effort suggestions; choose `[1m]` via /model explicitly instead: {:?}",
+        claude_suggestions
+            .iter()
+            .any(|(cmd, label)| cmd == "/effort max" && *label == "Max"),
+        "Claude should expose max thinking effort without using `[1m]` models: {:?}",
         claude_suggestions
     );
     assert!(
