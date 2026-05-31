@@ -660,6 +660,10 @@ impl OpenRouterProvider {
         matches!(profile_id, Some(id) if id.eq_ignore_ascii_case("deepseek"))
     }
 
+    fn profile_supports_thinking_parameter(profile_id: Option<&str>) -> bool {
+        matches!(profile_id, Some(id) if id.eq_ignore_ascii_case("xiaomi-mimo"))
+    }
+
     fn normalize_reasoning_effort(raw: &str) -> Option<String> {
         let value = raw.trim().to_ascii_lowercase();
         if value.is_empty() {

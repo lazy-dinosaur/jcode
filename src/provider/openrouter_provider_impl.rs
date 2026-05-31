@@ -33,8 +33,12 @@ impl Provider for OpenRouterProvider {
         let model = self.model.read().await.clone();
         let reasoning_effort = self.reasoning_effort();
         let thinking_override = Self::thinking_override();
+        let profile_supports_thinking =
+            Self::profile_supports_thinking_parameter(self.profile_id.as_deref());
         let thinking_enabled = thinking_override.or_else(|| {
-            if Self::is_kimi_model(&model) {
+            if profile_supports_thinking {
+                reasoning_effort.as_deref().map(|effort| effort != "none")
+            } else if Self::is_kimi_model(&model) {
                 Some(true)
             } else {
                 None
@@ -748,7 +752,9 @@ impl Provider for OpenRouterProvider {
     }
 
     fn reasoning_effort(&self) -> Option<String> {
-        if !Self::profile_supports_reasoning_effort(self.profile_id.as_deref()) {
+        if !Self::profile_supports_reasoning_effort(self.profile_id.as_deref())
+            && !Self::profile_supports_thinking_parameter(self.profile_id.as_deref())
+        {
             return None;
         }
         self.reasoning_effort
@@ -758,9 +764,11 @@ impl Provider for OpenRouterProvider {
     }
 
     fn set_reasoning_effort(&self, effort: &str) -> Result<()> {
-        if !Self::profile_supports_reasoning_effort(self.profile_id.as_deref()) {
+        if !Self::profile_supports_reasoning_effort(self.profile_id.as_deref())
+            && !Self::profile_supports_thinking_parameter(self.profile_id.as_deref())
+        {
             anyhow::bail!(
-                "Reasoning effort is only supported for DeepSeek direct profiles on OpenAI-compatible providers"
+                "Reasoning effort is only supported for DeepSeek and Xiaomi MiMo direct profiles on OpenAI-compatible providers"
             );
         }
         let normalized = Self::normalize_reasoning_effort(effort);
@@ -772,7 +780,9 @@ impl Provider for OpenRouterProvider {
     }
 
     fn available_efforts(&self) -> Vec<&'static str> {
-        if Self::profile_supports_reasoning_effort(self.profile_id.as_deref()) {
+        if Self::profile_supports_reasoning_effort(self.profile_id.as_deref())
+            || Self::profile_supports_thinking_parameter(self.profile_id.as_deref())
+        {
             vec!["none", "low", "medium", "high", "max"]
         } else {
             vec![]

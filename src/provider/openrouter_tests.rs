@@ -709,8 +709,120 @@ fn non_deepseek_compatible_profile_does_not_expose_reasoning_effort() {
         .set_reasoning_effort("max")
         .expect_err("generic compatible profile should not expose DeepSeek effort UX");
     assert!(
-        error.to_string().contains("DeepSeek direct profiles"),
+        error
+            .to_string()
+            .contains("DeepSeek and Xiaomi MiMo direct profiles"),
         "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn direct_xiaomi_mimo_profile_maps_effort_to_thinking_parameter() {
+    let (api_base, request_rx) = spawn_single_response_chat_server();
+    let provider = OpenRouterProvider {
+        api_base,
+        model: Arc::new(RwLock::new("mimo-v2.5-pro".to_string())),
+        profile_id: Some("xiaomi-mimo".to_string()),
+        supports_provider_features: false,
+        supports_model_catalog: false,
+        send_openrouter_headers: false,
+        ..make_custom_compatible_provider()
+    };
+    assert_eq!(
+        provider.available_efforts(),
+        vec!["none", "low", "medium", "high", "max"]
+    );
+    provider
+        .set_reasoning_effort("max")
+        .expect("Xiaomi MiMo direct profile should accept max effort");
+
+    let messages = vec![Message {
+        role: Role::User,
+        content: vec![ContentBlock::Text {
+            text: "hello".to_string(),
+            cache_control: None,
+        }],
+        timestamp: None,
+        tool_duration_ms: None,
+    }];
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    rt.block_on(async {
+        let mut stream = provider
+            .complete(&messages, &[], "", None)
+            .await
+            .expect("fake chat request should start");
+        while let Some(event) = stream.next().await {
+            event.expect("stream event should parse");
+        }
+    });
+
+    let request = request_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("capture fake provider request");
+    assert!(
+        request.contains(r#""model":"mimo-v2.5-pro""#),
+        "request should contain model: {request}"
+    );
+    assert!(
+        request.contains(r#""thinking":{"type":"enabled"}"#),
+        "Xiaomi MiMo max effort should enable thinking: {request}"
+    );
+    assert!(
+        !request.contains("reasoning_effort"),
+        "Xiaomi MiMo should use thinking parameter, not reasoning_effort: {request}"
+    );
+}
+
+#[test]
+fn direct_xiaomi_mimo_none_effort_disables_thinking_parameter() {
+    let (api_base, request_rx) = spawn_single_response_chat_server();
+    let provider = OpenRouterProvider {
+        api_base,
+        model: Arc::new(RwLock::new("mimo-v2.5-pro".to_string())),
+        profile_id: Some("xiaomi-mimo".to_string()),
+        supports_provider_features: false,
+        supports_model_catalog: false,
+        send_openrouter_headers: false,
+        ..make_custom_compatible_provider()
+    };
+    provider
+        .set_reasoning_effort("none")
+        .expect("Xiaomi MiMo direct profile should accept none effort");
+
+    let messages = vec![Message {
+        role: Role::User,
+        content: vec![ContentBlock::Text {
+            text: "hello".to_string(),
+            cache_control: None,
+        }],
+        timestamp: None,
+        tool_duration_ms: None,
+    }];
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    rt.block_on(async {
+        let mut stream = provider
+            .complete(&messages, &[], "", None)
+            .await
+            .expect("fake chat request should start");
+        while let Some(event) = stream.next().await {
+            event.expect("stream event should parse");
+        }
+    });
+
+    let request = request_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("capture fake provider request");
+    assert!(
+        request.contains(r#""thinking":{"type":"disabled"}"#),
+        "Xiaomi MiMo none effort should disable thinking: {request}"
     );
 }
 

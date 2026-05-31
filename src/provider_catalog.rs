@@ -448,6 +448,20 @@ pub fn openai_compatible_profile_context_limit(profile_id: &str, model: &str) ->
         // direct profile runs through the OpenRouter/OpenAI-compatible provider
         // implementation, whose live catalog can be unavailable during startup.
         "deepseek" if model.starts_with("deepseek-v4-") => Some(1_000_000),
+        // Xiaomi MiMo publishes explicit context windows for the direct API. These
+        // models often run without a live model catalog during startup, so keep the
+        // static limits in sync with the public "Model and Rate Limits" table.
+        "xiaomi-mimo"
+            if matches!(
+                model.as_str(),
+                "mimo-v2.5" | "mimo-v2.5-pro" | "mimo-v2-pro"
+            ) =>
+        {
+            Some(1_000_000)
+        }
+        "xiaomi-mimo" if matches!(model.as_str(), "mimo-v2-omni" | "mimo-v2-flash") => {
+            Some(256_000)
+        }
         _ => None,
     }
 }
@@ -499,6 +513,13 @@ fn apply_openai_compatible_profile_env_impl(
         crate::env::set_var("JCODE_OPENROUTER_ENV_FILE", &resolved.env_file);
         crate::env::set_var("JCODE_OPENROUTER_CACHE_NAMESPACE", &resolved.id);
         crate::env::set_var("JCODE_OPENROUTER_PROVIDER_FEATURES", "0");
+        if resolved.id == "xiaomi-mimo" {
+            // Xiaomi's OpenAI-compatible examples document `api-key: <key>` rather
+            // than `Authorization: Bearer <key>`. Configure the built-in profile the
+            // same way so login/setup works without requiring a custom provider.
+            crate::env::set_var("JCODE_OPENROUTER_AUTH_HEADER", "api-key");
+            crate::env::set_var("JCODE_OPENROUTER_AUTH_HEADER_NAME", "api-key");
+        }
         let static_models = openai_compatible_profile_static_models(profile);
         if static_models.is_empty() {
             crate::env::remove_var("JCODE_OPENROUTER_STATIC_MODELS");

@@ -121,6 +121,49 @@ fn kimi_profile_uses_k2_6_context_window() {
 }
 
 #[test]
+fn xiaomi_mimo_profile_uses_published_context_windows() {
+    assert_eq!(
+        openai_compatible_profile_context_limit("xiaomi-mimo", "mimo-v2.5"),
+        Some(1_000_000)
+    );
+    assert_eq!(
+        openai_compatible_profile_context_limit("xiaomi-mimo", "mimo-v2.5-pro"),
+        Some(1_000_000)
+    );
+    assert_eq!(
+        openai_compatible_profile_context_limit("xiaomi-mimo", "mimo-v2-flash"),
+        Some(256_000)
+    );
+}
+
+#[test]
+fn xiaomi_mimo_builtin_profile_uses_api_key_auth_header() {
+    let _lock = crate::storage::lock_test_env();
+    let _guard = EnvGuard::save(&[
+        "JCODE_OPENROUTER_API_BASE",
+        "JCODE_OPENROUTER_API_KEY_NAME",
+        "JCODE_OPENROUTER_ENV_FILE",
+        "JCODE_OPENROUTER_CACHE_NAMESPACE",
+        "JCODE_OPENROUTER_PROVIDER_FEATURES",
+        "JCODE_OPENROUTER_AUTH_HEADER",
+        "JCODE_OPENROUTER_AUTH_HEADER_NAME",
+        "JCODE_PROVIDER_PROFILE_ACTIVE",
+        "JCODE_PROVIDER_PROFILE_NAME",
+    ]);
+
+    apply_openai_compatible_profile_env(Some(XIAOMI_MIMO_PROFILE));
+
+    assert_eq!(
+        std::env::var("JCODE_OPENROUTER_AUTH_HEADER").as_deref(),
+        Ok("api-key")
+    );
+    assert_eq!(
+        std::env::var("JCODE_OPENROUTER_AUTH_HEADER_NAME").as_deref(),
+        Ok("api-key")
+    );
+}
+
+#[test]
 fn minimax_token_plan_keys_resolve_to_china_endpoint_without_changing_international_default() {
     let _lock = crate::storage::lock_test_env();
     let _guard = EnvGuard::save(&["OPENAI_API_KEY"]);
