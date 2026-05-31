@@ -8,7 +8,7 @@ use crate::message::{
 pub(super) use cache_support::get_cached_message_lines;
 use cache_support::{centered_wrap_width, left_pad_lines_for_centered_mode};
 use std::borrow::Cow;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 fn prefer_width_stable_system_glyphs() -> bool {
     std::env::var("TERM_PROGRAM")
@@ -45,7 +45,148 @@ fn wrap_rendered_markdown_lines(lines: Vec<Line<'static>>, width: usize) -> Vec<
     if width == 0 || !lines.iter().any(|line| line.width() > width) {
         return lines;
     }
-    markdown::wrap_lines(lines, width)
+    de_orphan_short_cjk_trailing_words(markdown::wrap_lines(lines, width), width)
+}
+
+#[derive(Clone)]
+struct StyledChar {
+    ch: char,
+    style: Style,
+}
+
+fn styled_chars_from_line(line: &Line<'static>) -> Vec<StyledChar> {
+    line.spans
+        .iter()
+        .flat_map(|span| {
+            let style = span.style;
+            span.content.chars().map(move |ch| StyledChar { ch, style })
+        })
+        .collect()
+}
+
+fn spans_from_styled_chars(chars: &[StyledChar]) -> Vec<Span<'static>> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    for styled in chars {
+        if let Some(last) = spans.last_mut()
+            && last.style == styled.style
+        {
+            last.content.to_mut().push(styled.ch);
+            continue;
+        }
+        spans.push(Span::styled(styled.ch.to_string(), styled.style));
+    }
+    spans
+}
+
+fn is_hangul_or_cjk(ch: char) -> bool {
+    ('\u{AC00}'..='\u{D7AF}').contains(&ch)
+        || ('\u{1100}'..='\u{11FF}').contains(&ch)
+        || ('\u{3130}'..='\u{318F}').contains(&ch)
+        || ('\u{4E00}'..='\u{9FFF}').contains(&ch)
+}
+
+fn first_non_space_char(line: &Line<'static>) -> Option<char> {
+    line.spans
+        .iter()
+        .flat_map(|span| span.content.chars())
+        .find(|ch| !ch.is_whitespace())
+}
+
+fn split_short_cjk_trailing_word(
+    line: &Line<'static>,
+) -> Option<(Line<'static>, Vec<Span<'static>>, usize)> {
+    let chars = styled_chars_from_line(line);
+    let mut token_end = chars.len();
+    while token_end > 0 && chars[token_end - 1].ch.is_whitespace() {
+        token_end -= 1;
+    }
+    if token_end == 0 {
+        return None;
+    }
+
+    let mut suffix_start = token_end;
+    while suffix_start > 0 && is_hangul_or_cjk(chars[suffix_start - 1].ch) {
+        suffix_start -= 1;
+    }
+    if suffix_start == token_end || suffix_start == 0 {
+        return None;
+    }
+
+    let suffix = &chars[suffix_start..token_end];
+    let suffix_width: usize = suffix
+        .iter()
+        .map(|styled| UnicodeWidthChar::width(styled.ch).unwrap_or(0))
+        .sum();
+    if suffix_width == 0 || suffix_width > 4 {
+        return None;
+    }
+
+    let mut remaining = chars[..suffix_start].to_vec();
+    while remaining
+        .last()
+        .is_some_and(|styled| styled.ch.is_whitespace())
+    {
+        remaining.pop();
+    }
+    if remaining.is_empty() {
+        return None;
+    }
+
+    let mut moved = chars[suffix_start..].to_vec();
+    if !moved.last().is_some_and(|styled| styled.ch.is_whitespace()) {
+        let style = moved.last().map(|styled| styled.style).unwrap_or_default();
+        moved.push(StyledChar { ch: ' ', style });
+    }
+    let moved_width: usize = moved
+        .iter()
+        .map(|styled| UnicodeWidthChar::width(styled.ch).unwrap_or(0))
+        .sum();
+
+    let mut trimmed_line = Line::from(spans_from_styled_chars(&remaining));
+    if let Some(alignment) = line.alignment {
+        trimmed_line = trimmed_line.alignment(alignment);
+    }
+    Some((trimmed_line, spans_from_styled_chars(&moved), moved_width))
+}
+
+fn prepend_spans_preserving_alignment(line: &mut Line<'static>, mut prefix: Vec<Span<'static>>) {
+    prefix.extend(line.spans.clone());
+    let alignment = line.alignment;
+    *line = Line::from(prefix);
+    if let Some(alignment) = alignment {
+        *line = std::mem::take(line).alignment(alignment);
+    }
+}
+
+fn de_orphan_short_cjk_trailing_words(
+    mut lines: Vec<Line<'static>>,
+    width: usize,
+) -> Vec<Line<'static>> {
+    if width == 0 || lines.len() < 2 {
+        return lines;
+    }
+
+    for index in 0..lines.len().saturating_sub(1) {
+        let Some(next_first) = first_non_space_char(&lines[index + 1]) else {
+            continue;
+        };
+        if !is_hangul_or_cjk(next_first) {
+            continue;
+        }
+
+        let Some((trimmed, moved, moved_width)) = split_short_cjk_trailing_word(&lines[index])
+        else {
+            continue;
+        };
+        if lines[index + 1].width().saturating_add(moved_width) > width {
+            continue;
+        }
+
+        lines[index] = trimmed;
+        prepend_spans_preserving_alignment(&mut lines[index + 1], moved);
+    }
+
+    lines
 }
 
 fn is_tool_call_wrapper_noise_line(line: &str) -> bool {

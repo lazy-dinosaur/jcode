@@ -118,6 +118,33 @@ fn render_assistant_message_wraps_parsed_long_lines() {
 }
 
 #[test]
+fn render_assistant_message_avoids_orphaned_korean_token_before_option_label() {
+    let msg = DisplayMessage::assistant(
+        "맞아요. record 기준으로 **Phase 3 hook replacement 말고 남은 큰 축이 하나 더 있습니다.**가장 가능성 높은 건 A. Capability Registry dogfood evaluation (Recommended next check)\n\n- lazy capability audit/list/resolve 돌려서\n- Medivance 실제 workflow에서 capability가 잘 잡히는지 봅니다.",
+    );
+
+    let lines = render_assistant_message(&msg, 96, crate::config::DiffDisplayMode::Off);
+    let plain_lines = lines.iter().map(extract_line_text).collect::<Vec<_>>();
+
+    assert!(
+        plain_lines
+            .iter()
+            .any(|line| line.contains("A. Capability")),
+        "expected option label line in rendered output: {plain_lines:?}"
+    );
+    assert!(
+        plain_lines
+            .iter()
+            .all(|line| !line.trim_end().ends_with("가장")),
+        "wrap should not orphan `가장` at the end of a line before `A. Capability`: {plain_lines:?}"
+    );
+    assert!(
+        lines.iter().all(|line| line.width() <= 96),
+        "assistant markdown should remain within width after de-orphaning: {plain_lines:?}"
+    );
+}
+
+#[test]
 fn render_system_message_centered_mode_left_aligns_with_padding() {
     let saved = crate::tui::markdown::center_code_blocks();
     crate::tui::markdown::set_center_code_blocks(true);
