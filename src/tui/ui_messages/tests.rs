@@ -290,6 +290,33 @@ fn render_assistant_message_keeps_wrapped_table_cell_continuation_in_table() {
 }
 
 #[test]
+fn render_assistant_message_splits_glued_blockquote_marker() {
+    let msg = DisplayMessage::assistant(
+        "즉 목표를 이렇게 바꾸면 좋겠습니다:> “lazy-harness는 느린 감시자가 아니라, 빠른 분류기 + 강제 실행 경계다.”\n이 방향으로 계획을 수정하면 됩니다.",
+    );
+
+    let lines = render_assistant_message(&msg, 120, crate::config::DiffDisplayMode::Off);
+    let plain_lines = lines.iter().map(extract_line_text).collect::<Vec<_>>();
+
+    assert_eq!(
+        plain_lines.first().map(String::as_str),
+        Some("즉 목표를 이렇게 바꾸면 좋겠습니다:")
+    );
+    assert!(
+        plain_lines
+            .iter()
+            .any(|line| line.trim_start().starts_with("│ “lazy-harness는")),
+        "glued blockquote should render as a distinct quoted line: {plain_lines:?}"
+    );
+    assert!(
+        plain_lines
+            .iter()
+            .all(|line| !line.contains("좋겠습니다:>") && !line.contains(":> “lazy")),
+        "blockquote marker must not remain glued in TUI render: {plain_lines:?}"
+    );
+}
+
+#[test]
 fn render_system_message_centered_mode_left_aligns_with_padding() {
     let saved = crate::tui::markdown::center_code_blocks();
     crate::tui::markdown::set_center_code_blocks(true);

@@ -1298,6 +1298,103 @@ fn repair_glued_list_markers(text: &str) -> String {
     out
 }
 
+fn repair_glued_blockquote_markers(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut in_code_fence = false;
+    let mut fence_char = '\0';
+    let mut fence_len = 0usize;
+
+    for (idx, line) in text.split('\n').enumerate() {
+        if idx > 0 {
+            out.push('\n');
+        }
+
+        if in_code_fence {
+            out.push_str(line);
+            update_code_fence_state_after_line(
+                line,
+                &mut in_code_fence,
+                &mut fence_char,
+                &mut fence_len,
+            );
+            continue;
+        }
+
+        let repaired = repair_glued_blockquote_markers_in_line(line);
+        update_code_fence_state_after_line(
+            &repaired,
+            &mut in_code_fence,
+            &mut fence_char,
+            &mut fence_len,
+        );
+        out.push_str(&repaired);
+    }
+
+    out
+}
+
+fn repair_glued_blockquote_markers_in_line(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut cursor = 0usize;
+    let mut scan = 0usize;
+
+    while scan < line.len() {
+        if !line.is_char_boundary(scan) {
+            scan += 1;
+            continue;
+        }
+
+        let Some(ch) = line[scan..].chars().next() else {
+            break;
+        };
+        if ch == '>' && glued_blockquote_marker_at(line, scan) {
+            out.push_str(line[cursor..scan].trim_end());
+            if !out.ends_with("  ") {
+                out.push_str("  ");
+            }
+            out.push('\n');
+            out.push_str("> ");
+            cursor = scan + ch.len_utf8();
+            if line[cursor..]
+                .chars()
+                .next()
+                .is_some_and(char::is_whitespace)
+            {
+                cursor += line[cursor..].chars().next().unwrap().len_utf8();
+            }
+            scan = cursor;
+            continue;
+        }
+
+        scan += ch.len_utf8();
+    }
+
+    out.push_str(&line[cursor..]);
+    out
+}
+
+fn glued_blockquote_marker_at(line: &str, idx: usize) -> bool {
+    if idx == 0 || inside_inline_backticks(line, idx) {
+        return false;
+    }
+    let Some(previous_char) = line[..idx].chars().next_back() else {
+        return false;
+    };
+    if previous_char.is_whitespace() {
+        return false;
+    }
+    if !matches!(
+        previous_char,
+        ':' | '：' | '?' | '？' | '!' | '！' | '.' | '。' | ')' | '”' | '"'
+    ) {
+        return false;
+    }
+    line[idx + '>'.len_utf8()..]
+        .chars()
+        .next()
+        .is_some_and(|next| !matches!(next, '=' | '>'))
+}
+
 fn repair_wrapped_pipe_table_rows(text: &str) -> String {
     let mut out = Vec::new();
     let lines: Vec<&str> = text.split('\n').collect();

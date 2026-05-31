@@ -8,6 +8,7 @@ pub fn render_markdown_lazy(
     let text = escape_currency_dollars(text);
     let text = repair_glued_code_fences(&text);
     let text = repair_glued_list_markers(&text);
+    let text = repair_glued_blockquote_markers(&text);
     let text = repair_glued_markdown_headings(&text);
     let text = repair_line_oriented_markdown_boundaries(&text);
     let text = repair_line_oriented_list_item_continuations(&text);

@@ -814,6 +814,32 @@ fn test_blockquote_footnote_and_definition_list_render() {
 }
 
 #[test]
+fn test_glued_blockquote_marker_after_sentence_is_repaired() {
+    let md = "즉 목표를 이렇게 바꾸면 좋겠습니다:> “lazy-harness는 느린 감시자가 아니라, 빠른 분류기 + 강제 실행 경계다.”\n이 방향으로 계획을 수정하면 됩니다.";
+    let rendered: Vec<String> = render_markdown_with_width(md, Some(140))
+        .iter()
+        .map(line_to_string)
+        .collect();
+
+    assert_eq!(
+        rendered.first().map(String::as_str),
+        Some("즉 목표를 이렇게 바꾸면 좋겠습니다:")
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("│ “lazy-harness는")),
+        "glued blockquote should render as its own quoted line: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .all(|line| !line.contains("좋겠습니다:>") && !line.contains(":> “lazy")),
+        "blockquote marker must not remain glued to prose: {rendered:?}"
+    );
+}
+
+#[test]
 fn test_plain_paragraph_alignment_remains_unset() {
     let lines = render_markdown("plain paragraph");
     let line = lines
