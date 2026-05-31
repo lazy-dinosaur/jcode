@@ -439,6 +439,11 @@ impl Config {
                 self.provider.default_thinking = Some(parsed);
             }
         }
+        if let Ok(v) = std::env::var("JCODE_COMPACTION_SOFT_TOKEN_BUDGET") {
+            if let Ok(parsed) = v.trim().parse::<usize>() {
+                self.compaction.soft_token_budget = Some(parsed);
+            }
+        }
         if let Ok(v) = std::env::var("JCODE_OPENAI_TRANSPORT") {
             let trimmed = v.trim().to_string();
             if !trimmed.is_empty() {

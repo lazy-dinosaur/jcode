@@ -191,8 +191,8 @@ impl App {
     pub(super) fn active_claude_model_for_effort(&self, level: &str) -> Option<String> {
         let _ = level;
         // Never map `/effort` to Claude's `[1m]` long-context model. Claude
-        // effort is Anthropic thinking budget; context selection stays explicit
-        // via `/model ...[1m]`.
+        // effort is Anthropic adaptive thinking/output_config; context selection
+        // stays explicit via `/model ...[1m]` legacy aliases.
         None
     }
 
@@ -201,7 +201,7 @@ impl App {
             if self.active_claude_base_model().is_some() {
                 let efforts = self.provider.available_efforts();
                 return if efforts.is_empty() {
-                    vec!["none", "low", "medium", "high", "max"]
+                    vec!["none", "low", "medium", "high", "xhigh", "max"]
                 } else {
                     efforts
                 };
@@ -228,7 +228,7 @@ impl App {
             || model.starts_with("claude-")
             || model.starts_with("anthropic/")
         {
-            return vec!["none", "low", "medium", "high", "max"];
+            return vec!["none", "low", "medium", "high", "xhigh", "max"];
         }
 
         if provider.contains("deepseek") || model.contains("deepseek") {

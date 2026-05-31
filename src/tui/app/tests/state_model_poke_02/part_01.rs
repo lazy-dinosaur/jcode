@@ -556,11 +556,11 @@ fn test_effort_suggestions_are_provider_aware_for_remote_models() {
         claude_suggestions
     );
     assert!(
-        !claude_suggestions
+        app.get_suggestions_for("/effort x")
             .iter()
-            .any(|(cmd, _)| cmd == "/effort xhigh"),
-        "Claude completion should use max, not OpenAI xhigh: {:?}",
-        claude_suggestions
+            .any(|(cmd, label)| cmd == "/effort xhigh" && *label == "Extra High"),
+        "Claude should expose xhigh adaptive thinking effort for coding/agentic work: {:?}",
+        app.get_suggestions_for("/effort x")
     );
     assert_eq!(
         app.active_claude_model_for_effort("high").as_deref(),
@@ -579,8 +579,8 @@ fn test_effort_suggestions_are_provider_aware_for_remote_models() {
     assert!(
         openai_suggestions
             .iter()
-            .any(|(cmd, label)| cmd == "/effort xhigh" && *label == "Max"),
-        "OpenAI should still suggest xhigh/Max effort: {:?}",
+            .any(|(cmd, label)| cmd == "/effort xhigh" && *label == "Extra High"),
+        "OpenAI should still suggest xhigh effort: {:?}",
         openai_suggestions
     );
 

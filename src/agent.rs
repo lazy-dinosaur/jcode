@@ -377,7 +377,7 @@ impl Agent {
             }
         };
         manager.reset();
-        let budget = self.provider.context_window();
+        let budget = self.compaction_token_budget();
         manager.set_budget(budget);
         if let Some(state) = self.session.compaction.as_ref() {
             manager.restore_persisted_stored_state_with(state, &self.session.messages);
@@ -398,6 +398,14 @@ impl Agent {
         if let Some(state) = sanitized_state {
             self.session.compaction = state;
             self.persist_session_best_effort("sanitized oversized OpenAI native compaction");
+        }
+    }
+
+    fn compaction_token_budget(&self) -> usize {
+        let provider_window = self.provider.context_window();
+        match crate::config::config().compaction.soft_token_budget {
+            Some(0) | None => provider_window,
+            Some(soft_budget) => provider_window.min(soft_budget),
         }
     }
 
@@ -547,7 +555,7 @@ impl Agent {
         self.session.compaction = Some(state.clone());
         let compaction = self.registry.compaction();
         if let Ok(mut manager) = compaction.try_write() {
-            manager.set_budget(self.provider.context_window());
+            manager.set_budget(self.compaction_token_budget());
             manager.restore_persisted_stored_state_with(&state, &self.session.messages);
         }
 

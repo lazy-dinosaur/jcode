@@ -197,11 +197,19 @@ openai_parallel_tool_calls = true
 # fallback that lazy-harness style 4-provider personas (Claude/GPT/Gemini/GLM)
 # consult when an agent profile does not specify a value. Backends that do
 # not expose the matching surface (e.g. OpenAI direct ignores `default_context`,
-# Claude/Gemini ignore `default_reasoning_effort`) silently skip.
+# Gemini ignores `default_reasoning_effort`) silently skip.
 #
-# default_reasoning_effort = "high"   # none|low|medium|high|xhigh  (Env: JCODE_DEFAULT_REASONING_EFFORT)
-# default_context          = "1m"     # 200k|1m on Anthropic; ignored elsewhere  (Env: JCODE_DEFAULT_CONTEXT)
+# default_reasoning_effort = "high"   # none|low|medium|high|xhigh|max by provider  (Env: JCODE_DEFAULT_REASONING_EFFORT)
+# default_context          = "1m"     # legacy Claude [1m] alias; current Opus 4.8 is 1M by default  (Env: JCODE_DEFAULT_CONTEXT)
 # default_thinking         = true     # Claude/Gemini/OpenRouter Kimi+GLM; OpenAI ignores  (Env: JCODE_DEFAULT_THINKING)
+
+[compaction]
+# Soft token budget for Jcode durable compaction. This is intentionally lower
+# than large model hard windows (for example Claude Opus 4.8 can accept 1M) so
+# repeated requests stay cheaper while the hard provider window remains a safety
+# margin. Set 0 to use the provider hard window directly.
+# Env override: JCODE_COMPACTION_SOFT_TOKEN_BUDGET=400000
+soft_token_budget = 400000
 
 [prompt]
 # Project prompt/instruction loading. Jcode reads AGENTS.md/agents.md before planning

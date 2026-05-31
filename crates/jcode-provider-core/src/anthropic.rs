@@ -4,15 +4,29 @@ pub const ANTHROPIC_OAUTH_BETA_HEADERS: &str = "claude-code-20250219,oauth-2025-
 /// Claude Code OAuth beta headers with Anthropic's explicit 1M context beta.
 pub const ANTHROPIC_OAUTH_BETA_HEADERS_1M: &str = "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advisor-tool-2026-03-01,advanced-tool-use-2025-11-20,effort-2025-11-24,context-1m-2025-08-07";
 
+fn anthropic_base_model_has_default_1m_context(model: &str) -> bool {
+    let model = anthropic_strip_1m_suffix(model).trim().to_ascii_lowercase();
+    model.starts_with("claude-opus-4-8")
+        || model.starts_with("claude-opus-4.8")
+        || model.starts_with("claude-opus-4-7")
+        || model.starts_with("claude-opus-4.7")
+        || model.starts_with("claude-opus-4-6")
+        || model.starts_with("claude-opus-4.6")
+        || model.starts_with("claude-sonnet-4-6")
+        || model.starts_with("claude-sonnet-4.6")
+}
+
 /// Check if a model name explicitly requests 1M context via suffix
 /// (for example `claude-opus-4-6[1m]`).
 pub fn anthropic_is_1m_model(model: &str) -> bool {
     model.ends_with("[1m]")
 }
 
-/// Check if a model explicitly requests 1M context via the `[1m]` suffix.
+/// Check if a model should use 1M context. Newer Claude models such as Opus
+/// 4.8, Opus 4.7, Opus 4.6, and Sonnet 4.6 have 1M context by default on the
+/// Claude API/Claude Code surfaces; `[1m]` remains as an explicit legacy alias.
 pub fn anthropic_effectively_1m(model: &str) -> bool {
-    anthropic_is_1m_model(model)
+    anthropic_is_1m_model(model) || anthropic_base_model_has_default_1m_context(model)
 }
 
 /// Strip the `[1m]` suffix to get the actual API model name.
@@ -22,7 +36,7 @@ pub fn anthropic_strip_1m_suffix(model: &str) -> &str {
 
 /// Get the OAuth beta header value appropriate for the model.
 pub fn anthropic_oauth_beta_headers(model: &str) -> &'static str {
-    if anthropic_is_1m_model(model) {
+    if anthropic_effectively_1m(model) {
         ANTHROPIC_OAUTH_BETA_HEADERS_1M
     } else {
         ANTHROPIC_OAUTH_BETA_HEADERS
@@ -93,9 +107,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn model_suffix_helpers_require_explicit_1m_suffix() {
-        assert!(!anthropic_effectively_1m("claude-opus-4-6"));
+    fn model_suffix_helpers_treat_current_long_context_models_as_1m() {
+        assert!(anthropic_effectively_1m("claude-opus-4-8"));
+        assert!(anthropic_effectively_1m("claude-opus-4-7"));
+        assert!(anthropic_effectively_1m("claude-opus-4-6"));
+        assert!(anthropic_effectively_1m("claude-sonnet-4-6"));
         assert!(anthropic_effectively_1m("claude-opus-4-6[1m]"));
+        assert!(!anthropic_effectively_1m("claude-opus-4-5"));
         assert_eq!(
             anthropic_strip_1m_suffix("claude-opus-4-6[1m]"),
             "claude-opus-4-6"
@@ -106,11 +124,15 @@ mod tests {
     fn oauth_beta_headers_follow_1m_suffix() {
         assert_eq!(
             anthropic_oauth_beta_headers("claude-opus-4-6"),
-            ANTHROPIC_OAUTH_BETA_HEADERS
+            ANTHROPIC_OAUTH_BETA_HEADERS_1M
         );
         assert_eq!(
             anthropic_oauth_beta_headers("claude-opus-4-6[1m]"),
             ANTHROPIC_OAUTH_BETA_HEADERS_1M
+        );
+        assert_eq!(
+            anthropic_oauth_beta_headers("claude-opus-4-5"),
+            ANTHROPIC_OAUTH_BETA_HEADERS
         );
     }
 

@@ -248,6 +248,17 @@ pub struct CompactionConfig {
     /// [proactive/semantic] Minimum context fill level before any proactive check fires (0.0-1.0)
     pub proactive_floor: f32,
 
+    /// Jcode-side soft token budget for durable compaction. This is separate
+    /// from the provider's hard context window: large-context models such as
+    /// Claude Opus 4.8 can accept 1M tokens, but compacting around a smaller
+    /// soft budget keeps repeated request cost under control. `None` means use
+    /// the provider hard window directly; `Some(0)` is also treated as no cap.
+    #[serde(
+        default = "default_compaction_soft_token_budget",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub soft_token_budget: Option<usize>,
+
     /// [proactive/semantic] Minimum number of token snapshots needed before proactive check
     pub min_samples: usize,
 
@@ -318,6 +329,10 @@ pub struct CompactionConfig {
     pub overflow_replay: bool,
 }
 
+fn default_compaction_soft_token_budget() -> Option<usize> {
+    Some(400_000)
+}
+
 impl Default for CompactionConfig {
     fn default() -> Self {
         Self {
@@ -325,6 +340,7 @@ impl Default for CompactionConfig {
             lookahead_turns: 15,
             ewma_alpha: 0.3,
             proactive_floor: 0.40,
+            soft_token_budget: Some(400_000),
             min_samples: 3,
             stall_window: 5,
             min_turns_between_compactions: 10,
@@ -1280,6 +1296,7 @@ mod tests {
         let cfg = CompactionConfig::default();
         assert!(cfg.auto_continue);
         assert!(cfg.overflow_replay);
+        assert_eq!(cfg.soft_token_budget, Some(400_000));
     }
 
     #[test]
@@ -1287,6 +1304,13 @@ mod tests {
         let cfg: CompactionConfig = toml::from_str("mode = 'reactive'\n").unwrap();
         assert!(cfg.auto_continue);
         assert!(cfg.overflow_replay);
+        assert_eq!(cfg.soft_token_budget, Some(400_000));
+    }
+
+    #[test]
+    fn compaction_soft_token_budget_can_be_disabled_with_zero() {
+        let cfg: CompactionConfig = toml::from_str("soft_token_budget = 0\n").unwrap();
+        assert_eq!(cfg.soft_token_budget, Some(0));
     }
 
     #[test]

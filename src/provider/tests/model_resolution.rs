@@ -1074,7 +1074,10 @@ fn set_reasoning_effort_applies_to_initialized_claude_anthropic_provider() {
         .expect("Claude max effort should apply to Anthropic provider");
 
     assert_eq!(provider.reasoning_effort().as_deref(), Some("max"));
-    assert_eq!(provider.available_efforts(), vec!["none", "low", "medium", "high", "max"]);
+    assert_eq!(
+        provider.available_efforts(),
+        vec!["none", "low", "medium", "high", "xhigh", "max"]
+    );
     assert_eq!(provider.model(), "claude-opus-4-8");
 }
 

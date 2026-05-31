@@ -1047,7 +1047,7 @@ async fn anthropic_supports_thinking_is_true() {
 }
 
 #[test]
-fn anthropic_reasoning_effort_maps_to_thinking_budget_without_changing_model() {
+fn anthropic_reasoning_effort_maps_to_adaptive_thinking_without_changing_model() {
     let provider = AnthropicProvider::new();
     provider
         .set_model("claude-opus-4-8")
@@ -1055,7 +1055,7 @@ fn anthropic_reasoning_effort_maps_to_thinking_budget_without_changing_model() {
 
     assert_eq!(
         provider.available_efforts(),
-        vec!["none", "low", "medium", "high", "max"]
+        vec!["none", "low", "medium", "high", "xhigh", "max"]
     );
 
     provider
@@ -1069,10 +1069,15 @@ fn anthropic_reasoning_effort_maps_to_thinking_budget_without_changing_model() {
     let thinking = provider
         .current_thinking_config()
         .expect("max effort enables thinking");
-    assert_eq!(thinking.kind, "enabled");
+    assert_eq!(thinking.kind, "adaptive");
+    assert_eq!(thinking.budget_tokens, None);
+    assert_eq!(thinking.display, Some("summarized"));
     assert_eq!(
-        thinking.budget_tokens,
-        16_384.min(provider.max_tokens.saturating_sub(1))
+        provider
+            .current_output_config()
+            .expect("max effort sends output_config")
+            .effort,
+        "max"
     );
 
     provider
@@ -1082,23 +1087,29 @@ fn anthropic_reasoning_effort_maps_to_thinking_budget_without_changing_model() {
     assert_eq!(provider.reasoning_effort().as_deref(), Some("none"));
     assert_eq!(provider.thinking_enabled(), Some(false));
     assert!(provider.current_thinking_config().is_none());
+    assert!(provider.current_output_config().is_none());
 }
 
 #[test]
-fn anthropic_reasoning_effort_accepts_xhigh_as_max_alias() {
+fn anthropic_reasoning_effort_preserves_xhigh_for_adaptive_effort() {
     let provider = AnthropicProvider::new();
 
     provider
         .set_reasoning_effort("xhigh")
         .expect("legacy xhigh alias");
 
-    assert_eq!(provider.reasoning_effort().as_deref(), Some("max"));
+    assert_eq!(provider.reasoning_effort().as_deref(), Some("xhigh"));
+    let thinking = provider
+        .current_thinking_config()
+        .expect("alias enables thinking");
+    assert_eq!(thinking.kind, "adaptive");
+    assert_eq!(thinking.budget_tokens, None);
     assert_eq!(
         provider
-            .current_thinking_config()
-            .expect("alias enables thinking")
-            .budget_tokens,
-        16_384.min(provider.max_tokens.saturating_sub(1))
+            .current_output_config()
+            .expect("alias sends output_config")
+            .effort,
+        "xhigh"
     );
 }
 

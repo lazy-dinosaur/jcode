@@ -13,7 +13,6 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use jcode_provider_core::{
     ANTHROPIC_OAUTH_BETA_HEADERS, CompletionOptions, anthropic_effectively_1m,
-    anthropic_is_1m_model as is_1m_model,
     anthropic_map_tool_name_for_oauth as map_tool_name_for_oauth,
     anthropic_map_tool_name_from_oauth as map_tool_name_from_oauth, anthropic_oauth_beta_headers,
     anthropic_stainless_arch as stainless_arch, anthropic_stainless_os as stainless_os,
@@ -585,7 +584,7 @@ pub struct AnthropicProvider {
 }
 
 impl AnthropicProvider {
-    const EFFORTS: [&'static str; 5] = ["none", "low", "medium", "high", "max"];
+    const EFFORTS: [&'static str; 6] = ["none", "low", "medium", "high", "xhigh", "max"];
 
     fn normalize_reasoning_effort(effort: &str) -> Option<&'static str> {
         match effort.trim().to_ascii_lowercase().as_str() {
@@ -593,37 +592,113 @@ impl AnthropicProvider {
             "low" => Some("low"),
             "medium" | "med" => Some("medium"),
             "high" => Some("high"),
-            "max" | "xhigh" => Some("max"),
+            "xhigh" | "extra-high" | "extra_high" => Some("xhigh"),
+            "max" => Some("max"),
             _ => None,
         }
     }
 
-    fn thinking_budget_for_effort(effort: &str) -> Option<u32> {
+    fn effort_for_output_config(effort: &str) -> Option<&'static str> {
+        match Self::normalize_reasoning_effort(effort)? {
+            "none" => None,
+            "low" => Some("low"),
+            "medium" => Some("medium"),
+            "high" => Some("high"),
+            "xhigh" => Some("xhigh"),
+            "max" => Some("max"),
+            _ => None,
+        }
+    }
+
+    fn manual_thinking_budget_for_effort(effort: &str) -> Option<u32> {
         match Self::normalize_reasoning_effort(effort)? {
             "none" => None,
             "low" => Some(1_024),
             "medium" => Some(4_096),
             "high" => Some(8_192),
+            "xhigh" => Some(12_288),
             "max" => Some(16_384),
             _ => None,
         }
     }
 
-    fn current_thinking_config(&self) -> Option<ApiThinking> {
+    fn supports_adaptive_thinking_effort(model: &str) -> bool {
+        let model = strip_1m_suffix(model).trim().to_ascii_lowercase();
+        model.starts_with("claude-opus-4-8")
+            || model.starts_with("claude-opus-4.8")
+            || model.starts_with("claude-opus-4-7")
+            || model.starts_with("claude-opus-4.7")
+            || model.starts_with("claude-opus-4-6")
+            || model.starts_with("claude-opus-4.6")
+            || model.starts_with("claude-sonnet-4-6")
+            || model.starts_with("claude-sonnet-4.6")
+    }
+
+    fn current_reasoning_controls_for_model(
+        &self,
+        model: &str,
+    ) -> (Option<ApiThinking>, Option<ApiOutputConfig>) {
         let effort = self
             .reasoning_effort
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()?;
-        let requested_budget = Self::thinking_budget_for_effort(&effort)?;
+            .clone();
+        let Some(effort) = effort else {
+            return (None, None);
+        };
+
+        let Some(output_effort) = Self::effort_for_output_config(&effort) else {
+            return (None, None);
+        };
+
+        if Self::supports_adaptive_thinking_effort(model) {
+            return (
+                Some(ApiThinking {
+                    kind: "adaptive",
+                    budget_tokens: None,
+                    display: Some("summarized"),
+                }),
+                Some(ApiOutputConfig {
+                    effort: output_effort,
+                }),
+            );
+        }
+
+        let Some(requested_budget) = Self::manual_thinking_budget_for_effort(&effort) else {
+            return (None, None);
+        };
         let max_budget = self.max_tokens.saturating_sub(1);
         if max_budget == 0 {
-            return None;
+            return (None, None);
         }
-        Some(ApiThinking {
-            kind: "enabled",
-            budget_tokens: requested_budget.min(max_budget),
-        })
+        (
+            Some(ApiThinking {
+                kind: "enabled",
+                budget_tokens: Some(requested_budget.min(max_budget)),
+                display: None,
+            }),
+            None,
+        )
+    }
+
+    #[cfg(test)]
+    fn current_thinking_config(&self) -> Option<ApiThinking> {
+        let model = self
+            .model
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        self.current_reasoning_controls_for_model(&model).0
+    }
+
+    #[cfg(test)]
+    fn current_output_config(&self) -> Option<ApiOutputConfig> {
+        let model = self
+            .model
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        self.current_reasoning_controls_for_model(&model).1
     }
 
     fn is_usage_exhausted() -> bool {
@@ -1119,7 +1194,7 @@ impl Provider for AnthropicProvider {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone();
         let api_model = strip_1m_suffix(&model).to_string();
-        let thinking = self.current_thinking_config();
+        let (thinking, output_config) = self.current_reasoning_controls_for_model(&model);
         let temperature = if is_oauth || thinking.is_some() {
             Some(1.0)
         } else {
@@ -1147,6 +1222,7 @@ impl Provider for AnthropicProvider {
             },
             temperature,
             thinking,
+            output_config,
             stream: true,
         };
 
@@ -1326,7 +1402,7 @@ impl Provider for AnthropicProvider {
                 .read()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .as_deref()
-                .and_then(Self::thinking_budget_for_effort)
+                .and_then(Self::effort_for_output_config)
                 .is_some(),
         )
     }
@@ -1445,7 +1521,7 @@ impl Provider for AnthropicProvider {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone();
         let api_model = strip_1m_suffix(&model).to_string();
-        let thinking = self.current_thinking_config();
+        let (thinking, output_config) = self.current_reasoning_controls_for_model(&model);
         let temperature = if is_oauth || thinking.is_some() {
             Some(1.0)
         } else {
@@ -1473,6 +1549,7 @@ impl Provider for AnthropicProvider {
             },
             temperature,
             thinking,
+            output_config,
             stream: true,
         };
 
@@ -1757,7 +1834,7 @@ async fn stream_response(
         // Include prompt-caching beta header
         req = req.header("x-api-key", &token).header(
             "anthropic-beta",
-            if is_1m_model(model_name) {
+            if effectively_1m(model_name) {
                 "prompt-caching-2024-07-31,context-1m-2025-08-07"
             } else {
                 "prompt-caching-2024-07-31"
@@ -2226,6 +2303,8 @@ struct ApiRequest {
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     thinking: Option<ApiThinking>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_config: Option<ApiOutputConfig>,
     stream: bool,
 }
 
@@ -2233,7 +2312,15 @@ struct ApiRequest {
 struct ApiThinking {
     #[serde(rename = "type")]
     kind: &'static str,
-    budget_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    budget_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    display: Option<&'static str>,
+}
+
+#[derive(Serialize, Clone, Copy)]
+struct ApiOutputConfig {
+    effort: &'static str,
 }
 
 #[derive(Serialize, Clone)]

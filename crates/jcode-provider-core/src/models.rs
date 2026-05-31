@@ -198,12 +198,11 @@ pub fn context_limit_for_model_with_provider_and_cache(
         || model.starts_with("claude-opus-4.7")
         || model.starts_with("claude-opus-4-6")
         || model.starts_with("claude-opus-4.6")
+        || model.starts_with("claude-sonnet-4-6")
+        || model.starts_with("claude-sonnet-4.6")
     {
-        return Some(if is_1m { 1_048_576 } else { 200_000 });
-    }
-
-    if model.starts_with("claude-sonnet-4-6") || model.starts_with("claude-sonnet-4.6") {
-        return Some(if is_1m { 1_048_576 } else { 200_000 });
+        let _ = is_1m;
+        return Some(1_048_576);
     }
 
     if model.starts_with("claude-opus-4-5") || model.starts_with("claude-opus-4.5") {
@@ -260,12 +259,20 @@ mod tests {
     #[test]
     fn context_limit_handles_claude_1m_aliases() {
         assert_eq!(
+            context_limit_for_model_with_provider("claude-opus-4-8", Some("claude")),
+            Some(1_048_576)
+        );
+        assert_eq!(
             context_limit_for_model_with_provider("claude-opus-4-8[1m]", Some("claude")),
             Some(1_048_576)
         );
         assert_eq!(
             context_limit_for_model_with_provider("claude-opus-4.8", Some("claude")),
-            Some(200_000)
+            Some(1_048_576)
+        );
+        assert_eq!(
+            context_limit_for_model_with_provider("claude-opus-4-7", Some("claude")),
+            Some(1_048_576)
         );
         assert_eq!(
             context_limit_for_model_with_provider("claude-opus-4-6[1m]", Some("claude")),
@@ -273,6 +280,10 @@ mod tests {
         );
         assert_eq!(
             context_limit_for_model_with_provider("claude-sonnet-4.6", Some("claude")),
+            Some(1_048_576)
+        );
+        assert_eq!(
+            context_limit_for_model_with_provider("claude-opus-4-5", Some("claude")),
             Some(200_000)
         );
     }

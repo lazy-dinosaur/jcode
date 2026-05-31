@@ -122,7 +122,7 @@ impl Agent {
             return false;
         }
 
-        let context_limit = self.provider.context_window() as u64;
+        let compaction_budget = self.compaction_token_budget() as u64;
         let compaction = self.registry.compaction();
 
         let mut overflow_replay_blocks: Option<Vec<ContentBlock>> = None;
@@ -162,7 +162,7 @@ impl Agent {
                             ),
                         }
                     }
-                    manager.update_observed_input_tokens(context_limit);
+                    manager.update_observed_input_tokens(compaction_budget);
                     let usage_pct = manager.context_usage_with(all_messages) * 100.0;
                     let dropped = match manager.hard_compact_with(all_messages) {
                         Ok(dropped) => {
