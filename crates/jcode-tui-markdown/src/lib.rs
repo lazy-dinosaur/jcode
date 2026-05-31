@@ -1298,6 +1298,111 @@ fn repair_glued_list_markers(text: &str) -> String {
     out
 }
 
+fn repair_wrapped_pipe_table_rows(text: &str) -> String {
+    let mut out = Vec::new();
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut in_code_fence = false;
+    let mut fence_char = '\0';
+    let mut fence_len = 0usize;
+    let mut in_pipe_table = false;
+    let mut i = 0usize;
+
+    while i < lines.len() {
+        let line = lines[i];
+
+        if in_code_fence {
+            out.push(line.to_string());
+            if is_closing_fence(line, fence_char, fence_len) {
+                in_code_fence = false;
+                fence_char = '\0';
+                fence_len = 0;
+            }
+            i += 1;
+            continue;
+        }
+
+        if let Some((marker, min_len)) = parse_opening_fence(line) {
+            in_code_fence = true;
+            fence_char = marker;
+            fence_len = min_len;
+            out.push(line.to_string());
+            i += 1;
+            continue;
+        }
+
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            in_pipe_table = false;
+            out.push(line.to_string());
+            i += 1;
+            continue;
+        }
+
+        if is_pipe_table_separator_line(trimmed)
+            && out
+                .last()
+                .is_some_and(|prev| looks_like_pipe_table_row_relaxed(prev))
+        {
+            in_pipe_table = true;
+            out.push(line.to_string());
+            i += 1;
+            continue;
+        }
+
+        if in_pipe_table && looks_like_pipe_table_row_relaxed(line) {
+            let mut row = line.trim_end().to_string();
+            while !row.trim_end().ends_with('|')
+                && i + 1 < lines.len()
+                && is_pipe_table_row_continuation_line(lines[i + 1])
+            {
+                i += 1;
+                row.push(' ');
+                row.push_str(lines[i].trim());
+            }
+            out.push(row);
+            i += 1;
+            continue;
+        }
+
+        if in_pipe_table && !is_pipe_table_row_continuation_line(line) {
+            in_pipe_table = false;
+        }
+        out.push(line.to_string());
+        i += 1;
+    }
+
+    out.join("\n")
+}
+
+fn looks_like_pipe_table_row_relaxed(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.starts_with('|') && trimmed.matches('|').count() >= 2
+}
+
+fn is_pipe_table_separator_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    if !trimmed.starts_with('|') || !trimmed.ends_with('|') {
+        return false;
+    }
+    let cells: Vec<&str> = trimmed.trim_matches('|').split('|').collect();
+    if cells.len() < 2 {
+        return false;
+    }
+    cells.iter().all(|cell| {
+        let cell = cell.trim();
+        cell.chars().all(|ch| matches!(ch, '-' | ':' | ' ' | '\t'))
+            && cell.chars().filter(|ch| *ch == '-').count() >= 3
+    })
+}
+
+fn is_pipe_table_row_continuation_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    !trimmed.is_empty()
+        && !trimmed.starts_with('|')
+        && trimmed.ends_with('|')
+        && (trimmed.starts_with("- ") || trimmed.starts_with("• ") || trimmed.contains('|'))
+}
+
 fn repair_glued_list_markers_in_line(line: &str) -> String {
     let mut out = String::with_capacity(line.len());
     let mut cursor = 0usize;

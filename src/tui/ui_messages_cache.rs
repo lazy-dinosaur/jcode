@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) use jcode_tui_messages::{centered_wrap_width, left_pad_lines_for_centered_mode};
 
-const MESSAGE_RENDER_EPOCH: u64 = 3;
+const MESSAGE_RENDER_EPOCH: u64 = 4;
 
 pub(crate) fn get_cached_message_lines<F>(
     msg: &DisplayMessage,

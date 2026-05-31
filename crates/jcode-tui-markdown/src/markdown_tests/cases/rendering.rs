@@ -495,6 +495,48 @@ fn test_table_render_basic() {
 }
 
 #[test]
+fn test_wrapped_pipe_table_cell_continuation_keeps_following_rows() {
+    let md = "확인하고 싶습니다. 어느 방향인가요?\n\n| 옵션 | 작업 |\n|---|---|\n| A (Recommended) | 일정 알림 토스트를 상단 중앙에 표시 (위치만 변경, 설정 기능 없이) |\n| B | 토스트 위치 선택 설정 기능 신설 (상단중앙/우상단/우하단 등)\n- 그 값 따름 |\n| C | Figma에 토스트 위치 명시가 있는지 다시 확인 (다른 노드/화면) |\n| D | 직접 알려주기 (위치/설정 범위) |\n\n어떻게 할까요?";
+    let rendered: Vec<String> = render_markdown_with_width(md, Some(140))
+        .iter()
+        .map(line_to_string)
+        .collect();
+
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("A (Recommended)") && line.contains("일정 알림")),
+        "A row should render in the table: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("B") && line.contains("그 값 따름")),
+        "B continuation should stay inside the B table row: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("C") && line.contains("Figma")),
+        "C row should remain part of the table: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("D") && line.contains("직접 알려주기")),
+        "D row should remain part of the table: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .all(|line| !line.trim_start().starts_with("• 그 값 따름")
+                && !line.trim_start().starts_with("| C |")
+                && !line.trim_start().starts_with("| D |")),
+        "wrapped table continuation must not leak as a bullet/raw pipe rows: {rendered:?}"
+    );
+}
+
+#[test]
 fn test_paragraph_to_pipe_table_preserves_visible_boundary() {
     let md = "응, 이해했어. 정책은 이렇게 정리하면 맞지?\n| 방 종류 | 예시 | 이름 변경 방식 |\n| --- | --- | --- |\n| 전체/시스템성 부서방 | 전체 채팅 | 개인화 alias |\n핵심 구현 방향";
     let rendered: Vec<String> = render_markdown_with_width(md, Some(180))

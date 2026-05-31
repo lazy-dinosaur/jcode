@@ -6,6 +6,7 @@ pub fn render_markdown_with_width(text: &str, max_width: Option<usize>) -> Vec<L
     let text = escape_currency_dollars(text);
     let text = repair_glued_code_fences(&text);
     let text = repair_glued_list_markers(&text);
+    let text = repair_wrapped_pipe_table_rows(&text);
     let text = repair_glued_markdown_headings(&text);
     let text = repair_line_oriented_markdown_boundaries(&text);
     let text = repair_line_oriented_list_item_continuations(&text);

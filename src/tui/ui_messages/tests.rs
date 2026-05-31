@@ -253,6 +253,43 @@ fn render_assistant_message_splits_recommended_colon_options() {
 }
 
 #[test]
+fn render_assistant_message_keeps_wrapped_table_cell_continuation_in_table() {
+    let msg = DisplayMessage::assistant(
+        "확인하고 싶습니다. 어느 방향인가요?\n\n| 옵션 | 작업 |\n|---|---|\n| A (Recommended) | 일정 알림 토스트를 상단 중앙에 표시 (위치만 변경, 설정 기능 없이) |\n| B | 토스트 위치 선택 설정 기능 신설 (상단중앙/우상단/우하단 등)\n- 그 값 따름 |\n| C | Figma에 토스트 위치 명시가 있는지 다시 확인 (다른 노드/화면) |\n| D | 직접 알려주기 (위치/설정 범위) |\n\n어떻게 할까요?",
+    );
+
+    let lines = render_assistant_message(&msg, 120, crate::config::DiffDisplayMode::Off);
+    let plain_lines = lines.iter().map(extract_line_text).collect::<Vec<_>>();
+
+    assert!(
+        plain_lines
+            .iter()
+            .any(|line| line.contains("B") && line.contains("그 값 따름")),
+        "B continuation should stay in the table row: {plain_lines:?}"
+    );
+    assert!(
+        plain_lines
+            .iter()
+            .any(|line| line.contains("C") && line.contains("Figma")),
+        "C row should render as table output: {plain_lines:?}"
+    );
+    assert!(
+        plain_lines
+            .iter()
+            .any(|line| line.contains("D") && line.contains("직접 알려주기")),
+        "D row should render as table output: {plain_lines:?}"
+    );
+    assert!(
+        plain_lines
+            .iter()
+            .all(|line| !line.trim_start().starts_with("• 그 값 따름")
+                && !line.trim_start().starts_with("| C |")
+                && !line.trim_start().starts_with("| D |")),
+        "wrapped table continuation must not leak as a bullet/raw pipe rows: {plain_lines:?}"
+    );
+}
+
+#[test]
 fn render_system_message_centered_mode_left_aligns_with_padding() {
     let saved = crate::tui::markdown::center_code_blocks();
     crate::tui::markdown::set_center_code_blocks(true);
