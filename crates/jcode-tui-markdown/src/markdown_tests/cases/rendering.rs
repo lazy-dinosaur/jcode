@@ -133,6 +133,35 @@ fn test_glued_alphabetic_option_markers_after_choice_label_are_repaired() {
 }
 
 #[test]
+fn test_alpha_option_marker_glued_directly_after_colon_is_repaired() {
+    let md = "다음은 선택지입니다:A. Track B Phase 3 opt-in response.completed replacement plan/patch 작성 (Recommended) B. Track A workflow 설계 C. dogfood 관찰";
+    let rendered: Vec<String> = render_markdown_with_width(md, Some(180))
+        .iter()
+        .map(line_to_string)
+        .collect();
+
+    assert_eq!(rendered.first().map(String::as_str), Some("다음은 선택지입니다:"));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("A. Track B Phase 3")),
+        "A option should render on its own line after a no-space colon: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("B. Track A workflow")),
+        "B option should render on its own line: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .all(|line| !line.contains("선택지입니다:A.") && !line.contains("Recommended) B.")),
+        "alphabetic options must not remain glued to prose: {rendered:?}"
+    );
+}
+
+#[test]
 fn test_source_newlines_before_alphabetic_option_markers_are_preserved() {
     let md = "선택지:\nA. 내가 중복 함수 하나만 제거 (Recommended)\nB. 네가 직접 getRecipientChatBadge 중복 블록 하나 삭제\nC. 우선 그대로 둠";
     let rendered: Vec<String> = render_markdown_with_width(md, Some(160))

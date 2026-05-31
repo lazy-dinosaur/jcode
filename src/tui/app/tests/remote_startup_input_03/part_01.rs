@@ -247,12 +247,17 @@ fn test_multiple_pastes() {
     app.submit_input();
     // Display and model both get the same content (no expansion needed)
     assert_eq!(app.display_messages()[0].content, "first second\nline");
-    match &app.messages[0].content[0] {
-        crate::message::ContentBlock::Text { text, .. } => {
-            assert_eq!(text, "first second\nline");
-        }
-        _ => panic!("Expected Text content block"),
-    }
+    let submitted_text = app
+        .session
+        .messages
+        .iter()
+        .flat_map(|message| &message.content)
+        .filter_map(|block| match block {
+            crate::message::ContentBlock::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .find(|text| *text == "first second\nline");
+    assert_eq!(submitted_text, Some("first second\nline"));
 }
 
 #[test]

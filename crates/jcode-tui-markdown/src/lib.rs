@@ -1439,7 +1439,7 @@ fn alpha_option_marker_at(
     previous_boundary: char,
 ) -> Option<GluedListMarker> {
     let previous_char = line[..idx].chars().next_back()?;
-    if !previous_char.is_whitespace() {
+    if !previous_char.is_whitespace() && !matches!(previous_char, ':' | ';' | '：') {
         return None;
     }
 
