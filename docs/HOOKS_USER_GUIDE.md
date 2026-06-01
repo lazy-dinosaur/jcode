@@ -43,6 +43,7 @@ Lifecycle hook 은 **jcode 가 turn / tool / session 의 특정 시점에 자동
 |---|---|---|---|
 | `tool.execute.before` | tool 실행 직전 | (현재 미지원, 향후 M35 후속 candidate) | tool 차단, reason 이 tool_result 로 LLM 반환 |
 | `tool.execute.after` | tool 실행 직후 | (현재 미지원, 향후 candidate) | (효과 제한적, tool 결과는 이미 반환됨) |
+| `message.received` | user message 저장 직후, 같은 assistant 응답의 provider 호출 전 | ✅ **현재 turn** 의 system-reminder/user-message 로 inject | reason 이 현재 turn system-reminder 로 inject (fail-open) |
 | `response.completed` | LLM 응답 완료 직후 | ✅ **M35: body 가 다음 turn 의 system-reminder 로 inject + 자동 turn 시작** | M11 stage 6: reason 이 system-reminder 로 inject + 자동 turn 시작 |
 | `session.stop` | session 종료 직전 | 무시 (종료라 의미 없음) | 무시 |
 | `client.disconnect` | client 연결 끊김 | 별도 path 로 enqueue (다음 attach 때 사용) | 무시 |
@@ -53,7 +54,22 @@ Lifecycle hook 은 **jcode 가 turn / tool / session 의 특정 시점에 자동
 
 ## 3. Hook stdin payload (jcode 가 hook 에게 주는 입력)
 
-Hook 은 stdin 으로 한 줄짜리 JSON 을 받습니다. `response.completed` 의 경우 (`src/hooks.rs:ResponseCompletedHookPayload`):
+Hook 은 stdin 으로 한 줄짜리 JSON 을 받습니다. `message.received` 의 경우 (`src/hooks.rs:MessageReceivedHookPayload`):
+
+```json
+{
+  "event": "message.received",
+  "session_id": "session_pig_1778566294013_e74b9231ff84d56e",
+  "message_id": "message_1778566303845_...",
+  "working_dir": "/home/lazydino",
+  "last_user_message": "현재 유저 메시지",
+  "recent_tool_calls": [{"name":"bash","args_preview":"{...}"}],
+  "turn_count": 2,
+  "session_age_seconds": 42
+}
+```
+
+`response.completed` 의 경우 (`src/hooks.rs:ResponseCompletedHookPayload`):
 
 ```json
 {
@@ -94,6 +110,7 @@ Hook 은 stdin 으로 한 줄짜리 JSON 을 받습니다. `response.completed` 
 {"action":"deny","reason":"이유 텍스트"}
 ```
 - `tool.execute.before` 의 경우: tool 차단 + reason 이 tool_result 로 LLM 에 들어감
+- `message.received` 의 경우: reason 이 **현재 turn** system-reminder 로 들어감. hook 실패/timeout 은 fail-open
 - `response.completed` 의 경우: reason 이 system-reminder 로 다음 turn 에 inject + 자동 turn 시작 (M11 stage 6)
 
 ### 4.3 컨텍스트 주입 (inject, M35)
@@ -106,11 +123,12 @@ Hook 은 stdin 으로 한 줄짜리 JSON 을 받습니다. `response.completed` 
   }
 }
 ```
-- `body` (필수, string): LLM 다음 turn 에 보일 텍스트
+- `body` (필수, string): LLM 에 전달할 텍스트
 - `format` (옵션): `"system_reminder"` (기본) 또는 `"user_message"`
   - `system_reminder` → `<system-reminder>...</system-reminder>` 로 wrap
   - `user_message` → wrap 없이 raw user message
-- 효과: jcode 가 그 body 를 user message 로 add 한 후 사용자 입력 없이 자동 다음 LLM turn 시작
+- `message.received` 효과: blocking hook 일 때 같은 assistant 응답의 provider 호출 전에 현재 turn 에 inject
+- `response.completed` 효과: jcode 가 그 body 를 user message 로 add 한 후 사용자 입력 없이 자동 다음 LLM turn 시작
 
 ### 4.4 (참고) 옛 boolean 단순 형태도 지원되지만 권장 안 함
 ```json

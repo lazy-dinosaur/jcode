@@ -405,10 +405,11 @@ bind_addr = "0.0.0.0"
 # Project/local hook commands are appended to global hook commands.
 # Hooks receive a JSON payload on stdin.
 # Blocking tool.execute.before hooks may return {"action":"allow"} or {"action":"deny","reason":"..."}.
-# Blocking lifecycle hooks (response.completed, session.stop, client.disconnect) may also return
-# {"action":"deny","reason":"..."}; the reason is injected as a system reminder into the next user
-# turn. After 3 consecutive denies a loop guard surfaces a single notice telling the model to stop
-# and clears the streak (see M11 stage 3).
+# Blocking message.received hooks run after a user message is stored but before
+# that same turn's provider call. They may return {"action":"allow","inject":{"body":"..."}}
+# to add current-turn context. Blocking response.completed hooks may inject into
+# an immediate continuation turn. client.disconnect/session.stop hooks are
+# observation-oriented.
 enabled = false
 
 # Example: block or allow tool calls before execution.
@@ -425,6 +426,15 @@ enabled = false
 # command = ".jcode/hooks/log-tool.sh"
 # blocking = false
 # timeout_ms = 3000
+
+# Example: add context before the assistant responds to the current user message.
+# Use a short timeout. timeout/failure is fail-open; blocking=false observes only
+# and cannot affect the current provider call.
+# [[hooks.commands]]
+# event = "message.received"
+# command = ".jcode/hooks/message-received.sh"
+# blocking = true
+# timeout_ms = 800
 
 # Example: react to client teardown (M11 stage 4). Fires when a client connection
 # closes or crashes. Preferred over `session.stop` for client-disconnect semantics.
@@ -451,8 +461,8 @@ enabled = false
 # blocking = false
 # timeout_ms = 3000
 
-# M11 stage 5: lifecycle hook payloads (response.completed, session.stop,
-# client.disconnect) carry these optional context fields. They are omitted
+# M11/M36: lifecycle hook payloads (message.received, response.completed,
+# session.stop, client.disconnect) carry these optional context fields. They are omitted
 # from the JSON when empty so existing scripts keep working unchanged:
 #
 #   last_user_message     string  Most recent user-authored input

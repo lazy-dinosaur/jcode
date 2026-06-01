@@ -24,6 +24,7 @@ pub(super) async fn process_turn_with_input(
     event_stream: &mut EventStream,
     bus_receiver: &mut Receiver<BusEvent>,
 ) {
+    app.fire_message_received_hook_for_latest_user().await;
     match app
         .run_turn_interactive(terminal, event_stream, Some(bus_receiver))
         .await

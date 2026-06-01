@@ -643,6 +643,10 @@ pub struct App {
     // queue instead of being sent as their own interleave turn.
     batch_recovered_soft_interrupts_with_queue: bool,
     current_turn_system_reminder: Option<String>,
+    // Last user message ID for which the local TUI fired `message.received`.
+    // Prevents retries/rate-limit wakeups from re-running a pre-turn hook for
+    // an old message when no new user input was received.
+    last_message_received_hook_message_id: Option<String>,
     // Live token usage (per turn)
     streaming_input_tokens: u64,
     streaming_output_tokens: u64,

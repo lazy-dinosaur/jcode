@@ -1,4 +1,6 @@
 use crate::config::config;
+use crate::message::{ContentBlock, Role};
+use crate::session::StoredMessage;
 use crate::tool::{ToolContext, ToolOutput};
 use crate::turn::bg_completion::parse_injection_format;
 use crate::turn::injected_context::{
@@ -35,6 +37,11 @@ pub const SESSION_STOP: &str = "session.stop";
 /// migrate by changing only the `event` field they filter on.
 pub const CLIENT_DISCONNECT: &str = "client.disconnect";
 pub const RESPONSE_COMPLETED: &str = "response.completed";
+/// Emitted after a user message is appended to the session, but before the
+/// provider request for that same turn is built. Blocking hooks may return an
+/// `inject` payload that is merged into the current turn before the first model
+/// call/tool decision.
+pub const MESSAGE_RECEIVED: &str = "message.received";
 
 /// M10: tracker for non-blocking hook tasks so single-shot CLI commands
 /// (`jcode run`, etc) can await pending lifecycle/tool hooks before the
@@ -170,6 +177,25 @@ pub struct ResponseCompletedHookPayload<'a> {
     pub session_age_seconds: Option<u64>,
 }
 
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct MessageReceivedHookPayload<'a> {
+    pub event: &'a str,
+    pub session_id: &'a str,
+    /// ID of the user message that just entered the transcript.
+    pub message_id: &'a str,
+    pub working_dir: Option<String>,
+    /// Most recent real user-authored message, excluding internal
+    /// `<system-reminder>` injections and tool-result-only user messages.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_user_message: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub recent_tool_calls: Vec<LifecycleHookToolCallPreview>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_age_seconds: Option<u64>,
+}
+
 /// M11 stage 5: compact tool-call summary embedded in lifecycle hook payloads.
 /// `args_preview` is a one-line, truncated rendering of the tool input
 /// (`LIFECYCLE_HOOK_TOOL_ARGS_PREVIEW_MAX` chars) so hook scripts can match
@@ -292,6 +318,127 @@ pub async fn run_response_hooks(
         &payload,
     )
     .await
+}
+
+pub async fn run_message_received_hooks(
+    payload: MessageReceivedHookPayload<'_>,
+) -> Result<Option<LifecycleHookDecision>> {
+    run_lifecycle_hooks(
+        MESSAGE_RECEIVED,
+        payload.session_id,
+        payload.working_dir.as_deref(),
+        &payload,
+    )
+    .await
+}
+
+/// Extract the most recent real user-authored text from a transcript. Internal
+/// `<system-reminder>` injections and tool-result-only user messages are skipped
+/// so lifecycle hooks see the human prompt that triggered the turn.
+pub fn lifecycle_last_user_message_from_messages(messages: &[StoredMessage]) -> Option<String> {
+    for stored in messages.iter().rev() {
+        if !matches!(stored.role, Role::User) {
+            continue;
+        }
+        let text = stored.content.iter().find_map(|block| match block {
+            ContentBlock::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })?;
+        let trimmed = text.trim();
+        if trimmed.is_empty() || trimmed.starts_with("<system-reminder>") {
+            continue;
+        }
+        return Some(truncate_with_ellipsis(
+            trimmed,
+            LIFECYCLE_HOOK_LAST_USER_MESSAGE_MAX,
+        ));
+    }
+    None
+}
+
+/// Build the last-N tool-call previews from the transcript, oldest of the kept
+/// window first. This is shared by post-response and pre-turn lifecycle hooks.
+pub fn lifecycle_recent_tool_calls_from_messages(
+    messages: &[StoredMessage],
+) -> Vec<LifecycleHookToolCallPreview> {
+    let mut collected: Vec<LifecycleHookToolCallPreview> = Vec::new();
+    for stored in messages.iter().rev() {
+        for block in stored.content.iter().rev() {
+            if let ContentBlock::ToolUse { name, input, .. } = block {
+                collected.push(LifecycleHookToolCallPreview {
+                    name: name.clone(),
+                    args_preview: build_tool_args_preview(input),
+                });
+                if collected.len() >= LIFECYCLE_HOOK_RECENT_TOOL_CALLS_MAX {
+                    break;
+                }
+            }
+        }
+        if collected.len() >= LIFECYCLE_HOOK_RECENT_TOOL_CALLS_MAX {
+            break;
+        }
+    }
+    collected.reverse();
+    collected
+}
+
+/// Count contiguous runs of real user-authored messages, ignoring internal
+/// reminders and tool-result-only user messages.
+pub fn lifecycle_turn_count_from_messages(messages: &[StoredMessage]) -> usize {
+    let mut count = 0usize;
+    let mut last_was_user = false;
+    for stored in messages {
+        if matches!(stored.role, Role::User) {
+            let is_reminder = stored.content.iter().any(|block| match block {
+                ContentBlock::Text { text, .. } => {
+                    text.trim_start().starts_with("<system-reminder>")
+                }
+                _ => false,
+            });
+            let is_tool_result_only = stored
+                .content
+                .iter()
+                .all(|block| matches!(block, ContentBlock::ToolResult { .. }));
+            if is_reminder || is_tool_result_only {
+                continue;
+            }
+            if !last_was_user {
+                count += 1;
+            }
+            last_was_user = true;
+        } else {
+            last_was_user = false;
+        }
+    }
+    count
+}
+
+pub fn lifecycle_session_age_seconds(created_at: chrono::DateTime<chrono::Utc>) -> u64 {
+    let now = chrono::Utc::now();
+    let elapsed = now.signed_duration_since(created_at);
+    elapsed.num_seconds().max(0) as u64
+}
+
+pub fn truncate_with_ellipsis(input: &str, max_chars: usize) -> String {
+    let trimmed = input.trim();
+    if trimmed.chars().count() <= max_chars {
+        return trimmed.to_string();
+    }
+    let mut out: String = trimmed.chars().take(max_chars).collect();
+    out.push('…');
+    out
+}
+
+/// Render a tool-input JSON value as a compact single-line preview suitable for
+/// lifecycle hook payloads.
+pub fn build_tool_args_preview(input: &serde_json::Value) -> String {
+    let raw = if input.is_null() {
+        String::new()
+    } else {
+        serde_json::to_string(input).unwrap_or_default()
+    };
+    let collapsed: String = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    truncate_with_ellipsis(&collapsed, LIFECYCLE_HOOK_TOOL_ARGS_PREVIEW_MAX)
 }
 
 async fn run_tool_hooks(
@@ -1246,6 +1393,31 @@ mod tests {
 
         let value = serde_json::to_value(payload).unwrap();
         assert_eq!(value["stop_hook_active"], true);
+    }
+
+    #[test]
+    fn message_received_payload_serializes_with_context_fields() {
+        let payload = MessageReceivedHookPayload {
+            event: MESSAGE_RECEIVED,
+            session_id: "sess-1",
+            message_id: "msg-user-1",
+            working_dir: Some("/tmp/work".to_string()),
+            last_user_message: Some("current ask".to_string()),
+            recent_tool_calls: vec![LifecycleHookToolCallPreview {
+                name: "bash".to_string(),
+                args_preview: r#"{"command":"git status"}"#.to_string(),
+            }],
+            turn_count: Some(4),
+            session_age_seconds: Some(120),
+        };
+
+        let value = serde_json::to_value(payload).unwrap();
+        assert_eq!(value["event"], MESSAGE_RECEIVED);
+        assert_eq!(value["message_id"], "msg-user-1");
+        assert_eq!(value["last_user_message"], "current ask");
+        assert_eq!(value["recent_tool_calls"][0]["name"], "bash");
+        assert_eq!(value["turn_count"], 4);
+        assert_eq!(value["session_age_seconds"], 120);
     }
 
     #[test]

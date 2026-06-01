@@ -22,6 +22,120 @@ impl App {
         split.dynamic_part.push_str(reminder);
     }
 
+    pub(super) fn merge_current_turn_system_reminder_text(&mut self, reminder: String) {
+        let current = self.current_turn_system_reminder.take().and_then(|value| {
+            let trimmed = value.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        });
+        let pending = {
+            let trimmed = reminder.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        };
+        self.current_turn_system_reminder = match (current, pending) {
+            (Some(current), Some(pending)) => Some(format!("{current}\n\n{pending}")),
+            (Some(current), None) => Some(current),
+            (None, Some(pending)) => Some(pending),
+            (None, None) => None,
+        };
+    }
+
+    fn latest_real_user_message_id(&self) -> Option<String> {
+        self.session.messages.iter().rev().find_map(|stored| {
+            if !matches!(stored.role, Role::User) {
+                return None;
+            }
+            let is_reminder = stored.content.iter().any(|block| match block {
+                ContentBlock::Text { text, .. } => {
+                    text.trim_start().starts_with("<system-reminder>")
+                }
+                _ => false,
+            });
+            let is_tool_result_only = stored
+                .content
+                .iter()
+                .all(|block| matches!(block, ContentBlock::ToolResult { .. }));
+            if is_reminder || is_tool_result_only {
+                return None;
+            }
+            Some(stored.id.clone())
+        })
+    }
+
+    pub(super) fn apply_message_received_inject_to_current_turn(
+        &mut self,
+        inject: crate::hooks::HookInjectContinuation,
+    ) {
+        let trimmed = inject.body.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+
+        match inject.format {
+            crate::turn::injected_context::InjectionFormat::SystemReminder => {
+                self.merge_current_turn_system_reminder_text(trimmed.to_string());
+            }
+            crate::turn::injected_context::InjectionFormat::UserMessage => {
+                self.add_provider_message(Message::user(trimmed));
+                let injected_message_id = self.session.add_message(
+                    Role::User,
+                    vec![ContentBlock::Text {
+                        text: trimmed.to_string(),
+                        cache_control: None,
+                    }],
+                );
+                self.last_message_received_hook_message_id = Some(injected_message_id);
+                self.session_save_pending = true;
+            }
+        }
+    }
+
+    pub(super) async fn fire_message_received_hook_for_latest_user(&mut self) {
+        let Some(message_id) = self.latest_real_user_message_id() else {
+            return;
+        };
+        if self.last_message_received_hook_message_id.as_deref() == Some(message_id.as_str()) {
+            return;
+        }
+        self.last_message_received_hook_message_id = Some(message_id.clone());
+
+        let payload = crate::hooks::MessageReceivedHookPayload {
+            event: crate::hooks::MESSAGE_RECEIVED,
+            session_id: &self.session.id,
+            message_id: &message_id,
+            working_dir: self.session.working_dir.clone(),
+            last_user_message: crate::hooks::lifecycle_last_user_message_from_messages(
+                &self.session.messages,
+            ),
+            recent_tool_calls: crate::hooks::lifecycle_recent_tool_calls_from_messages(
+                &self.session.messages,
+            ),
+            turn_count: Some(crate::hooks::lifecycle_turn_count_from_messages(
+                &self.session.messages,
+            )),
+            session_age_seconds: Some(crate::hooks::lifecycle_session_age_seconds(
+                self.session.created_at,
+            )),
+        };
+
+        match crate::hooks::run_message_received_hooks(payload).await {
+            Ok(Some(crate::hooks::LifecycleHookDecision::Inject(inject))) => {
+                self.apply_message_received_inject_to_current_turn(inject);
+            }
+            Ok(Some(crate::hooks::LifecycleHookDecision::Deny(reason))) => {
+                let trimmed = reason.trim();
+                if !trimmed.is_empty() {
+                    self.merge_current_turn_system_reminder_text(format!(
+                        "A message.received hook returned a pre-turn instruction. Follow it before responding:\n\n{trimmed}"
+                    ));
+                }
+            }
+            Ok(None) => {}
+            Err(err) => {
+                crate::logging::warn(&format!("message.received hook failed: {err:#}"));
+            }
+        }
+    }
+
     /// Run turn with interactive input handling (redraws UI, accepts input during streaming)
     pub(super) async fn run_turn_interactive(
         &mut self,

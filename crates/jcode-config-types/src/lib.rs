@@ -686,7 +686,8 @@ pub struct AutoJudgeConfig {
 /// Command hook configuration.
 ///
 /// Hook support covers tool and lifecycle boundaries:
-/// `tool.execute.before`, `tool.execute.after`, `session.stop`, and `response.completed`.
+/// `tool.execute.before`, `tool.execute.after`, `message.received`,
+/// `session.stop`, and `response.completed`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HooksConfig {
@@ -709,7 +710,8 @@ impl Default for HooksConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HookCommandConfig {
-    /// Event name, e.g. `tool.execute.before`, `tool.execute.after`, `session.stop`, or `response.completed`.
+    /// Event name, e.g. `tool.execute.before`, `tool.execute.after`,
+    /// `message.received`, `session.stop`, or `response.completed`.
     pub event: String,
     /// Optional tool name matcher. Empty means all tools.
     pub tool: Option<String>,

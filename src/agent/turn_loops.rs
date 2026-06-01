@@ -124,6 +124,43 @@ impl Agent {
         }
     }
 
+    pub(super) fn merge_current_turn_system_reminder_text(&mut self, reminder: String) {
+        self.current_turn_system_reminder = Self::merge_current_and_pending_system_reminders(
+            self.current_turn_system_reminder.take(),
+            Some(reminder),
+        );
+    }
+
+    pub(super) fn apply_message_received_inject_to_current_turn(
+        &mut self,
+        inject: crate::hooks::HookInjectContinuation,
+    ) {
+        let trimmed = inject.body.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+
+        match inject.format {
+            crate::turn::injected_context::InjectionFormat::SystemReminder => {
+                self.merge_current_turn_system_reminder_text(trimmed.to_string());
+            }
+            crate::turn::injected_context::InjectionFormat::UserMessage => {
+                self.add_message(
+                    Role::User,
+                    vec![ContentBlock::Text {
+                        text: trimmed.to_string(),
+                        cache_control: None,
+                    }],
+                );
+                if let Err(err) = self.session.save() {
+                    logging::warn(&format!(
+                        "[message.received] failed to save session after user_message inject: {err:#}"
+                    ));
+                }
+            }
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn inject_lifecycle_reminder_for_continuation_for_tests(&mut self) {
         self.inject_lifecycle_reminder_for_continuation();
@@ -206,29 +243,7 @@ impl Agent {
     /// chars (with a `…` suffix on overflow). Returns None for empty
     /// transcripts or when no user-authored message is found.
     pub(crate) fn lifecycle_hook_last_user_message(&self) -> Option<String> {
-        for stored in self.session.messages.iter().rev() {
-            if !matches!(stored.role, Role::User) {
-                continue;
-            }
-            // Find first plain text block; skip tool results, images, etc.
-            let text = stored.content.iter().find_map(|block| match block {
-                ContentBlock::Text { text, .. } => Some(text.as_str()),
-                _ => None,
-            })?;
-            let trimmed = text.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            // Skip injected system reminders (these aren't real user input).
-            if trimmed.starts_with("<system-reminder>") {
-                continue;
-            }
-            return Some(truncate_with_ellipsis(
-                trimmed,
-                crate::hooks::LIFECYCLE_HOOK_LAST_USER_MESSAGE_MAX,
-            ));
-        }
-        None
+        crate::hooks::lifecycle_last_user_message_from_messages(&self.session.messages)
     }
 
     /// M11 stage 5: build the last-N tool-call previews from the session
@@ -238,64 +253,19 @@ impl Agent {
     pub(crate) fn lifecycle_hook_recent_tool_calls(
         &self,
     ) -> Vec<crate::hooks::LifecycleHookToolCallPreview> {
-        let mut collected: Vec<crate::hooks::LifecycleHookToolCallPreview> = Vec::new();
-        for stored in self.session.messages.iter().rev() {
-            for block in stored.content.iter().rev() {
-                if let ContentBlock::ToolUse { name, input, .. } = block {
-                    collected.push(crate::hooks::LifecycleHookToolCallPreview {
-                        name: name.clone(),
-                        args_preview: build_tool_args_preview(input),
-                    });
-                    if collected.len() >= crate::hooks::LIFECYCLE_HOOK_RECENT_TOOL_CALLS_MAX {
-                        break;
-                    }
-                }
-            }
-            if collected.len() >= crate::hooks::LIFECYCLE_HOOK_RECENT_TOOL_CALLS_MAX {
-                break;
-            }
-        }
-        collected.reverse();
-        collected
+        crate::hooks::lifecycle_recent_tool_calls_from_messages(&self.session.messages)
     }
 
     /// M11 stage 5: session_age_seconds derived from Session::created_at.
     /// Clamped to 0 if the system clock moved backwards.
     pub(crate) fn lifecycle_hook_session_age_seconds(&self) -> u64 {
-        let now = chrono::Utc::now();
-        let elapsed = now.signed_duration_since(self.session.created_at);
-        elapsed.num_seconds().max(0) as u64
+        crate::hooks::lifecycle_session_age_seconds(self.session.created_at)
     }
 
     /// M11 stage 5: count user-authored turns observed so far. Each contiguous
     /// run of user messages (ignoring system reminders) counts as one turn.
     pub(crate) fn lifecycle_hook_turn_count(&self) -> usize {
-        let mut count = 0usize;
-        let mut last_was_user = false;
-        for stored in &self.session.messages {
-            if matches!(stored.role, Role::User) {
-                let is_reminder = stored.content.iter().any(|block| match block {
-                    ContentBlock::Text { text, .. } => {
-                        text.trim_start().starts_with("<system-reminder>")
-                    }
-                    _ => false,
-                });
-                let is_tool_result_only = stored
-                    .content
-                    .iter()
-                    .all(|block| matches!(block, ContentBlock::ToolResult { .. }));
-                if is_reminder || is_tool_result_only {
-                    continue;
-                }
-                if !last_was_user {
-                    count += 1;
-                }
-                last_was_user = true;
-            } else {
-                last_was_user = false;
-            }
-        }
-        count
+        crate::hooks::lifecycle_turn_count_from_messages(&self.session.messages)
     }
 
     pub(super) fn merge_current_and_pending_system_reminders(
@@ -369,6 +339,37 @@ impl Agent {
             Err(err) => {
                 logging::warn(&format!("response.completed hook failed: {err:#}"));
                 LifecycleHookOutcome::Stop
+            }
+        }
+    }
+
+    pub(super) async fn fire_message_received_hook(&mut self, message_id: &str) {
+        let payload = crate::hooks::MessageReceivedHookPayload {
+            event: crate::hooks::MESSAGE_RECEIVED,
+            session_id: &self.session.id,
+            message_id,
+            working_dir: self.session.working_dir.clone(),
+            last_user_message: self.lifecycle_hook_last_user_message(),
+            recent_tool_calls: self.lifecycle_hook_recent_tool_calls(),
+            turn_count: Some(self.lifecycle_hook_turn_count()),
+            session_age_seconds: Some(self.lifecycle_hook_session_age_seconds()),
+        };
+
+        match crate::hooks::run_message_received_hooks(payload).await {
+            Ok(Some(crate::hooks::LifecycleHookDecision::Inject(inject))) => {
+                self.apply_message_received_inject_to_current_turn(inject);
+            }
+            Ok(Some(crate::hooks::LifecycleHookDecision::Deny(reason))) => {
+                let trimmed = reason.trim();
+                if !trimmed.is_empty() {
+                    self.merge_current_turn_system_reminder_text(format!(
+                        "A message.received hook returned a pre-turn instruction. Follow it before responding:\n\n{trimmed}"
+                    ));
+                }
+            }
+            Ok(None) => {}
+            Err(err) => {
+                logging::warn(&format!("message.received hook failed: {err:#}"));
             }
         }
     }
@@ -1400,35 +1401,4 @@ impl Agent {
 
         Ok(final_text)
     }
-}
-
-/// M11 stage 5: truncate a string to `max_chars` Unicode chars and append
-/// `…` if truncation occurred. Operates on char boundaries (NOT bytes) so
-/// non-ASCII text such as Korean is never split mid-codepoint.
-fn truncate_with_ellipsis(input: &str, max_chars: usize) -> String {
-    let trimmed = input.trim();
-    if trimmed.chars().count() <= max_chars {
-        return trimmed.to_string();
-    }
-    let mut out: String = trimmed.chars().take(max_chars).collect();
-    out.push('…');
-    out
-}
-
-/// M11 stage 5: render a tool-input JSON value as a compact, single-line
-/// preview suitable for `args_preview`. Newlines collapse to spaces and the
-/// string is truncated to `LIFECYCLE_HOOK_TOOL_ARGS_PREVIEW_MAX` chars.
-fn build_tool_args_preview(input: &serde_json::Value) -> String {
-    let raw = if input.is_null() {
-        String::new()
-    } else {
-        serde_json::to_string(input).unwrap_or_default()
-    };
-    // Collapse all whitespace runs (including newlines) into a single space
-    // so the preview reads as one line.
-    let collapsed: String = raw.split_whitespace().collect::<Vec<_>>().join(" ");
-    truncate_with_ellipsis(
-        &collapsed,
-        crate::hooks::LIFECYCLE_HOOK_TOOL_ARGS_PREVIEW_MAX,
-    )
 }

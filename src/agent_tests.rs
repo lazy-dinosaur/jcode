@@ -45,6 +45,10 @@ struct PendingAfterTextProvider {
     text_sent: Arc<tokio::sync::Notify>,
 }
 
+struct CapturingSplitProvider {
+    captured_dynamic: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
 struct CancelAwareTool {
     entered: Arc<tokio::sync::Notify>,
     observed_cancel: Arc<AtomicBool>,
@@ -68,6 +72,18 @@ impl SequentialProvider {
                 calls: calls.clone(),
             },
             calls,
+        )
+    }
+}
+
+impl CapturingSplitProvider {
+    fn new() -> (Self, Arc<std::sync::Mutex<Vec<String>>>) {
+        let captured_dynamic = Arc::new(std::sync::Mutex::new(Vec::new()));
+        (
+            Self {
+                captured_dynamic: captured_dynamic.clone(),
+            },
+            captured_dynamic,
         )
     }
 }
@@ -208,6 +224,54 @@ impl Provider for SequentialProvider {
         Arc::new(Self {
             responses: std::sync::Mutex::new(responses),
             calls: self.calls.clone(),
+        })
+    }
+}
+
+#[async_trait]
+impl Provider for CapturingSplitProvider {
+    async fn complete(
+        &self,
+        _messages: &[Message],
+        _tools: &[ToolDefinition],
+        _system: &str,
+        _resume_session_id: Option<&str>,
+    ) -> Result<EventStream> {
+        let (tx, rx) = tokio_mpsc::channel::<Result<StreamEvent>>(8);
+        tokio::spawn(async move {
+            let _ = tx.send(Ok(StreamEvent::TextDelta("ok".to_string()))).await;
+            let _ = tx
+                .send(Ok(StreamEvent::MessageEnd {
+                    stop_reason: Some("end_turn".to_string()),
+                }))
+                .await;
+        });
+        Ok(Box::pin(ReceiverStream::new(rx)))
+    }
+
+    async fn complete_split_with_options(
+        &self,
+        _messages: &[Message],
+        _tools: &[ToolDefinition],
+        _system_static: &str,
+        system_dynamic: &str,
+        _resume_session_id: Option<&str>,
+        _options: CompletionOptions,
+    ) -> Result<EventStream> {
+        self.captured_dynamic
+            .lock()
+            .expect("captured dynamic lock")
+            .push(system_dynamic.to_string());
+        self.complete(&[], &[], "", None).await
+    }
+
+    fn name(&self) -> &str {
+        "capturing-split"
+    }
+
+    fn fork(&self) -> Arc<dyn Provider> {
+        Arc::new(Self {
+            captured_dynamic: self.captured_dynamic.clone(),
         })
     }
 }
@@ -2039,6 +2103,80 @@ async fn hook_inject_respects_deny_streak_cap() {
         super::turn_loops::LifecycleHookOutcome::Stop
     ));
     assert_eq!(agent.lifecycle_deny_streak_for_tests(), 3);
+}
+
+#[tokio::test]
+async fn message_received_hook_injects_into_same_turn_system_prompt() {
+    let _guard = crate::storage::lock_test_env();
+    let temp = tempfile::TempDir::new().expect("tempdir");
+    let payload_path = temp.path().join("message-received-payload.json");
+    let prev_home = std::env::var_os("JCODE_HOME");
+    crate::env::set_var("JCODE_HOME", temp.path());
+    std::fs::write(
+        temp.path().join("config.toml"),
+        format!(
+            r#"
+[hooks]
+enabled = true
+
+[[hooks.commands]]
+event = "message.received"
+command = '''cat > '{}'; printf '%s' '{{"action":"allow","inject":{{"body":"Relevant lazy-harness rules","format":"system_reminder"}}}}' '''
+blocking = true
+timeout_ms = 1000
+"#,
+            payload_path.display()
+        ),
+    )
+    .expect("write config");
+    crate::config::reset_config_cache_for_tests();
+
+    let (provider_impl, captured_dynamic) = CapturingSplitProvider::new();
+    let provider: Arc<dyn Provider> = Arc::new(provider_impl);
+    let registry = Registry::new(provider.clone()).await;
+    let mut agent = Agent::new(provider, registry);
+
+    let output = agent
+        .run_once_capture("hello hook")
+        .await
+        .expect("turn should complete");
+    assert_eq!(output, "ok");
+
+    let dynamic_prompts = captured_dynamic.lock().expect("captured dynamic lock");
+    assert_eq!(dynamic_prompts.len(), 1);
+    assert!(
+        dynamic_prompts[0].contains("Relevant lazy-harness rules"),
+        "message.received inject must be visible to the same provider call, got: {}",
+        dynamic_prompts[0]
+    );
+
+    let payload: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&payload_path).expect("hook payload should be written"),
+    )
+    .expect("payload should be json");
+    assert_eq!(payload["event"], crate::hooks::MESSAGE_RECEIVED);
+    assert_eq!(payload["last_user_message"], "hello hook");
+    assert_eq!(payload["turn_count"], 1);
+    let user_message = agent
+        .session
+        .messages
+        .iter()
+        .find(|message| {
+            matches!(message.role, Role::User)
+                && message.content.iter().any(|block| match block {
+                    ContentBlock::Text { text, .. } => text == "hello hook",
+                    _ => false,
+                })
+        })
+        .expect("session should contain submitted user message");
+    assert_eq!(payload["message_id"], user_message.id);
+
+    if let Some(prev_home) = prev_home {
+        crate::env::set_var("JCODE_HOME", prev_home);
+    } else {
+        crate::env::remove_var("JCODE_HOME");
+    }
+    crate::config::reset_config_cache_for_tests();
 }
 
 #[test]

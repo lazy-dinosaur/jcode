@@ -2801,6 +2801,8 @@ impl App {
             self.is_processing = true;
             self.status = ProcessingStatus::Sending;
 
+            self.fire_message_received_hook_for_latest_user().await;
+
             match self
                 .run_turn_interactive(terminal, event_stream, None)
                 .await

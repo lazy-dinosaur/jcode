@@ -195,7 +195,7 @@ impl Agent {
     /// Run a single turn with the given user message
     pub async fn run_once(&mut self, user_message: &str) -> Result<()> {
         self.inject_pending_context_for_turn().await?;
-        self.add_message(
+        let user_message_id = self.add_message(
             Role::User,
             vec![ContentBlock::Text {
                 text: user_message.to_string(),
@@ -208,6 +208,7 @@ impl Agent {
         }
         self.reset_lifecycle_deny_streak_for_user_turn();
         self.current_turn_system_reminder = self.take_pending_lifecycle_system_reminder();
+        self.fire_message_received_hook(&user_message_id).await;
         let _ = self.run_turn(true).await?;
         self.current_turn_system_reminder = None;
         Ok(())
@@ -232,7 +233,7 @@ impl Agent {
 
         let result = async {
             self.inject_pending_context_for_turn().await?;
-            self.add_message(
+            let user_message_id = self.add_message(
                 Role::User,
                 vec![ContentBlock::Text {
                     text: user_message.to_string(),
@@ -245,6 +246,7 @@ impl Agent {
             }
             self.reset_lifecycle_deny_streak_for_user_turn();
             self.current_turn_system_reminder = self.take_pending_lifecycle_system_reminder();
+            self.fire_message_received_hook(&user_message_id).await;
             self.run_turn(false).await
         }
         .await;
@@ -276,7 +278,7 @@ impl Agent {
             );
         }
 
-        self.add_message(
+        let user_message_id = self.add_message(
             Role::User,
             vec![ContentBlock::Text {
                 text: user_message.to_string(),
@@ -286,6 +288,7 @@ impl Agent {
         self.session.save()?;
         self.reset_lifecycle_deny_streak_for_user_turn();
         self.current_turn_system_reminder = self.take_pending_lifecycle_system_reminder();
+        self.fire_message_received_hook(&user_message_id).await;
         let result = self.run_turn_streaming(event_tx).await;
         self.current_turn_system_reminder = None;
         result
@@ -340,9 +343,10 @@ impl Agent {
             ));
         }
 
-        self.add_message(Role::User, blocks);
+        let user_message_id = self.add_message(Role::User, blocks);
         crate::telemetry::record_turn();
         self.session.save()?;
+        self.fire_message_received_hook(&user_message_id).await;
         let result = self.run_turn_streaming_mpsc(event_tx).await;
         self.current_turn_system_reminder = None;
         result
