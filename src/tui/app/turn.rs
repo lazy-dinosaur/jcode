@@ -35,6 +35,7 @@ impl App {
         // cancel the fresh turn immediately.
         self.cancel_requested = false;
         self.manual_tool_cancel_signal = None;
+        self.manual_tool_background_signal = None;
         self.escape_interrupt_armed_until = None;
 
         let eager_stream_redraw = !crate::perf::tui_policy().enable_decorative_animations;
@@ -1121,7 +1122,13 @@ impl App {
                 let tool_name = tc.name.clone();
                 let tool_input = tc.input.clone();
                 let tool_start = Instant::now();
-                let mut tool_future = std::pin::pin!(registry.execute(&tool_name, tool_input, ctx));
+                let tool_handle =
+                    tokio::spawn(
+                        async move { registry.execute(&tool_name, tool_input, ctx).await },
+                    );
+                let mut tool_handle = tool_handle;
+                let background_signal = crate::agent::InterruptSignal::new();
+                self.manual_tool_background_signal = Some(background_signal.clone());
 
                 // Subscribe to bus for subagent status updates
                 let mut bus_receiver = Bus::global().subscribe();
@@ -1131,6 +1138,10 @@ impl App {
                 let result = loop {
                     tokio::select! {
                         biased;
+                        // Move the running foreground tool into the background task manager.
+                        _ = background_signal.notified() => {
+                            break None;
+                        }
                         // Handle keyboard input while tool executes
                         event = event_stream.next() => {
                             match event {
@@ -1140,6 +1151,8 @@ impl App {
                                         let scroll_only = super::input::is_scroll_only_key(self, key.code, key.modifiers);
                                         let _ = self.handle_key_press_event(key);
                                         if self.cancel_requested {
+                                            self.manual_tool_background_signal = None;
+                                            tool_handle.abort();
                                             self.cancel_requested = false;
                                             self.interleave_message = None;
                                             self.pending_soft_interrupts.clear();
@@ -1233,15 +1246,65 @@ impl App {
                             terminal.draw(|frame| crate::tui::ui::draw(frame, self))?;
                         }
                         // Poll tool execution
-                        result = &mut tool_future => {
-                            break result;
+                        result = &mut tool_handle => {
+                            break Some(match result {
+                                Ok(result) => result,
+                                Err(error) => Err(anyhow::anyhow!("Tool task panicked: {}", error)),
+                            });
                         }
                     }
                 };
 
+                self.manual_tool_background_signal = None;
+                let tool_duration_ms = tool_start.elapsed().as_millis() as u64;
+                let Some(result) = result else {
+                    self.subagent_status = None;
+                    self.batch_progress = None;
+
+                    let bg_info = crate::background::global()
+                        .adopt(&tc.name, &self.session.id, tool_handle)
+                        .await;
+                    let bg_msg = format!(
+                        "Tool '{}' was moved to background by the user (task_id: {}). \
+                         Use the `bg` tool with action 'wait' to wait for completion/checkpoints, \
+                         or action 'status'/'output' to inspect it.",
+                        tc.name, bg_info.task_id
+                    );
+
+                    Bus::global().publish(BusEvent::ToolUpdated(ToolEvent {
+                        session_id: self.session.id.clone(),
+                        message_id: message_id.clone(),
+                        tool_call_id: tc.id.clone(),
+                        tool_name: tc.name.clone(),
+                        status: ToolStatus::Completed,
+                        title: None,
+                    }));
+
+                    let _ = self.replace_latest_tool_display_message(&tc.id, None, bg_msg.clone());
+                    self.observe_tool_result(&tc, &bg_msg, false, None);
+                    self.add_provider_message(Message::tool_result_with_duration(
+                        &tc.id,
+                        &bg_msg,
+                        false,
+                        Some(tool_duration_ms),
+                    ));
+                    self.session.add_message_with_duration(
+                        Role::User,
+                        vec![ContentBlock::ToolResult {
+                            tool_use_id: tc.id.clone(),
+                            content: bg_msg,
+                            is_error: None,
+                        }],
+                        Some(tool_duration_ms),
+                    );
+                    let _ = self.session.save();
+                    self.streaming_tool_calls.clear();
+                    self.set_status_notice("Tool moved to background");
+                    return Ok(());
+                };
+
                 self.subagent_status = None; // Clear status after tool completes
                 self.batch_progress = None; // Clear batch progress after tool completes
-                let tool_duration_ms = tool_start.elapsed().as_millis() as u64;
                 let (output, is_error, tool_title) = match result {
                     Ok(o) => {
                         Bus::global().publish(BusEvent::ToolUpdated(ToolEvent {

@@ -273,6 +273,14 @@ async fn handle_remote_key_internal(
         return Ok(());
     }
 
+    if input::is_background_tool_hotkey(code, modifiers)
+        && input::active_tool_name_for_background(app).is_some()
+    {
+        remote.background_tool().await?;
+        app.set_status_notice("Moving tool to background...");
+        return Ok(());
+    }
+
     if input::handle_visible_copy_shortcut(app, code, modifiers) {
         return Ok(());
     }
@@ -334,14 +342,9 @@ async fn handle_remote_key_internal(
         return Ok(());
     }
 
-    if modifiers.contains(KeyModifiers::ALT) {
+    if input::is_alt_or_meta_modifier(modifiers) {
         match code {
-            KeyCode::Char('b') => {
-                if matches!(app.status, ProcessingStatus::RunningTool(_)) {
-                    remote.background_tool().await?;
-                    app.set_status_notice("Moving tool to background...");
-                    return Ok(());
-                }
+            KeyCode::Char(c) if c.eq_ignore_ascii_case(&'b') => {
                 app.cursor_pos = app.find_word_boundary_back();
                 return Ok(());
             }
@@ -432,8 +435,8 @@ async fn handle_remote_key_internal(
             return Ok(());
         }
         match code {
-            KeyCode::Char('b') => {
-                if matches!(app.status, ProcessingStatus::RunningTool(_)) {
+            KeyCode::Char(c) if c.eq_ignore_ascii_case(&'b') => {
+                if input::active_tool_name_for_background(app).is_some() {
                     remote.background_tool().await?;
                     app.set_status_notice("Moving tool to background...");
                     return Ok(());

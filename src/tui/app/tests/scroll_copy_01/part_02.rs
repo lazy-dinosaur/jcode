@@ -126,6 +126,54 @@ fn test_remote_escape_interrupt_disables_auto_poke_while_processing() {
 }
 
 #[test]
+fn test_remote_alt_b_backgrounds_active_tool_even_with_uppercase_key() {
+    let mut app = create_test_app();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+
+    app.is_processing = true;
+    app.status = ProcessingStatus::RunningTool("bash".to_string());
+    let initial_request_id = remote.next_request_id_for_test();
+
+    rt.block_on(app.handle_remote_key(KeyCode::Char('B'), KeyModifiers::ALT, &mut remote))
+        .unwrap();
+
+    assert_eq!(remote.next_request_id_for_test(), initial_request_id + 1);
+    assert_eq!(
+        app.status_notice(),
+        Some("Moving tool to background...".to_string())
+    );
+}
+
+#[test]
+fn test_remote_meta_b_backgrounds_streaming_tool_when_status_is_stale() {
+    let mut app = create_test_app();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+
+    app.is_processing = true;
+    app.status = ProcessingStatus::Streaming;
+    app.streaming_tool_calls.push(crate::message::ToolCall {
+        id: "tool-bash".to_string(),
+        name: "bash".to_string(),
+        input: serde_json::Value::Null,
+        intent: None,
+    });
+    let initial_request_id = remote.next_request_id_for_test();
+
+    rt.block_on(app.handle_remote_key(KeyCode::Char('b'), KeyModifiers::META, &mut remote))
+        .unwrap();
+
+    assert_eq!(remote.next_request_id_for_test(), initial_request_id + 1);
+    assert_eq!(
+        app.status_notice(),
+        Some("Moving tool to background...".to_string())
+    );
+}
+
+#[test]
 fn test_remote_ctrl_digit_side_panel_preset() {
     let mut app = create_test_app();
     let rt = tokio::runtime::Runtime::new().unwrap();

@@ -61,6 +61,48 @@ pub(super) fn clear_escape_interrupt_arm(app: &mut App) {
     app.escape_interrupt_armed_until = None;
 }
 
+pub(super) fn is_alt_or_meta_modifier(modifiers: KeyModifiers) -> bool {
+    modifiers.intersects(KeyModifiers::ALT | KeyModifiers::META)
+}
+
+pub(super) fn is_background_tool_hotkey(code: KeyCode, modifiers: KeyModifiers) -> bool {
+    is_alt_or_meta_modifier(modifiers)
+        && matches!(code, KeyCode::Char(c) if c.eq_ignore_ascii_case(&'b'))
+}
+
+pub(super) fn active_tool_name_for_background(app: &App) -> Option<&str> {
+    if let ProcessingStatus::RunningTool(name) = &app.status {
+        return Some(name.as_str());
+    }
+
+    app.streaming_tool_calls
+        .last()
+        .map(|tool| tool.name.as_str())
+        .or_else(|| {
+            app.remote_resume_activity
+                .as_ref()
+                .and_then(|activity| activity.current_tool_name.as_deref())
+        })
+}
+
+pub(super) fn handle_local_background_tool_hotkey(
+    app: &mut App,
+    code: KeyCode,
+    modifiers: KeyModifiers,
+) -> bool {
+    if !is_background_tool_hotkey(code, modifiers) {
+        return false;
+    }
+
+    let Some(signal) = app.manual_tool_background_signal.clone() else {
+        return false;
+    };
+
+    signal.fire();
+    app.set_status_notice("Moving tool to background...");
+    true
+}
+
 pub(super) fn confirm_or_arm_escape_interrupt(app: &mut App) -> bool {
     let now = Instant::now();
     let already_armed = app
@@ -1545,6 +1587,10 @@ pub(super) fn handle_pre_control_shortcuts(
         return true;
     }
 
+    if handle_local_background_tool_hotkey(app, code, modifiers) {
+        return true;
+    }
+
     if handle_visible_copy_shortcut(app, code, modifiers) {
         return true;
     }
@@ -1596,7 +1642,7 @@ pub(super) fn handle_pre_control_shortcuts(
     if app.handle_diff_pane_focus_key(code, modifiers) {
         return true;
     }
-    if modifiers.contains(KeyModifiers::ALT) && handle_alt_key(app, code) {
+    if is_alt_or_meta_modifier(modifiers) && handle_alt_key(app, code) {
         return true;
     }
 

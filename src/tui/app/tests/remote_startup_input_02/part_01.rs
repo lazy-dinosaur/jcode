@@ -937,6 +937,29 @@ fn test_escape_interrupt_preserves_visible_queued_interleaves_while_cancelling()
 }
 
 #[test]
+fn test_alt_b_background_hotkey_fires_local_tool_signal_before_word_nav() {
+    let mut app = create_test_app();
+    app.is_processing = true;
+    app.status = ProcessingStatus::RunningTool("bash".to_string());
+    app.input = "hello world".to_string();
+    app.cursor_pos = app.input.len();
+    let original_cursor = app.cursor_pos;
+    let signal = crate::agent::InterruptSignal::new();
+    app.manual_tool_background_signal = Some(signal.clone());
+
+    app.handle_key(KeyCode::Char('B'), KeyModifiers::ALT)
+        .unwrap();
+
+    assert!(signal.is_set(), "Alt+B should request backgrounding the running tool");
+    assert_eq!(app.cursor_pos, original_cursor, "Alt+B must not word-jump while a tool can be backgrounded");
+    assert_eq!(
+        app.status_notice(),
+        Some("Moving tool to background...".to_string())
+    );
+    assert!(!app.cancel_requested);
+}
+
+#[test]
 fn test_ctrl_c_still_arms_quit_when_idle() {
     let mut app = create_test_app();
 
