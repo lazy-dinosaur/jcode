@@ -456,7 +456,11 @@ impl Agent {
                         });
                     }
                     StreamEvent::StatusDetail { detail } => {
-                        self.last_status_detail = Some(detail.clone());
+                        if detail.is_empty() {
+                            self.last_status_detail = None;
+                        } else {
+                            self.last_status_detail = Some(detail.clone());
+                        }
                         let _ = event_tx.send(ServerEvent::StatusDetail { detail });
                     }
                     StreamEvent::MessageEnd {

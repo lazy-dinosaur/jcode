@@ -428,6 +428,7 @@ pub(in crate::tui::app) fn handle_server_event(
                 crate::tui::mermaid::clear_streaming_preview_diagram();
                 app.is_processing = false;
                 app.status = ProcessingStatus::Idle;
+                app.status_detail = None;
                 app.stream_message_ended = false;
                 app.processing_started = None;
                 app.replay_processing_started_ms = None;
@@ -489,6 +490,7 @@ pub(in crate::tui::app) fn handle_server_event(
                     }
                     app.is_processing = false;
                     app.status = ProcessingStatus::Idle;
+                    app.status_detail = None;
                     app.stream_message_ended = false;
                     app.processing_started = None;
                     app.clear_visible_turn_started();
@@ -510,6 +512,7 @@ pub(in crate::tui::app) fn handle_server_event(
             });
             app.is_processing = false;
             app.status = ProcessingStatus::Idle;
+            app.status_detail = None;
             app.stream_message_ended = false;
             let recovered_local = recover_local_interleave_to_queue(app, "request error");
             crate::tui::mermaid::clear_streaming_preview_diagram();

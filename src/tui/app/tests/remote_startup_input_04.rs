@@ -45,6 +45,46 @@ fn test_handle_server_event_empty_status_detail_clears_label() {
 }
 
 #[test]
+fn test_handle_server_event_done_clears_status_detail() {
+    let mut app = create_test_app();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+
+    app.is_processing = true;
+    app.current_message_id = Some(42);
+    app.status_detail = Some("opening websocket".to_string());
+
+    app.handle_server_event(crate::protocol::ServerEvent::Done { id: 42 }, &mut remote);
+
+    assert!(!app.is_processing);
+    assert_eq!(app.status_detail, None);
+}
+
+#[test]
+fn test_handle_server_event_error_clears_status_detail() {
+    let mut app = create_test_app();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+
+    app.is_processing = true;
+    app.status_detail = Some("opening websocket".to_string());
+
+    app.handle_server_event(
+        crate::protocol::ServerEvent::Error {
+            id: 42,
+            message: "boom".to_string(),
+            retry_after_secs: None,
+        },
+        &mut remote,
+    );
+
+    assert!(!app.is_processing);
+    assert_eq!(app.status_detail, None);
+}
+
+#[test]
 fn test_handle_server_event_transcript_replace_updates_input() {
     let mut app = create_test_app();
     let rt = tokio::runtime::Runtime::new().unwrap();

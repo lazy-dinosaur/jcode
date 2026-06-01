@@ -788,7 +788,11 @@ impl Agent {
                         if trace {
                             eprintln!("[trace] status_detail={}", detail);
                         }
-                        self.last_status_detail = Some(detail);
+                        if detail.is_empty() {
+                            self.last_status_detail = None;
+                        } else {
+                            self.last_status_detail = Some(detail);
+                        }
                     }
                     StreamEvent::MessageEnd {
                         stop_reason: reason,

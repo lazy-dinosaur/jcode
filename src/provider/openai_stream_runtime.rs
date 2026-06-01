@@ -701,6 +701,11 @@ pub(super) async fn stream_response_websocket_persistent(
                 "WebSocket connection established in {}ms (persistent mode)",
                 connect_ms
             ));
+            // `opening websocket` is a short-lived transport setup detail, not
+            // a turn state. Clear it as soon as the socket is established so it
+            // cannot survive into the later waiting/thinking phase or into
+            // post-Done diagnostics if no other StatusDetail overwrites it.
+            emit_status_detail(&tx, "").await;
             (stream, response)
         }
         Err(err) if is_ws_upgrade_required(&err) => {

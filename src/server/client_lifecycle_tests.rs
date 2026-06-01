@@ -272,6 +272,65 @@ async fn cancel_without_active_task_clears_prefired_turn_signal() {
 }
 
 #[tokio::test]
+async fn cancel_without_active_task_notifies_client_to_clear_phantom_processing() {
+    let queue = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let background_signal = InterruptSignal::new();
+    let turn_control = TurnControl::new();
+    let stop_signal = turn_control.stop_signal();
+    let control = SessionControlHandle::new(
+        "session_cancel_phantom",
+        Arc::clone(&queue),
+        background_signal,
+        turn_control,
+    );
+    let (client_tx, mut client_rx) = mpsc::unbounded_channel();
+    let members = Arc::new(RwLock::new(HashMap::new()));
+    let swarms_by_id = Arc::new(RwLock::new(HashMap::new()));
+    let event_history = Arc::new(RwLock::new(std::collections::VecDeque::new()));
+    let event_counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let (event_tx, _event_rx) = broadcast::channel(8);
+    let mut client_is_processing = true;
+    let mut message_id = None;
+    let mut session_id = None;
+    let mut task = None;
+    let mut cancel_state = ProcessingCancelState::Idle;
+
+    control.request_cancel();
+    assert!(stop_signal.is_set(), "prefire simulation should set cancel");
+
+    cancel_processing_message(
+        &mut ProcessingState {
+            client_is_processing: &mut client_is_processing,
+            message_id: &mut message_id,
+            session_id: &mut session_id,
+            task: &mut task,
+            cancel_state: &mut cancel_state,
+        },
+        &control,
+        &client_tx,
+        &SwarmStatusRefs {
+            members: &members,
+            swarms_by_id: &swarms_by_id,
+            event_history: &event_history,
+            event_counter: &event_counter,
+            event_tx: &event_tx,
+        },
+    )
+    .await;
+
+    assert!(!client_is_processing);
+    assert!(!stop_signal.is_set());
+    assert!(matches!(
+        client_rx.recv().await,
+        Some(ServerEvent::Interrupted)
+    ));
+    assert!(matches!(
+        client_rx.recv().await,
+        Some(ServerEvent::StatusDetail { detail }) if detail.is_empty()
+    ));
+}
+
+#[tokio::test]
 async fn cancel_finished_task_clears_prefired_turn_signal() {
     let queue = Arc::new(std::sync::Mutex::new(Vec::new()));
     let background_signal = InterruptSignal::new();

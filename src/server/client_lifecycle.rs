@@ -3235,6 +3235,26 @@ async fn cancel_processing_message(
         // turn stop signal, leaving it set would cancel the next user message at
         // the first provider chunk and persist a bogus "user cancelled" marker.
         session_control.reset_cancel();
+        *state.cancel_state = ProcessingCancelState::Idle;
+
+        // Also unblock clients that are stuck in a phantom processing state. A
+        // stale transport/status event can make the TUI believe a turn is still
+        // active after the server has no processing task left; in that state an
+        // Esc cancel used to ACK but emit no terminal event, so the UI stayed in
+        // `thinking` forever and repeated interrupts appeared to do nothing.
+        *state.client_is_processing = false;
+        let stale_message_id = state.message_id.take();
+        let _ = state.session_id.take();
+        crate::logging::info(
+            "Cancel request had no active processing task; clearing client processing state",
+        );
+        let _ = client_event_tx.send(ServerEvent::Interrupted);
+        if let Some(message_id) = stale_message_id {
+            let _ = client_event_tx.send(ServerEvent::Done { id: message_id });
+        }
+        let _ = client_event_tx.send(ServerEvent::StatusDetail {
+            detail: String::new(),
+        });
     }
 }
 
