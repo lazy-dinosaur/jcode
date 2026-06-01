@@ -197,6 +197,21 @@ fn test_alpha_option_markers_after_question_prompt_are_repaired() {
 }
 
 #[test]
+fn test_alpha_option_words_in_plain_sentence_are_not_repaired() {
+    let md = "We discussed plan A. Borrow time from B. Move the deadline if needed.";
+    let rendered: Vec<String> = render_markdown_with_width(md, Some(180))
+        .iter()
+        .map(line_to_string)
+        .collect();
+
+    assert_eq!(rendered.len(), 1, "plain sentence should stay one line: {rendered:?}");
+    assert_eq!(
+        rendered.first().map(String::as_str),
+        Some("We discussed plan A. Borrow time from B. Move the deadline if needed.")
+    );
+}
+
+#[test]
 fn test_alpha_option_labels_with_recommended_and_colons_are_repaired() {
     let md = "이어서 갈까요? A (Recommended): 전체보기 전용 스크롤 클래스를 만든다 - padding-right 0, margin-right만 유지. B: 전체보기에서 콘텐츠 width를 동적으로 맞춘다. C: 직접 입력";
     let rendered: Vec<String> = render_markdown_with_width(md, Some(180))

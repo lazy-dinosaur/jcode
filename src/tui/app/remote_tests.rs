@@ -1,7 +1,8 @@
 use super::reconnect;
 use super::{
-    ProcessingStatus, RemoteRunState, auth_provider_hint_for_login_provider, handle_post_connect,
-    handle_server_event, maybe_process_pending_queued_dispatch, process_remote_followups,
+    ProcessingStatus, RemoteRunState, auth_provider_hint_for_login_provider,
+    detect_and_cancel_stall, handle_post_connect, handle_server_event,
+    maybe_process_pending_queued_dispatch, process_remote_followups,
 };
 use crate::protocol::{
     MemoryActivitySnapshot, MemoryPipelineSnapshot, MemoryStateSnapshot, MemoryStepStatusSnapshot,
@@ -489,6 +490,33 @@ fn handle_post_connect_dispatches_reload_followup_even_if_history_snapshot_looks
     } else {
         crate::env::remove_var("JCODE_HOME");
     }
+}
+
+#[test]
+fn stale_remote_resume_activity_does_not_spin_forever_in_thinking() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let _guard = rt.enter();
+    let mut app = create_test_app();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+    let stale = std::time::Duration::from_secs(11 * 60);
+
+    app.is_processing = true;
+    app.status = ProcessingStatus::Thinking(std::time::Instant::now() - stale);
+    app.processing_started = Some(std::time::Instant::now() - stale);
+    app.last_stream_activity = Some(std::time::Instant::now() - stale);
+    app.remote_resume_activity = Some(crate::tui::app::RemoteResumeActivity {
+        session_id: "session_stale_thinking".to_string(),
+        observed_at: std::time::Instant::now() - stale,
+        current_tool_name: None,
+    });
+
+    rt.block_on(detect_and_cancel_stall(&mut app, &mut remote));
+
+    assert!(!app.is_processing);
+    assert!(matches!(app.status, ProcessingStatus::Idle));
+    assert!(app.remote_resume_activity.is_none());
+    assert!(app.processing_started.is_none());
+    assert!(app.last_stream_activity.is_none());
 }
 
 #[test]

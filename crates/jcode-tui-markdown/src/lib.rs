@@ -1654,7 +1654,7 @@ fn alpha_option_marker_at(
 
     if !alpha_option_mode
         && !matches!(previous_boundary, ':' | ';' | '：')
-        && !looks_like_alpha_option_run(line, idx, marker_letter, marker_len)
+        && !looks_like_alpha_option_run(line, idx, marker_letter, marker_len, previous_boundary)
     {
         return None;
     }
@@ -1730,8 +1730,12 @@ fn looks_like_alpha_option_run(
     idx: usize,
     marker_letter: char,
     marker_len: usize,
+    previous_boundary: char,
 ) -> bool {
     if marker_letter != 'A' {
+        return false;
+    }
+    if !is_list_glue_boundary_char(previous_boundary) {
         return false;
     }
 
@@ -1747,9 +1751,7 @@ fn looks_like_alpha_option_run(
         };
         if ch == next_letter {
             let previous_char = line[..search].chars().next_back();
-            let previous_boundary = previous_non_whitespace_char(line, search);
             if previous_char.is_some_and(|prev| prev.is_whitespace())
-                && previous_boundary.is_some_and(is_list_glue_boundary_char)
                 && alpha_option_label_at(line, search)
                     .is_some_and(|(letter, _)| letter == next_letter)
             {

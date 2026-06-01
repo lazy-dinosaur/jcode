@@ -976,6 +976,24 @@ async fn detect_and_cancel_stall(app: &mut App, remote: &mut RemoteConnection) {
                     .last_stream_activity
                     .map(|t| t.elapsed())
                     .or(app.processing_started.map(|t| t.elapsed()));
+                if snapshot.observed_at.elapsed() >= STALL_TIMEOUT {
+                    crate::logging::warn(&format!(
+                        "Protocol stall guard: resumed session {} stayed marked processing by a history snapshot (tool={:?}) but no live stream events arrived for {:?}; treating snapshot as stale and returning client UI to idle",
+                        snapshot.session_id, snapshot.current_tool_name, elapsed
+                    ));
+                    app.remote_resume_activity = None;
+                    app.is_processing = false;
+                    app.status = ProcessingStatus::Idle;
+                    app.status_detail = None;
+                    app.current_message_id = None;
+                    app.processing_started = None;
+                    app.last_stream_activity = None;
+                    app.clear_visible_turn_started();
+                    app.set_status_notice(
+                        "No live activity after reconnect; cleared stale thinking state",
+                    );
+                    return;
+                }
                 crate::logging::warn(&format!(
                     "Protocol stall guard: resumed session {} is still marked processing by history snapshot (tool={:?}, snapshot_age={:?}) but no corroborating live events arrived after {:?}; deferring client-side cancel",
                     snapshot.session_id,

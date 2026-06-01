@@ -139,6 +139,16 @@ fn strip_large_display_padding(text: &str) -> String {
             continue;
         }
 
+        if normalized_leading == 0
+            && !normalized_trimmed.is_empty()
+            && !starts_structural_copy_line(normalized_trimmed)
+            && let Some(prev) = out.last_mut()
+            && prev.ends_with(char::is_whitespace)
+        {
+            prev.push_str(normalized_trimmed);
+            continue;
+        }
+
         out.push(normalized.to_string());
     }
     out.join("\n")
