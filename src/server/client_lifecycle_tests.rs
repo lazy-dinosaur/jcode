@@ -50,6 +50,21 @@ async fn session_control_handle_does_not_wait_for_busy_agent_lock() {
     assert!(queue.lock().expect("queue lock").is_empty());
 }
 
+#[test]
+fn cancel_ack_is_queued_instead_of_direct_writer_ack() {
+    assert!(
+        !should_direct_write_ack(&Request::Cancel { id: 7 }),
+        "cancel cleanup must not wait behind the socket writer lock"
+    );
+    assert!(should_direct_write_ack(&Request::Message {
+        id: 8,
+        content: "hello".to_string(),
+        images: Vec::new(),
+        system_reminder: None,
+    }));
+    assert!(should_direct_write_ack(&Request::Ping { id: 9 }));
+}
+
 #[tokio::test]
 async fn refreshed_session_control_handle_does_not_wait_for_busy_agent_lock() {
     let provider: Arc<dyn Provider> = Arc::new(PanicOnForkProvider {

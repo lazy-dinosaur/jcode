@@ -1525,12 +1525,16 @@ pub(super) async fn handle_client(
 
         // Send ack
         let ack = ServerEvent::Ack { id: request.id() };
-        let json = encode_event(&ack);
-        {
-            let mut w = writer.lock().await;
-            if w.write_all(json.as_bytes()).await.is_err() {
-                break;
+        if should_direct_write_ack(&request) {
+            let json = encode_event(&ack);
+            {
+                let mut w = writer.lock().await;
+                if w.write_all(json.as_bytes()).await.is_err() {
+                    break;
+                }
             }
+        } else {
+            let _ = client_event_tx.send(ack);
         }
 
         match request {
@@ -2965,6 +2969,16 @@ pub(super) async fn handle_client(
     )
     .await?;
     Ok(())
+}
+
+fn should_direct_write_ack(request: &Request) -> bool {
+    // Cancel must not wait for the shared socket writer lock before running the
+    // cleanup path below. Under high-volume streaming/thinking output the event
+    // forwarder can hold or repeatedly reacquire that lock; if the request loop
+    // blocks here, the turn stop signal is set but `Interrupted`/`Done` are not
+    // sent, leaving clients stuck in a processing/thinking state. Queue the Ack
+    // through the normal event path for Cancel and continue immediately.
+    !matches!(request, Request::Cancel { .. })
 }
 
 async fn start_processing_message(
