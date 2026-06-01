@@ -80,6 +80,8 @@ use model::{
     terminal_event_record,
 };
 
+const LEGACY_NON_DETACHED_STALE_AFTER: Duration = Duration::from_secs(21 * 60);
+
 /// Manages background task execution
 pub struct BackgroundTaskManager {
     tasks: Arc<RwLock<HashMap<String, RunningTask>>>,
@@ -278,6 +280,72 @@ impl BackgroundTaskManager {
         status
     }
 
+    async fn reconcile_running_status_if_needed(
+        &self,
+        status: TaskStatusFile,
+        status_path: &std::path::Path,
+    ) -> TaskStatusFile {
+        if status.status != BackgroundTaskStatus::Running {
+            return status;
+        }
+
+        if status.detached {
+            return self
+                .finalize_detached_status_if_needed(status, status_path)
+                .await;
+        }
+
+        if self.tasks.read().await.contains_key(&status.task_id) {
+            return status;
+        }
+
+        if let Some(runner_pid) = status.runner_pid {
+            if runner_pid != std::process::id() && crate::platform::is_process_running(runner_pid) {
+                return status;
+            }
+            return self
+                .mark_orphaned_non_detached_status(status, status_path)
+                .await;
+        }
+
+        // Older status files did not record the jcode runner PID. Avoid
+        // incorrectly marking a still-live task from another process as failed;
+        // once it is older than the bash hard cap plus a small grace period it
+        // cannot be a valid managed background task anymore.
+        let is_legacy_stale = DateTime::parse_from_rfc3339(&status.started_at)
+            .ok()
+            .and_then(|started| (Utc::now() - started.with_timezone(&Utc)).to_std().ok())
+            .map(|age| age >= LEGACY_NON_DETACHED_STALE_AFTER)
+            .unwrap_or(false);
+        if is_legacy_stale {
+            return self
+                .mark_orphaned_non_detached_status(status, status_path)
+                .await;
+        }
+
+        status
+    }
+
+    async fn mark_orphaned_non_detached_status(
+        &self,
+        mut status: TaskStatusFile,
+        status_path: &std::path::Path,
+    ) -> TaskStatusFile {
+        let completed_at = Utc::now();
+        let error = "Background task runner is no longer active; task was orphaned by a jcode restart or crash".to_string();
+        status.status = BackgroundTaskStatus::Failed;
+        status.exit_code = None;
+        status.error = Some(error.clone());
+        status.completed_at = Some(completed_at.to_rfc3339());
+        status.duration_secs = Self::status_duration_secs(&status.started_at, completed_at);
+        push_task_event(
+            &mut status,
+            terminal_event_record(BackgroundTaskStatus::Failed, None, Some(&error)),
+        );
+        self.write_status_file(status_path, &status).await;
+        status
+    }
+
     pub fn reserve_task_info(&self) -> BackgroundTaskInfo {
         let task_id = Self::generate_task_id();
         let output_file = self.output_path_for(&task_id);
@@ -318,6 +386,7 @@ impl BackgroundTaskManager {
             completed_at: None,
             duration_secs: None,
             pid: Some(pid),
+            runner_pid: None,
             detached: true,
             notify,
             wake,
@@ -389,6 +458,7 @@ impl BackgroundTaskManager {
             completed_at: None,
             duration_secs: None,
             pid: None,
+            runner_pid: Some(std::process::id()),
             detached: false,
             notify,
             wake,
@@ -467,6 +537,7 @@ impl BackgroundTaskManager {
                 completed_at: Some(chrono::Utc::now().to_rfc3339()),
                 duration_secs: Some(duration_secs),
                 pid: None,
+                runner_pid: Some(std::process::id()),
                 detached: false,
                 notify: notify_flag,
                 wake: wake_flag,
@@ -600,6 +671,7 @@ impl BackgroundTaskManager {
             completed_at: None,
             duration_secs: None,
             pid: None,
+            runner_pid: Some(std::process::id()),
             detached: false,
             notify: true,
             wake: wake_on_completion,
@@ -679,6 +751,7 @@ impl BackgroundTaskManager {
                 completed_at: Some(chrono::Utc::now().to_rfc3339()),
                 duration_secs: Some(duration_secs),
                 pid: None,
+                runner_pid: Some(std::process::id()),
                 detached: false,
                 notify: notify_flag,
                 wake: wake_flag,
@@ -783,7 +856,7 @@ impl BackgroundTaskManager {
                 if path.extension().map(|e| e == "json").unwrap_or(false)
                     && let Some(status) = self.read_status_file(&path).await
                 {
-                    let reconciled = self.finalize_detached_status_if_needed(status, &path).await;
+                    let reconciled = self.reconcile_running_status_if_needed(status, &path).await;
                     results.push(reconciled);
                 }
             }
@@ -799,7 +872,7 @@ impl BackgroundTaskManager {
         let status_path = self.status_path_for(task_id);
         let status = self.read_status_file(&status_path).await?;
         Some(
-            self.finalize_detached_status_if_needed(status, &status_path)
+            self.reconcile_running_status_if_needed(status, &status_path)
                 .await,
         )
     }
@@ -1115,6 +1188,7 @@ impl BackgroundTaskManager {
                 completed_at: Some(chrono::Utc::now().to_rfc3339()),
                 duration_secs: Some(task.started_at.elapsed().as_secs_f64()),
                 pid: None,
+                runner_pid: Some(std::process::id()),
                 detached: false,
                 notify: notify_flag,
                 wake: wake_flag,
@@ -1151,7 +1225,7 @@ impl BackgroundTaskManager {
                 return Ok(false);
             };
             status = self
-                .finalize_detached_status_if_needed(status, &status_path)
+                .reconcile_running_status_if_needed(status, &status_path)
                 .await;
             if status.status != BackgroundTaskStatus::Running || !status.detached {
                 return Ok(false);
@@ -1230,7 +1304,12 @@ impl BackgroundTaskManager {
 
                 let mut associated_status = None;
                 if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
-                    associated_status = self.read_status_file(&path).await;
+                    associated_status = match self.read_status_file(&path).await {
+                        Some(status) => {
+                            Some(self.reconcile_running_status_if_needed(status, &path).await)
+                        }
+                        None => None,
+                    };
                 } else if path.extension().and_then(|ext| ext.to_str()) == Some("output")
                     && let Some(task_id) = path.file_stem().and_then(|stem| stem.to_str())
                 {

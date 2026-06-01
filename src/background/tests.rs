@@ -311,3 +311,114 @@ async fn wait_returns_on_timeout() -> Result<()> {
     assert_eq!(wait_result.task.status, BackgroundTaskStatus::Running);
     Ok(())
 }
+
+#[tokio::test]
+async fn wait_reconciles_non_detached_running_task_when_runner_is_gone() -> Result<()> {
+    let tmp = tempdir()?;
+    let manager = BackgroundTaskManager::with_output_dir(tmp.path().to_path_buf());
+    let task_id = "orphaned-runner";
+    let status_path = manager.status_path_for(task_id);
+    manager
+        .write_status_file(
+            &status_path,
+            &TaskStatusFile {
+                task_id: task_id.to_string(),
+                tool_name: "bash".to_string(),
+                display_name: Some("stale command".to_string()),
+                session_id: "session-orphan".to_string(),
+                delivery_session_id: "session-orphan".to_string(),
+                status: BackgroundTaskStatus::Running,
+                exit_code: None,
+                error: None,
+                started_at: Utc::now().to_rfc3339(),
+                completed_at: None,
+                duration_secs: None,
+                pid: None,
+                runner_pid: Some(std::process::id()),
+                detached: false,
+                notify: true,
+                wake: false,
+                auto_inject: true,
+                auto_inject_format: None,
+                auto_inject_max_bytes: None,
+                progress: None,
+                event_history: Vec::new(),
+            },
+        )
+        .await;
+
+    let wait_result = manager
+        .wait(task_id, Duration::from_secs(10), false)
+        .await
+        .ok_or_else(|| anyhow!("task should exist"))?;
+
+    assert_eq!(
+        wait_result.reason,
+        BackgroundTaskWaitReason::AlreadyFinished
+    );
+    assert_eq!(wait_result.task.status, BackgroundTaskStatus::Failed);
+    assert!(
+        wait_result
+            .task
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("orphaned by a jcode restart or crash")
+    );
+    assert_eq!(wait_result.task.event_history.len(), 1);
+    assert_eq!(
+        wait_result.task.event_history[0].kind,
+        BackgroundTaskEventKind::Failed
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn status_reconciles_legacy_non_detached_running_task_after_hard_cap() -> Result<()> {
+    let tmp = tempdir()?;
+    let manager = BackgroundTaskManager::with_output_dir(tmp.path().to_path_buf());
+    let task_id = "legacy-orphaned-runner";
+    let status_path = manager.status_path_for(task_id);
+    manager
+        .write_status_file(
+            &status_path,
+            &TaskStatusFile {
+                task_id: task_id.to_string(),
+                tool_name: "bash".to_string(),
+                display_name: Some("old stale command".to_string()),
+                session_id: "session-orphan".to_string(),
+                delivery_session_id: "session-orphan".to_string(),
+                status: BackgroundTaskStatus::Running,
+                exit_code: None,
+                error: None,
+                started_at: (Utc::now() - chrono::Duration::minutes(30)).to_rfc3339(),
+                completed_at: None,
+                duration_secs: None,
+                pid: None,
+                runner_pid: None,
+                detached: false,
+                notify: true,
+                wake: false,
+                auto_inject: true,
+                auto_inject_format: None,
+                auto_inject_max_bytes: None,
+                progress: None,
+                event_history: Vec::new(),
+            },
+        )
+        .await;
+
+    let status = manager
+        .status(task_id)
+        .await
+        .ok_or_else(|| anyhow!("task should exist"))?;
+
+    assert_eq!(status.status, BackgroundTaskStatus::Failed);
+    assert!(
+        status
+            .error
+            .unwrap_or_default()
+            .contains("runner is no longer active")
+    );
+    Ok(())
+}

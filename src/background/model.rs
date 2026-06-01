@@ -66,6 +66,14 @@ pub struct TaskStatusFile {
     pub duration_secs: Option<f64>,
     #[serde(default)]
     pub pid: Option<u32>,
+    /// PID of the jcode process that owns an in-memory background task runner.
+    ///
+    /// Non-detached background tasks are only observable while this runner
+    /// process is alive. Persisting it lets later jcode processes distinguish a
+    /// genuinely live task owned by another process from an orphaned `running`
+    /// status file left behind by a restart/crash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runner_pid: Option<u32>,
     #[serde(default)]
     pub detached: bool,
     #[serde(default = "default_true")]
