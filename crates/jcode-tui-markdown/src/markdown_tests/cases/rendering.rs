@@ -582,6 +582,32 @@ fn test_paragraph_to_pipe_table_preserves_visible_boundary() {
 }
 
 #[test]
+fn test_pipe_table_cell_node_id_is_not_split_as_ordered_list_marker() {
+    let md = concat!(
+        "Gate 1(metadata) + 현재 코드를 확보했습니다. 차이가 큽니다. metadata로 파악한 새 디자인:\n\n",
+        "| 항목 | 현재 코드 | 새 Figma (6694:34186) |\n",
+        "|---|---|---|\n",
+        "| 헤더 타이틀 | \"휴가 현황\" + airplane | **\"휴가 신청 목록\"** + flight_takeoff 아이콘 |\n",
+    );
+    let rendered: Vec<String> = render_markdown_with_width(md, Some(96))
+        .iter()
+        .map(line_to_string)
+        .collect();
+    let joined = rendered.join("\n");
+
+    assert!(
+        joined.contains("새 Figma") && joined.contains('│'),
+        "node id table should render as a table: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .all(|line| !line.trim_start().starts_with("34186") && !line.contains("|---|")),
+        "node id inside a pipe row must not be split into a stray rendered line: {rendered:?}"
+    );
+}
+
+#[test]
 fn test_ordered_list_code_fences_then_table_do_not_render_as_raw_markdown() {
     let md = concat!(
         "찾아보니 구분이 필요합니다.\n\n",

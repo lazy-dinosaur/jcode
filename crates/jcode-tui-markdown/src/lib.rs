@@ -1160,7 +1160,7 @@ fn repair_glued_markdown_headings(text: &str) -> String {
     let mut fence_len = 0usize;
 
     for (idx, line) in lines.iter().enumerate() {
-        if in_code_fence {
+        if in_code_fence || looks_like_pipe_table_row_relaxed(line) {
             out.push_str(line);
         } else {
             out.push_str(&repair_glued_heading_markers_in_line(line));
@@ -1274,7 +1274,7 @@ fn repair_glued_list_markers(text: &str) -> String {
             out.push('\n');
         }
 
-        if in_code_fence {
+        if in_code_fence || looks_like_pipe_table_row_relaxed(line) {
             out.push_str(line);
             update_code_fence_state_after_line(
                 line,
@@ -1309,7 +1309,7 @@ fn repair_glued_blockquote_markers(text: &str) -> String {
             out.push('\n');
         }
 
-        if in_code_fence {
+        if in_code_fence || looks_like_pipe_table_row_relaxed(line) {
             out.push_str(line);
             update_code_fence_state_after_line(
                 line,
