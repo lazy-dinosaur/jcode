@@ -911,6 +911,16 @@ impl Agent {
                 let shutdown_signal = self.graceful_shutdown.clone();
                 let allow_reload_handoff = tc.name == "bash";
                 let tool_result;
+                let auto_background_after = crate::config::config()
+                    .tool
+                    .effective_auto_background_after_ms()
+                    .map(Duration::from_millis);
+                let auto_background_enabled = auto_background_after.is_some();
+                let mut auto_background_sleep = Box::pin(tokio::time::sleep(
+                    auto_background_after
+                        .unwrap_or_else(|| Duration::from_secs(365 * 24 * 60 * 60)),
+                ));
+                let mut auto_background_triggered = false;
                 let mut tool_handle = tool_handle;
                 tokio::select! {
                     biased;
@@ -942,6 +952,10 @@ impl Agent {
                         } else {
                             tool_result = None;
                         }
+                    }
+                    _ = &mut auto_background_sleep, if auto_background_enabled => {
+                        auto_background_triggered = true;
+                        tool_result = None;
                     }
                 };
 
@@ -1013,23 +1027,38 @@ impl Agent {
                     self.session.save()?;
                     return Ok(());
                 } else {
-                    // User pressed Alt+B — move tool to background.
+                    // User pressed Alt+B, or the configured foreground grace
+                    // period elapsed — move the tool to background.
                     self.unlock_tools_if_needed(&tc.name);
-                    logging::info(&format!(
-                        "Tool '{}' moved to background after {:.1}s",
-                        tc.name,
-                        tool_elapsed.as_secs_f64()
-                    ));
+                    if auto_background_triggered {
+                        logging::info(&format!(
+                            "Tool '{}' auto-backgrounded after {:.1}s",
+                            tc.name,
+                            tool_elapsed.as_secs_f64()
+                        ));
+                    } else {
+                        logging::info(&format!(
+                            "Tool '{}' moved to background after {:.1}s",
+                            tc.name,
+                            tool_elapsed.as_secs_f64()
+                        ));
+                    }
 
                     let bg_info = crate::background::global()
                         .adopt(&tc.name, &self.session.id, tool_handle)
                         .await;
 
+                    let detach_reason = if auto_background_triggered {
+                        format!("automatically after {:.1}s", tool_elapsed.as_secs_f64())
+                    } else {
+                        "by the user".to_string()
+                    };
+
                     let bg_msg = format!(
-                        "Tool '{}' was moved to background by the user (task_id: {}). \
+                        "Tool '{}' was moved to background {} (task_id: {}). \
                          Use the `bg` tool with action 'wait' to wait for completion/checkpoints, \
                          or action 'status'/'output' to inspect it.",
-                        tc.name, bg_info.task_id
+                        tc.name, detach_reason, bg_info.task_id
                     );
 
                     let _ = event_tx.send(ServerEvent::ToolDone {

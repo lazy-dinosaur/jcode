@@ -1243,6 +1243,16 @@ impl App {
                 let mut tool_handle = tool_handle;
                 let background_signal = crate::agent::InterruptSignal::new();
                 self.manual_tool_background_signal = Some(background_signal.clone());
+                let auto_background_after = crate::config::config()
+                    .tool
+                    .effective_auto_background_after_ms()
+                    .map(Duration::from_millis);
+                let auto_background_enabled = auto_background_after.is_some();
+                let mut auto_background_sleep = Box::pin(tokio::time::sleep(
+                    auto_background_after
+                        .unwrap_or_else(|| Duration::from_secs(365 * 24 * 60 * 60)),
+                ));
+                let mut auto_background_triggered = false;
 
                 // Subscribe to bus for subagent status updates
                 let mut bus_receiver = Bus::global().subscribe();
@@ -1254,6 +1264,10 @@ impl App {
                         biased;
                         // Move the running foreground tool into the background task manager.
                         _ = background_signal.notified() => {
+                            break None;
+                        }
+                        _ = &mut auto_background_sleep, if auto_background_enabled => {
+                            auto_background_triggered = true;
                             break None;
                         }
                         // Handle keyboard input while tool executes
@@ -1378,11 +1392,19 @@ impl App {
                     let bg_info = crate::background::global()
                         .adopt(&tc.name, &self.session.id, tool_handle)
                         .await;
+                    let detach_reason = if auto_background_triggered {
+                        format!(
+                            "automatically after {:.1}s",
+                            tool_start.elapsed().as_secs_f64()
+                        )
+                    } else {
+                        "by the user".to_string()
+                    };
                     let bg_msg = format!(
-                        "Tool '{}' was moved to background by the user (task_id: {}). \
+                        "Tool '{}' was moved to background {} (task_id: {}). \
                          Use the `bg` tool with action 'wait' to wait for completion/checkpoints, \
                          or action 'status'/'output' to inspect it.",
-                        tc.name, bg_info.task_id
+                        tc.name, detach_reason, bg_info.task_id
                     );
 
                     Bus::global().publish(BusEvent::ToolUpdated(ToolEvent {
@@ -1413,7 +1435,11 @@ impl App {
                     );
                     let _ = self.session.save();
                     self.streaming_tool_calls.clear();
-                    self.set_status_notice("Tool moved to background");
+                    if auto_background_triggered {
+                        self.set_status_notice("Tool auto-backgrounded");
+                    } else {
+                        self.set_status_notice("Tool moved to background");
+                    }
                     return Ok(());
                 };
 

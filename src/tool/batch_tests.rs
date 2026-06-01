@@ -75,6 +75,7 @@ fn test_normalize_mixed_tool_and_name_keys() {
 fn test_normalize_arguments_aliases_to_parameters() {
     let input = json!({
         "tool_calls": [
+            {"tool": "read", "parameter": {"file_path": "singular.rs"}},
             {"tool": "read", "arguments": {"file_path": "a.rs"}},
             {"tool": "read", "args": {"file_path": "b.rs"}},
             {"tool": "read", "input": {"file_path": "c.rs"}}
@@ -84,18 +85,52 @@ fn test_normalize_arguments_aliases_to_parameters() {
     let normalized = normalize_batch_input(input);
     let parsed: BatchInput = serde_json::from_value(normalized).unwrap();
 
-    assert_eq!(parsed.tool_calls.len(), 3);
+    assert_eq!(parsed.tool_calls.len(), 4);
     assert_eq!(
         parsed.tool_calls[0].parameters.as_ref().unwrap()["file_path"],
-        "a.rs"
+        "singular.rs"
     );
     assert_eq!(
         parsed.tool_calls[1].parameters.as_ref().unwrap()["file_path"],
-        "b.rs"
+        "a.rs"
     );
     assert_eq!(
         parsed.tool_calls[2].parameters.as_ref().unwrap()["file_path"],
+        "b.rs"
+    );
+    assert_eq!(
+        parsed.tool_calls[3].parameters.as_ref().unwrap()["file_path"],
         "c.rs"
+    );
+}
+
+#[test]
+fn test_normalize_singular_parameter_alias_for_real_failed_shapes() {
+    let input = json!({
+        "tool_calls": [
+            {"tool": "agentgrep", "parameter": {"mode": "grep", "path": ".lazy-harness", "query": "휴가|vacation", "max_regions": 20}},
+            {"tool": "Bash", "parameter": {"command": "git diff --stat"}},
+            {"tool": "Read", "parameter": {"file_path": ".lazy-harness/ssot/calendar-permission-policy.md"}}
+        ]
+    });
+
+    let normalized = normalize_batch_input(input);
+    let parsed: BatchInput = serde_json::from_value(normalized).unwrap();
+    let calls: Vec<(String, Value)> = parsed
+        .tool_calls
+        .into_iter()
+        .map(|call| call.resolved_parameters())
+        .collect();
+
+    assert_eq!(calls[0].0, "agentgrep");
+    assert_eq!(calls[0].1["query"], "휴가|vacation");
+    assert_eq!(calls[0].1["mode"], "grep");
+    assert_eq!(calls[1].0, "bash");
+    assert_eq!(calls[1].1["command"], "git diff --stat");
+    assert_eq!(calls[2].0, "read");
+    assert_eq!(
+        calls[2].1["file_path"],
+        ".lazy-harness/ssot/calendar-permission-policy.md"
     );
 }
 

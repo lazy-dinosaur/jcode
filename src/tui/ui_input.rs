@@ -696,6 +696,24 @@ pub(super) fn draw_status(frame: &mut Frame, app: &dyn TuiState, area: Rect, pen
                     Style::default().fg(dim_color()),
                 ));
 
+                if let Some(auto_bg_ms) = crate::config::config()
+                    .tool
+                    .effective_auto_background_after_ms()
+                {
+                    let auto_bg_secs = auto_bg_ms as f32 / 1000.0;
+                    if elapsed < auto_bg_secs {
+                        spans.push(Span::styled(
+                            format!(" · auto-bg in {}", format_elapsed(auto_bg_secs - elapsed)),
+                            Style::default().fg(rgb(100, 100, 100)),
+                        ));
+                    } else {
+                        spans.push(Span::styled(
+                            " · auto-bg pending",
+                            Style::default().fg(rgb(255, 193, 7)),
+                        ));
+                    }
+                }
+
                 if let Some(problem) = kv_cache_problem {
                     let miss_tokens = problem.affected_tokens.unwrap_or(0);
                     let miss_str = if miss_tokens >= 1000 {

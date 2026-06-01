@@ -63,6 +63,34 @@ struct CountingCancelAwareTool {
 struct DelayTestTool;
 struct SpawnTestTool;
 
+struct EnvVarGuard {
+    key: &'static str,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+        let previous = std::env::var_os(key);
+        unsafe {
+            std::env::set_var(key, value);
+        }
+        Self { key, previous }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        unsafe {
+            if let Some(previous) = &self.previous {
+                std::env::set_var(self.key, previous);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+        crate::config::reset_config_cache_for_tests();
+    }
+}
+
 impl SequentialProvider {
     fn new(responses: Vec<Vec<StreamEvent>>) -> (Self, Arc<AtomicUsize>) {
         let calls = Arc::new(AtomicUsize::new(0));
@@ -1600,6 +1628,64 @@ async fn turn_streaming_mpsc_altb_ends_turn_immediately_after_detach() {
         saw_background_done,
         "expected a ToolDone with 'moved to background' marker"
     );
+}
+
+#[tokio::test]
+async fn turn_streaming_mpsc_auto_backgrounds_long_foreground_tool() {
+    let _guard = crate::storage::lock_test_env();
+    let _auto_bg = EnvVarGuard::set("JCODE_TOOL_AUTO_BACKGROUND_AFTER_MS", "20");
+    crate::config::reset_config_cache_for_tests();
+
+    let (provider, tool_started, release_tool_end) = GatedToolProvider::new();
+    let provider_calls = provider.calls.clone();
+    let provider: Arc<dyn Provider> = Arc::new(provider);
+    let registry = Registry::empty();
+    registry
+        .register("delay_test".to_string(), Arc::new(DelayTestTool))
+        .await;
+    let mut agent = Agent::new(provider, registry);
+    agent.add_message(
+        Role::User,
+        vec![ContentBlock::Text {
+            text: "run the delay tool".to_string(),
+            cache_control: None,
+        }],
+    );
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let task = tokio::spawn(async move { agent.run_turn_streaming_mpsc(tx).await });
+
+    tokio::time::timeout(Duration::from_millis(500), tool_started.notified())
+        .await
+        .expect("provider should emit ToolStart");
+    release_tool_end.notify_waiters();
+
+    let task_result = tokio::time::timeout(Duration::from_secs(2), task)
+        .await
+        .expect("turn must complete promptly after auto-background")
+        .expect("turn task must not panic");
+    task_result.expect("turn must succeed");
+
+    assert_eq!(
+        provider_calls.load(Ordering::SeqCst),
+        1,
+        "auto-background detach must end the current turn instead of starting another provider call"
+    );
+
+    let mut tool_done_outputs = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        if let ServerEvent::ToolDone { output, .. } = event {
+            tool_done_outputs.push(output);
+        }
+    }
+    assert!(
+        tool_done_outputs.iter().any(|output| {
+            output.contains("moved to background automatically") && output.contains("bg")
+        }),
+        "expected auto-background ToolDone output, got: {tool_done_outputs:?}"
+    );
+
+    crate::config::reset_config_cache_for_tests();
 }
 
 #[tokio::test]

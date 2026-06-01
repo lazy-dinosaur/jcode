@@ -1232,6 +1232,12 @@ impl Default for GatewayConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ToolConfig {
+    /// Automatically move a foreground tool into the background after this many
+    /// milliseconds. `0` disables auto-backgrounding. This keeps long-running
+    /// shell/build/test commands from making the whole turn look like it is
+    /// still "thinking" forever while preserving the command in the background
+    /// task manager.
+    pub auto_background_after_ms: u64,
     /// Bash / shell tool defaults.
     pub bash: BashToolConfig,
 }
@@ -1239,7 +1245,23 @@ pub struct ToolConfig {
 impl Default for ToolConfig {
     fn default() -> Self {
         Self {
+            auto_background_after_ms: Self::DEFAULT_AUTO_BACKGROUND_AFTER_MS,
             bash: BashToolConfig::default(),
+        }
+    }
+}
+
+impl ToolConfig {
+    /// Default foreground grace period before a still-running tool is detached.
+    pub const DEFAULT_AUTO_BACKGROUND_AFTER_MS: u64 = 2 * 60 * 1000;
+
+    /// Resolve `auto_background_after_ms`. `0` disables the behaviour; otherwise
+    /// values are clamped to the bash hard cap so pathological configs cannot
+    /// create effectively infinite foreground waits.
+    pub fn effective_auto_background_after_ms(&self) -> Option<u64> {
+        match self.auto_background_after_ms {
+            0 => None,
+            value => Some(value.clamp(1, BashToolConfig::HARD_CAP_MS)),
         }
     }
 }
@@ -1322,5 +1344,27 @@ mod tests {
                 .unwrap();
         assert!(!cfg.auto_continue);
         assert!(!cfg.overflow_replay);
+    }
+
+    #[test]
+    fn tool_config_auto_background_defaults_to_two_minutes() {
+        let cfg = ToolConfig::default();
+        assert_eq!(cfg.auto_background_after_ms, 120_000);
+        assert_eq!(cfg.effective_auto_background_after_ms(), Some(120_000));
+    }
+
+    #[test]
+    fn tool_config_auto_background_can_be_disabled_with_zero() {
+        let cfg: ToolConfig = toml::from_str("auto_background_after_ms = 0\n").unwrap();
+        assert_eq!(cfg.effective_auto_background_after_ms(), None);
+    }
+
+    #[test]
+    fn tool_config_auto_background_clamps_pathological_values() {
+        let cfg: ToolConfig = toml::from_str("auto_background_after_ms = 999999999999\n").unwrap();
+        assert_eq!(
+            cfg.effective_auto_background_after_ms(),
+            Some(BashToolConfig::HARD_CAP_MS)
+        );
     }
 }

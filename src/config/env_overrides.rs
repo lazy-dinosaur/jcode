@@ -223,6 +223,13 @@ impl Config {
             }
         }
 
+        // Tools
+        if let Ok(v) = std::env::var("JCODE_TOOL_AUTO_BACKGROUND_AFTER_MS")
+            && let Ok(parsed) = v.trim().parse::<u64>()
+        {
+            self.tool.auto_background_after_ms = parsed;
+        }
+
         // Web search
         if let Ok(v) = std::env::var("JCODE_WEBSEARCH_ENGINE")
             && let Some(engine) = WebSearchEngine::parse(&v)

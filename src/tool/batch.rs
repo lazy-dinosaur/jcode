@@ -140,7 +140,7 @@ impl ToolCallInput {
 /// Try to fix common LLM mistakes in batch tool_calls:
 /// - Parameters placed at the same level as "tool" instead of nested under "parameters"
 /// - "name" used instead of "tool" for the tool name key
-/// - "arguments", "args", or "input" used instead of "parameters"
+/// - "parameter", "arguments", "args", or "input" used instead of "parameters"
 fn normalize_batch_input(mut input: Value) -> Value {
     if let Some(calls) = input.get_mut("tool_calls").and_then(|v| v.as_array_mut()) {
         for call in calls.iter_mut() {
@@ -169,7 +169,7 @@ fn normalize_batch_input(mut input: Value) -> Value {
                 }
 
                 if !obj.contains_key("parameters") {
-                    for alias in ["arguments", "args", "input"] {
+                    for alias in ["parameter", "arguments", "args", "input"] {
                         if let Some(alias_val) = obj.remove(alias) {
                             obj.insert("parameters".to_string(), alias_val);
                             break;
