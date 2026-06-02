@@ -323,6 +323,56 @@ fn test_stream_activity_event_treats_any_stream_event_as_activity() {
 }
 
 #[test]
+fn test_stale_persistent_continuation_errors_trigger_fallback() {
+    assert!(super::openai_stream_runtime::is_stale_persistent_continuation_error(
+        "invalid_request_error (previous_response_not_found): Previous response with id 'resp_abc' not found."
+    ));
+    assert!(super::openai_stream_runtime::is_stale_persistent_continuation_error(
+        "No tool output found for function call call_123."
+    ));
+    assert!(!super::openai_stream_runtime::is_stale_persistent_continuation_error(
+        "rate limit exceeded"
+    ));
+}
+
+#[tokio::test]
+async fn test_persistent_ws_continuation_rejects_changed_input_prefix() {
+    let (state, server) = test_persistent_ws_state().await;
+    let persistent_ws = Arc::new(tokio::sync::Mutex::new(Some(state)));
+    let (tx, _rx) = tokio::sync::mpsc::channel(4);
+    let request = serde_json::json!({
+        "model": "gpt-test",
+        "input": [],
+        "tools": [],
+    });
+    let input = vec![
+        serde_json::json!({
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "changed prefix"}],
+        }),
+        serde_json::json!({
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "new item"}],
+        }),
+    ];
+
+    let result = super::openai_stream_runtime::try_persistent_ws_continuation(
+        &persistent_ws,
+        &request,
+        &input,
+        input.len(),
+        &tx,
+    )
+    .await;
+
+    assert!(matches!(result, PersistentWsResult::NotAvailable));
+    assert!(persistent_ws.lock().await.is_none());
+    server.abort();
+}
+
+#[test]
 fn test_websocket_activity_payload_counts_response_completed() {
     assert!(is_websocket_activity_payload(
         r#"{"type":"response.completed","response":{"status":"completed"}}"#

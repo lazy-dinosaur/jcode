@@ -286,6 +286,34 @@ pub(super) async fn try_persistent_ws_continuation(
         return PersistentWsResult::NotAvailable;
     }
 
+    let current_input_hashes = crate::provider::fingerprint::item_hashes(input);
+    if state.last_input_item_hashes.len() != state.last_input_item_count {
+        crate::logging::warn(&format!(
+            "Persistent WS state missing input prefix hashes (hashes={} items={}); reconnecting",
+            state.last_input_item_hashes.len(),
+            state.last_input_item_count,
+        ));
+        *guard = None;
+        return PersistentWsResult::NotAvailable;
+    }
+    if current_input_hashes
+        .get(..state.last_input_item_count)
+        .map(|prefix| prefix != state.last_input_item_hashes.as_slice())
+        .unwrap_or(true)
+    {
+        let common_prefix = current_input_hashes
+            .iter()
+            .zip(state.last_input_item_hashes.iter())
+            .take_while(|(left, right)| left == right)
+            .count();
+        crate::logging::warn(&format!(
+            "Persistent WS input prefix changed (common_prefix={} previous_items={} current_items={}); reconnecting with full input",
+            common_prefix, state.last_input_item_count, input_item_count,
+        ));
+        *guard = None;
+        return PersistentWsResult::NotAvailable;
+    }
+
     // Compute incremental items: everything after the last_input_item_count
     let incremental_items: Vec<Value> = input[state.last_input_item_count..].to_vec();
     if incremental_items.is_empty() {
@@ -551,7 +579,8 @@ pub(super) async fn try_persistent_ws_continuation(
                         saw_response_completed = true;
                     }
                     if let StreamEvent::Error { ref message, .. } = event
-                        && is_retryable_error(&message.to_lowercase())
+                        && (is_retryable_error(&message.to_lowercase())
+                            || is_stale_persistent_continuation_error(message))
                     {
                         return PersistentWsResult::Failed(format!("stream error: {}", message));
                     }
@@ -562,6 +591,12 @@ pub(super) async fn try_persistent_ws_continuation(
                 while let Some(event) = pending.pop_front() {
                     if is_stream_activity_event(&event) {
                         made_api_activity = true;
+                    }
+                    if let StreamEvent::Error { ref message, .. } = event
+                        && (is_retryable_error(&message.to_lowercase())
+                            || is_stale_persistent_continuation_error(message))
+                    {
+                        return PersistentWsResult::Failed(format!("stream error: {}", message));
                     }
                     if matches!(event, StreamEvent::MessageEnd { .. }) {
                         saw_response_completed = true;
@@ -601,6 +636,7 @@ pub(super) async fn try_persistent_ws_continuation(
     if let Some(resp_id) = new_response_id {
         state.last_response_id = resp_id;
         state.last_input_item_count = input_item_count;
+        state.last_input_item_hashes = current_input_hashes;
         state.message_count += 1;
         state.last_activity_at = Instant::now();
         crate::logging::info(&format!(
@@ -616,6 +652,13 @@ pub(super) async fn try_persistent_ws_continuation(
         *guard = None;
         PersistentWsResult::Success
     }
+}
+
+pub(super) fn is_stale_persistent_continuation_error(message: &str) -> bool {
+    let lower = message.to_lowercase();
+    lower.contains("previous_response_not_found")
+        || lower.contains("previous response with id")
+        || lower.contains("no tool output found for function call")
 }
 
 /// Stream response via WebSocket, saving the connection for reuse.
@@ -751,6 +794,11 @@ pub(super) async fn stream_response_websocket_persistent(
         .get("input")
         .and_then(|value| value.as_array())
         .map(|items| summarize_ws_input(items))
+        .unwrap_or_default();
+    let request_input_hashes = request_event
+        .get("input")
+        .and_then(|value| value.as_array())
+        .map(|items| crate::provider::fingerprint::item_hashes(items))
         .unwrap_or_default();
 
     let request_text = serde_json::to_string(&request_event).map_err(|err| {
@@ -992,6 +1040,7 @@ pub(super) async fn stream_response_websocket_persistent(
             last_activity_at: Instant::now(),
             message_count: 1,
             last_input_item_count: input_item_count,
+            last_input_item_hashes: request_input_hashes,
         });
     } else {
         crate::logging::info(

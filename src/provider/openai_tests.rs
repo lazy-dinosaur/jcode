@@ -75,6 +75,13 @@ async fn test_persistent_ws_state() -> (PersistentWsState, tokio::task::JoinHand
             last_activity_at: Instant::now(),
             message_count: 1,
             last_input_item_count: 1,
+            last_input_item_hashes: crate::provider::fingerprint::item_hashes(&[
+                serde_json::json!({
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "old prefix"}],
+                }),
+            ]),
         },
         server,
     )

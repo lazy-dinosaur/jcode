@@ -178,6 +178,12 @@ struct PersistentWsState {
     message_count: usize,
     /// Number of items we sent in the last full request (for detecting conversation changes)
     last_input_item_count: usize,
+    /// Stable hashes of the input items from the last accepted request. Persistent
+    /// continuation may only send `input[last_input_item_count..]` when this
+    /// prefix is byte-for-byte equivalent at the Responses item level. Item
+    /// counts alone are not enough because continuation/compaction/repair can
+    /// rewrite earlier items without changing the total count monotonically.
+    last_input_item_hashes: Vec<u64>,
 }
 
 #[derive(Debug, Clone)]

@@ -36,7 +36,7 @@ fn stable_json_len<T: Serialize + ?Sized>(value: &T) -> usize {
         .unwrap_or_default()
 }
 
-fn item_hashes(items: &[Value]) -> Vec<u64> {
+pub(crate) fn item_hashes(items: &[Value]) -> Vec<u64> {
     items.iter().map(stable_hash_json).collect()
 }
 
