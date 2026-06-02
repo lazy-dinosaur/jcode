@@ -958,6 +958,96 @@ async fn test_sanitize_tool_ids_with_dots() {
 }
 
 #[tokio::test]
+async fn test_tool_results_are_reordered_before_interleaved_text() {
+    let provider = AnthropicProvider::new();
+
+    let messages = vec![
+        Message {
+            role: Role::Assistant,
+            content: vec![
+                ContentBlock::Text {
+                    text: "I'll inspect both files.".to_string(),
+                    cache_control: None,
+                },
+                ContentBlock::ToolUse {
+                    id: "tool_a".to_string(),
+                    name: "read".to_string(),
+                    input: serde_json::json!({"file_path": "/tmp/a.png"}),
+                },
+                ContentBlock::ToolUse {
+                    id: "tool_b".to_string(),
+                    name: "read".to_string(),
+                    input: serde_json::json!({"file_path": "src/Header.tsx"}),
+                },
+            ],
+            timestamp: None,
+            tool_duration_ms: None,
+        },
+        Message {
+            role: Role::User,
+            content: vec![
+                ContentBlock::ToolResult {
+                    tool_use_id: "tool_a".to_string(),
+                    content: "Image: /tmp/a.png".to_string(),
+                    is_error: None,
+                },
+                ContentBlock::Image {
+                    media_type: "image/png".to_string(),
+                    data: "iVBORw0KGgo=".to_string(),
+                },
+                ContentBlock::Text {
+                    text: "[Attached image associated with the preceding tool result]".to_string(),
+                    cache_control: None,
+                },
+            ],
+            timestamp: None,
+            tool_duration_ms: None,
+        },
+        Message {
+            role: Role::User,
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: "tool_b".to_string(),
+                content: "Header source".to_string(),
+                is_error: None,
+            }],
+            timestamp: None,
+            tool_duration_ms: None,
+        },
+    ];
+
+    let formatted = provider.format_messages(&messages, false);
+    assert_eq!(formatted.len(), 2);
+    assert_eq!(formatted[0].role, "assistant");
+    assert_eq!(formatted[1].role, "user");
+
+    match &formatted[1].content[0] {
+        ApiContentBlock::ToolResult {
+            tool_use_id,
+            content,
+            ..
+        } => {
+            assert_eq!(tool_use_id, "tool_a");
+            assert!(matches!(content, ToolResultContent::Blocks(_)));
+        }
+        _ => panic!("first user block must be tool_result A"),
+    }
+
+    match &formatted[1].content[1] {
+        ApiContentBlock::ToolResult { tool_use_id, .. } => {
+            assert_eq!(tool_use_id, "tool_b");
+        }
+        _ => panic!("second user block must be tool_result B"),
+    }
+
+    match &formatted[1].content[2] {
+        ApiContentBlock::Text { text, .. } => {
+            assert!(text.contains("Attached image"));
+        }
+        _ => panic!("non-tool text should remain after all tool_result blocks"),
+    }
+}
+
+#[tokio::test]
 async fn test_sanitize_dangling_tool_ids_with_dots() {
     let provider = AnthropicProvider::new();
 

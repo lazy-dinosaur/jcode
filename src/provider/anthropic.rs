@@ -914,6 +914,8 @@ impl AnthropicProvider {
             ));
         }
 
+        Self::normalize_tool_result_adjacency(&mut merged);
+
         // Validate: check each assistant message with tool_use has matching tool_result in next user message
         for (i, msg) in merged.iter().enumerate() {
             if msg.role == "assistant" {
@@ -972,6 +974,132 @@ impl AnthropicProvider {
         }
 
         merged
+    }
+
+    /// Anthropic requires every assistant `tool_use` to be followed immediately
+    /// by a user message whose *leading* blocks are the corresponding
+    /// `tool_result`s. Our persisted transcript can contain consecutive user
+    /// messages for parallel tool results, and image read results also add a
+    /// descriptive text block after the first tool result. After same-role
+    /// merging this can become:
+    ///
+    ///   assistant: tool_use A, tool_use B
+    ///   user: tool_result A, text/image note, tool_result B
+    ///
+    /// which Anthropic rejects because B is not in the immediate tool-result
+    /// prefix. Move all matching tool_result blocks to the front of the next
+    /// user message, preserving assistant tool_use order and keeping any extra
+    /// user text after the tool results.
+    fn normalize_tool_result_adjacency(messages: &mut Vec<ApiMessage>) {
+        let mut assistant_index = 0usize;
+        let mut repaired = 0usize;
+
+        while assistant_index < messages.len() {
+            if messages[assistant_index].role != "assistant" {
+                assistant_index += 1;
+                continue;
+            }
+
+            let tool_use_ids = messages[assistant_index]
+                .content
+                .iter()
+                .filter_map(|block| match block {
+                    ApiContentBlock::ToolUse { id, .. } => Some(id.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+
+            if tool_use_ids.is_empty() {
+                assistant_index += 1;
+                continue;
+            }
+
+            let user_index = assistant_index + 1;
+            if user_index >= messages.len() || messages[user_index].role != "user" {
+                messages.insert(
+                    user_index,
+                    ApiMessage {
+                        role: "user".to_string(),
+                        content: Vec::new(),
+                    },
+                );
+            }
+
+            if Self::tool_result_prefix_matches(&messages[user_index].content, &tool_use_ids) {
+                assistant_index += 1;
+                continue;
+            }
+
+            let mut ordered_results = Vec::new();
+            for tool_use_id in &tool_use_ids {
+                let block = Self::remove_tool_result_block(messages, user_index, tool_use_id)
+                    .unwrap_or_else(|| ApiContentBlock::ToolResult {
+                        tool_use_id: tool_use_id.clone(),
+                        content: ToolResultContent::Text(
+                            "[Session interrupted before tool execution completed]".to_string(),
+                        ),
+                        is_error: true,
+                    });
+                ordered_results.push(block);
+            }
+
+            let mut remainder = std::mem::take(&mut messages[user_index].content);
+            repaired += ordered_results.len();
+            ordered_results.append(&mut remainder);
+            messages[user_index].content = ordered_results;
+
+            assistant_index += 1;
+        }
+
+        messages.retain(|msg| !msg.content.is_empty());
+
+        if repaired > 0 {
+            crate::logging::info(&format!(
+                "[anthropic] Normalized {} tool_result block(s) into immediate user prefixes",
+                repaired
+            ));
+        }
+    }
+
+    fn tool_result_prefix_matches(content: &[ApiContentBlock], tool_use_ids: &[String]) -> bool {
+        if content.len() < tool_use_ids.len() {
+            return false;
+        }
+
+        content
+            .iter()
+            .zip(tool_use_ids.iter())
+            .all(|(block, expected_id)| {
+                matches!(
+                    block,
+                    ApiContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == expected_id
+                )
+            })
+    }
+
+    fn remove_tool_result_block(
+        messages: &mut [ApiMessage],
+        start_index: usize,
+        tool_use_id: &str,
+    ) -> Option<ApiContentBlock> {
+        for msg in messages.iter_mut().skip(start_index) {
+            if msg.role != "user" {
+                continue;
+            }
+
+            let Some(position) = msg.content.iter().position(|block| {
+                matches!(
+                    block,
+                    ApiContentBlock::ToolResult { tool_use_id: id, .. } if id == tool_use_id
+                )
+            }) else {
+                continue;
+            };
+
+            return Some(msg.content.remove(position));
+        }
+
+        None
     }
 
     /// Convert our ContentBlock to Anthropic API format
