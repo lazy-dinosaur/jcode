@@ -631,6 +631,45 @@ fn test_glued_prose_pipe_table_header_before_separator_is_repaired() {
 }
 
 #[test]
+fn test_colon_directly_glued_to_pipe_table_header_is_repaired() {
+    let md = concat!(
+        "현재 구현 기준:| 대상 | 액션카드 | 알림 |\n",
+        "|---|---|---|\n",
+        "| 회의 참석자료 선택된 전원 | 회의록 작성하기 액션 추가됨 | 액션 알림 대상 |\n",
+        "| 참석자가 아닌 사람 | 없음 | 알림 없음 |"
+    );
+    let rendered: Vec<String> = render_markdown_with_width(md, Some(160))
+        .iter()
+        .map(line_to_string)
+        .collect();
+
+    assert_eq!(
+        rendered.first().map(String::as_str),
+        Some("현재 구현 기준:")
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("대상") && line.contains("액션카드") && line.contains('│')),
+        "colon-glued header should render as a table header: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("회의 참석자료 선택된 전원") && line.contains("회의록 작성하기")),
+        "body rows should render as table rows: {rendered:?}"
+    );
+    assert!(
+        rendered.iter().all(|line| {
+            !line.contains("기준:|")
+                && !line.trim_start().starts_with("|---|")
+                && !line.trim_start().starts_with("| 회의")
+        }),
+        "raw pipe table source should not leak: {rendered:?}"
+    );
+}
+
+#[test]
 fn test_pipe_table_cell_node_id_is_not_split_as_ordered_list_marker() {
     let md = concat!(
         "Gate 1(metadata) + 현재 코드를 확보했습니다. 차이가 큽니다. metadata로 파악한 새 디자인:\n\n",

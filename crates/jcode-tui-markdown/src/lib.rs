@@ -1564,10 +1564,11 @@ fn sentence_boundary_before_embedded_table_header(before_first_pipe: &str) -> Op
             chars.next();
         }
 
-        if after_whitespace > after_punctuation
-            && before_first_pipe[after_whitespace..]
-                .chars()
-                .any(|candidate| !candidate.is_whitespace())
+        if after_whitespace == before_first_pipe.len()
+            || (after_whitespace > after_punctuation
+                && before_first_pipe[after_whitespace..]
+                    .chars()
+                    .any(|candidate| !candidate.is_whitespace()))
         {
             boundary = Some(after_whitespace);
         }
