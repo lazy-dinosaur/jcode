@@ -438,6 +438,12 @@ fn handle_input_shell_completed(app: &mut App, shell: InputShellCompleted) {
 }
 
 pub(super) fn finish_turn(app: &mut App) {
+    // `current_turn_system_reminder` is ephemeral prompt context. The normal
+    // input queued-message path clears it after each provider turn, but local
+    // bus/background completion turns finish through this helper. Clear it here
+    // too so a lifecycle hook reminder from a previous turn cannot leak into
+    // later turns.
+    app.current_turn_system_reminder = None;
     app.total_input_tokens += app.streaming_input_tokens;
     app.total_output_tokens += app.streaming_output_tokens;
     app.update_cost_impl();
@@ -459,4 +465,21 @@ pub(super) fn finish_turn(app: &mut App) {
         app.clear_visible_turn_started();
     }
     let _ = super::commands::maybe_begin_pending_local_transfer(app);
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn finish_turn_clears_current_turn_system_reminder() {
+        let source = include_str!("local.rs");
+        let finish_turn = source
+            .split("pub(super) fn finish_turn(app: &mut App)")
+            .nth(1)
+            .expect("finish_turn function should exist");
+
+        assert!(
+            finish_turn.contains("app.current_turn_system_reminder = None;"),
+            "local TUI turns must not leak current-turn lifecycle reminders into later turns"
+        );
+    }
 }
