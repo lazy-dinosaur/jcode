@@ -22,6 +22,26 @@ fn test_provider_for_model_gemini() {
 }
 
 #[test]
+fn test_provider_for_model_antigravity_only_gemini_backend_ids() {
+    assert_eq!(
+        provider_for_model("gemini-3-flash-agent"),
+        Some("antigravity")
+    );
+    assert_eq!(
+        provider_for_model("gemini-3.5-flash-low"),
+        Some("antigravity")
+    );
+    assert_eq!(
+        provider_for_model("gemini-3.5-pro-high"),
+        Some("antigravity")
+    );
+
+    // Ambiguous display aliases that regular Gemini also advertises should keep
+    // the long-standing default routing to the Gemini provider.
+    assert_eq!(provider_for_model("gemini-3.5-flash"), Some("gemini"));
+}
+
+#[test]
 fn test_provider_for_model_bedrock() {
     assert_eq!(provider_for_model("amazon.nova-pro-v1:0"), Some("bedrock"));
     assert_eq!(

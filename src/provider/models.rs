@@ -1113,6 +1113,8 @@ pub fn provider_for_model_with_hint(
         Some("claude")
     } else if model.starts_with("gpt-") {
         Some("openai")
+    } else if crate::provider::antigravity::is_antigravity_only_gemini_model(model) {
+        Some("antigravity")
     } else if model.starts_with("gemini-") {
         Some("gemini")
     } else if let Some(provider) = core_provider_for_model_with_hint(model, None) {

@@ -7,8 +7,9 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use jcode_provider_core::CompletionOptions;
 use jcode_provider_gemini::{
-    CodeAssistGenerateRequest, CodeAssistGenerateResponse, GeminiFunctionCallingConfig,
-    GeminiToolConfig, VertexGenerateContentRequest, gemini3_thinking_generation_config,
+    AVAILABLE_MODELS as GEMINI_CODE_ASSIST_MODELS, CodeAssistGenerateRequest,
+    CodeAssistGenerateResponse, GeminiFunctionCallingConfig, GeminiToolConfig,
+    VertexGenerateContentRequest, gemini3_thinking_generation_config,
     normalize_antigravity_model_for_api,
 };
 use serde::{Deserialize, Serialize};
@@ -186,6 +187,13 @@ fn merge_antigravity_model_ids(models: impl IntoIterator<Item = String>) -> Vec<
 pub(crate) fn is_known_model(model: &str) -> bool {
     let normalized = model.trim();
     !normalized.is_empty() && AVAILABLE_MODELS.contains(&normalized)
+}
+
+pub(crate) fn is_antigravity_only_gemini_model(model: &str) -> bool {
+    let normalized = model.trim();
+    normalized.starts_with("gemini-")
+        && is_known_model(normalized)
+        && !GEMINI_CODE_ASSIST_MODELS.contains(&normalized)
 }
 
 fn fallback_default_model_id() -> &'static str {
