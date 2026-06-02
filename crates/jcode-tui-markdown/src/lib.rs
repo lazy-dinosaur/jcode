@@ -1435,6 +1435,18 @@ fn repair_wrapped_pipe_table_rows(text: &str) -> String {
             continue;
         }
 
+        if i + 1 < lines.len()
+            && let Some((prose, header_row)) =
+                split_glued_pipe_table_header_before_separator(line, lines[i + 1])
+        {
+            if !prose.is_empty() {
+                out.push(prose);
+            }
+            out.push(header_row);
+            i += 1;
+            continue;
+        }
+
         if is_pipe_table_separator_line(trimmed)
             && out
                 .last()
@@ -1498,6 +1510,102 @@ fn is_pipe_table_row_continuation_line(line: &str) -> bool {
         && !trimmed.starts_with('|')
         && trimmed.ends_with('|')
         && (trimmed.starts_with("- ") || trimmed.starts_with("• ") || trimmed.contains('|'))
+}
+
+fn split_glued_pipe_table_header_before_separator(
+    line: &str,
+    next_line: &str,
+) -> Option<(String, String)> {
+    let separator_cols = pipe_table_separator_column_count(next_line.trim())?;
+    let trimmed_end = line.trim_end();
+
+    if trimmed_end.is_empty() || trimmed_end.starts_with('|') || !trimmed_end.ends_with('|') {
+        return None;
+    }
+    if trimmed_end.matches('|').count() < separator_cols.saturating_sub(1).max(2) {
+        return None;
+    }
+
+    let first_pipe = trimmed_end.find('|')?;
+    let before_first_pipe = &trimmed_end[..first_pipe];
+    let split_at = sentence_boundary_before_embedded_table_header(before_first_pipe)?;
+    let prose = trimmed_end[..split_at].trim_end();
+    let header = trimmed_end[split_at..].trim_start();
+
+    if prose.is_empty() || header.is_empty() {
+        return None;
+    }
+    if pipe_table_row_column_count(header)? != separator_cols {
+        return None;
+    }
+
+    Some((prose.to_string(), normalize_pipe_table_row(header)))
+}
+
+fn sentence_boundary_before_embedded_table_header(before_first_pipe: &str) -> Option<usize> {
+    let mut boundary = None;
+    let mut chars = before_first_pipe.char_indices().peekable();
+
+    while let Some((idx, ch)) = chars.next() {
+        if !matches!(
+            ch,
+            ':' | '：' | '.' | '。' | '!' | '！' | '?' | '？' | ')' | '”' | '"'
+        ) {
+            continue;
+        }
+
+        let after_punctuation = idx + ch.len_utf8();
+        let mut after_whitespace = after_punctuation;
+        while let Some((next_idx, next_ch)) = chars.peek().copied() {
+            if !next_ch.is_whitespace() {
+                break;
+            }
+            after_whitespace = next_idx + next_ch.len_utf8();
+            chars.next();
+        }
+
+        if after_whitespace > after_punctuation
+            && before_first_pipe[after_whitespace..]
+                .chars()
+                .any(|candidate| !candidate.is_whitespace())
+        {
+            boundary = Some(after_whitespace);
+        }
+    }
+
+    boundary
+}
+
+fn pipe_table_separator_column_count(line: &str) -> Option<usize> {
+    if !is_pipe_table_separator_line(line) {
+        return None;
+    }
+    Some(line.trim().trim_matches('|').split('|').count())
+}
+
+fn pipe_table_row_column_count(line: &str) -> Option<usize> {
+    let mut row = line.trim();
+    if row.starts_with('|') {
+        row = &row['|'.len_utf8()..];
+    }
+    if row.ends_with('|') {
+        row = &row[..row.len() - '|'.len_utf8()];
+    }
+
+    let cells: Vec<&str> = row.split('|').collect();
+    if cells.len() < 2 || cells.iter().any(|cell| cell.trim().is_empty()) {
+        return None;
+    }
+    Some(cells.len())
+}
+
+fn normalize_pipe_table_row(row: &str) -> String {
+    let trimmed = row.trim();
+    if trimmed.starts_with('|') {
+        trimmed.to_string()
+    } else {
+        format!("| {trimmed}")
+    }
 }
 
 fn repair_glued_list_markers_in_line(line: &str) -> String {

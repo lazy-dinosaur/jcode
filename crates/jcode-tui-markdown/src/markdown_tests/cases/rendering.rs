@@ -582,6 +582,55 @@ fn test_paragraph_to_pipe_table_preserves_visible_boundary() {
 }
 
 #[test]
+fn test_glued_prose_pipe_table_header_before_separator_is_repaired() {
+    let md = concat!(
+        "캘린더 관련 알림은 휴가 신청 말고 현재 이렇게 있어. 상황 | 누구에게 | 알림/액션 |\n",
+        "|---|---|---|\n",
+        "| 회의 일정 생성 | 참석자로 지정된 직원, 생성자 제외 | 즉시 회의 일정 안내 알림 |\n",
+        "| 회의 참석자 추가 | 추가된 직원, 수정자 제외 | 즉시 회의 참석자 추가 알림 |\n",
+        "| 휴가 승인 | 휴가 신청자 | 즉시 휴가 승인 알림 |"
+    );
+    let rendered: Vec<String> = render_markdown_with_width(md, Some(180))
+        .iter()
+        .map(line_to_string)
+        .collect();
+
+    assert_eq!(
+        rendered.first().map(String::as_str),
+        Some("캘린더 관련 알림은 휴가 신청 말고 현재 이렇게 있어.")
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("상황") && line.contains("누구에게") && line.contains('│')),
+        "glued table header should render as a table header: {rendered:?}"
+    );
+    assert!(
+        rendered.iter().any(|line| line.contains("휴가 승인") && line.contains("휴가 신청자")),
+        "table body rows should remain in the table: {rendered:?}"
+    );
+    assert!(
+        rendered.iter().all(|line| {
+            !line.contains("있어. 상황 |")
+                && !line.trim_start().starts_with("|---|")
+                && !line.trim_start().starts_with("| 회의")
+        }),
+        "table source must not leak raw pipe rows or stay glued to prose: {rendered:?}"
+    );
+
+    let lazy_rendered: Vec<String> = render_markdown_lazy(md, Some(180), 0..usize::MAX)
+        .iter()
+        .map(line_to_string)
+        .collect();
+    assert!(
+        lazy_rendered
+            .iter()
+            .any(|line| line.contains("상황") && line.contains("누구에게") && line.contains('│')),
+        "lazy renderer should apply the same glued table header repair: {lazy_rendered:?}"
+    );
+}
+
+#[test]
 fn test_pipe_table_cell_node_id_is_not_split_as_ordered_list_marker() {
     let md = concat!(
         "Gate 1(metadata) + 현재 코드를 확보했습니다. 차이가 큽니다. metadata로 파악한 새 디자인:\n\n",
