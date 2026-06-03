@@ -1174,7 +1174,7 @@ pub(super) fn prepare_body(
                     copy_targets.push(offset_copy_target(target, lines.len()));
                 }
                 let logical_content_width =
-                    jcode_tui_messages::centered_wrap_width(content_width, centered, 96);
+                    jcode_tui_messages::centered_assistant_wrap_width(content_width, centered);
                 let saved_centering = markdown::center_code_blocks();
                 markdown::set_center_code_blocks(false);
                 let content_lines =

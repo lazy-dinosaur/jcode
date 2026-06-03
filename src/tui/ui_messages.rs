@@ -6,7 +6,9 @@ use crate::message::{
     parse_background_task_progress_notification_markdown,
 };
 pub(super) use cache_support::get_cached_message_lines;
-use cache_support::{centered_wrap_width, left_pad_lines_for_centered_mode};
+use cache_support::{
+    centered_assistant_wrap_width, centered_wrap_width, left_pad_lines_for_centered_mode,
+};
 use std::borrow::Cow;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -218,7 +220,7 @@ pub(crate) fn render_assistant_message(
     _diff_mode: crate::config::DiffDisplayMode,
 ) -> Vec<Line<'static>> {
     let centered = markdown::center_code_blocks();
-    let wrap_width = centered_wrap_width(width, centered, 96);
+    let wrap_width = centered_assistant_wrap_width(width, centered);
     let content = strip_count_wrapper_noise_lines(&msg.content);
     let mut lines = markdown::render_markdown_with_width(content.as_ref(), Some(wrap_width));
     lines = wrap_rendered_markdown_lines(lines, wrap_width);

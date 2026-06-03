@@ -832,6 +832,37 @@ fn render_assistant_message_recenters_structured_markdown_to_actual_width() {
 }
 
 #[test]
+fn render_assistant_message_centered_mode_uses_wide_prose_width() {
+    let saved = crate::tui::markdown::center_code_blocks();
+    crate::tui::markdown::set_center_code_blocks(true);
+    let msg = DisplayMessage::assistant(
+        "1. Custom overlay toast (Recommended)\n   - 우측 하단 커스텀 알림창, `overlay-toast.ts`\n2. OS native notification – Electron `Notification`, `notification.ts`\n3. OS taskbar overlay badge – Windows 작업표시줄 미읽음 숫자, `window-state.ts`일반 채팅/리마인드 쪽은 NotificationWatcher가 알림 payload 만들고, 채널 설정에 따라 custom overlay/native 쪽으로 dispatch하는 구조야.",
+    );
+
+    let lines = render_assistant_message(&msg, 180, crate::config::DiffDisplayMode::Off);
+    crate::tui::markdown::set_center_code_blocks(saved);
+    let rendered: Vec<String> = lines.iter().map(extract_line_text).collect();
+
+    assert!(
+        rendered.iter().any(|line| {
+            line.contains("OS taskbar overlay badge") && line.contains("payload 만들고")
+        }),
+        "wide centered assistant prose should not be capped at the old 96-column wrap: {rendered:?}"
+    );
+    assert!(
+        lines.iter().all(|line| line.width() <= 180),
+        "assistant prose should stay within the available terminal width: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .filter(|line| !line.trim().is_empty())
+            .all(|line| leading_spaces(line) >= 8),
+        "structured assistant prose should still preserve a visible centered gutter: {rendered:?}"
+    );
+}
+
+#[test]
 fn render_system_message_centered_mode_caps_wrap_width_for_visible_gutters() {
     let saved = crate::tui::markdown::center_code_blocks();
     crate::tui::markdown::set_center_code_blocks(true);

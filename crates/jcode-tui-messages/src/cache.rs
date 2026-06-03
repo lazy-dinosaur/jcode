@@ -90,6 +90,21 @@ pub fn centered_wrap_width(width: u16, centered: bool, centered_max_width: usize
     }
 }
 
+pub fn centered_assistant_wrap_width(width: u16, centered: bool) -> usize {
+    const BASE_CENTERED_WIDTH: usize = 96;
+    const MIN_CENTERED_GUTTER: usize = 8;
+
+    let width = width as usize;
+    if !centered {
+        return width.max(1);
+    }
+
+    let responsive_width = width
+        .saturating_sub(MIN_CENTERED_GUTTER * 2)
+        .max(BASE_CENTERED_WIDTH);
+    width.min(responsive_width).max(1)
+}
+
 pub fn get_cached_message_lines<F>(
     msg: &DisplayMessage,
     width: u16,
@@ -138,6 +153,14 @@ mod tests {
         assert_eq!(centered_wrap_width(120, true, 96), 96);
         assert_eq!(centered_wrap_width(80, true, 96), 80);
         assert_eq!(centered_wrap_width(120, false, 96), 120);
+    }
+
+    #[test]
+    fn centered_assistant_wrap_width_expands_in_wide_centered_layouts() {
+        assert_eq!(centered_assistant_wrap_width(80, true), 80);
+        assert_eq!(centered_assistant_wrap_width(120, true), 104);
+        assert_eq!(centered_assistant_wrap_width(180, true), 164);
+        assert_eq!(centered_assistant_wrap_width(180, false), 180);
     }
 
     #[test]
