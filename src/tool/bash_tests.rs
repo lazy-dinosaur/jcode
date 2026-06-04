@@ -443,6 +443,70 @@ async fn test_background_command_progress_marker_updates_status_and_stays_out_of
 }
 
 #[tokio::test]
+async fn test_background_command_defaults_to_wake_on_completion() {
+    let tool = BashTool::new();
+    let ctx = make_ctx(None);
+
+    let result = tool
+        .execute(
+            json!({
+                "command": "sleep 0.1; echo done",
+                "run_in_background": true,
+            }),
+            ctx,
+        )
+        .await
+        .expect("background command should start");
+
+    let metadata = result.metadata.expect("expected metadata");
+    let task_id = metadata["task_id"]
+        .as_str()
+        .expect("task id should be present")
+        .to_string();
+
+    let status = crate::background::global()
+        .status(&task_id)
+        .await
+        .expect("status should exist");
+    assert!(status.notify, "wake should imply notify");
+    assert!(
+        status.wake,
+        "run_in_background should wake by default unless wake=false is explicit"
+    );
+}
+
+#[tokio::test]
+async fn test_background_command_respects_explicit_wake_false() {
+    let tool = BashTool::new();
+    let ctx = make_ctx(None);
+
+    let result = tool
+        .execute(
+            json!({
+                "command": "sleep 0.1; echo done",
+                "run_in_background": true,
+                "wake": false,
+            }),
+            ctx,
+        )
+        .await
+        .expect("background command should start");
+
+    let metadata = result.metadata.expect("expected metadata");
+    let task_id = metadata["task_id"]
+        .as_str()
+        .expect("task id should be present")
+        .to_string();
+
+    let status = crate::background::global()
+        .status(&task_id)
+        .await
+        .expect("status should exist");
+    assert!(status.notify, "notifications remain enabled by default");
+    assert!(!status.wake, "explicit wake=false should be preserved");
+}
+
+#[tokio::test]
 async fn test_background_command_ratio_output_updates_progress() {
     let tool = BashTool::new();
     let ctx = make_ctx(None);

@@ -565,7 +565,7 @@ struct BashInput {
     #[serde(default = "default_true")]
     notify: bool,
     #[serde(default)]
-    wake: bool,
+    wake: Option<bool>,
 }
 
 fn normalize_bash_input(input: Value) -> Value {
@@ -633,7 +633,7 @@ impl Tool for BashTool {
                 },
                 "wake": {
                     "type": "boolean",
-                    "description": "Wake on completion."
+                    "description": "Wake on completion. Defaults to true for run_in_background=true; set false to only show a completion card."
                 }
             }
         })
@@ -928,7 +928,7 @@ impl BashTool {
                         pid,
                         &started_at,
                         params.notify,
-                        params.wake,
+                        params.wake.unwrap_or(false),
                     )
                     .await;
                 let output = format!(
@@ -968,7 +968,7 @@ impl BashTool {
         let timeout_ms = resolve_timeout_ms(params.timeout);
         let timeout_duration = Duration::from_millis(timeout_ms);
 
-        let wake = params.wake;
+        let wake = params.wake.unwrap_or(true);
         let notify = params.notify || wake;
         let info = crate::background::global()
             .spawn_with_notify(
