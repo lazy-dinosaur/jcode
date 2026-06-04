@@ -885,6 +885,85 @@ fn test_nonstandard_pipe_table_rows_preserve_source_newlines() {
 }
 
 #[test]
+fn test_single_cell_separator_row_is_expanded_to_header_columns() {
+    let md = concat!(
+        "• 병원별 저장값(HospitalHolidayWorkSetting)을 날짜로 merge. 두 종류 공휴일 (isCustom 으로 구분)\n",
+        "| 법정공휴일 (isCustom=false) | 사용자 추가 (isCustom=true) |\n",
+        "|---|\n",
+        "| 의미 | 공휴일인데 일하려는 날 | 공휴일에 못 쉬어서 따로 쉬는 대체휴무 |\n",
+        "| 삭제 | 불가 (버튼 없음) | 가능 (soft delete) |\n",
+        "| 색 | 빨강 #FF2642 | 검정 #111111 |"
+    );
+
+    let rendered: Vec<String> = render_markdown_with_width(md, Some(160))
+        .iter()
+        .map(line_to_string)
+        .collect();
+    let joined = rendered.join("\n");
+
+    assert!(
+        joined.contains("법정공휴일") && joined.contains("사용자 추가") && joined.contains('│'),
+        "single-cell separator should be normalized and rendered as a table: {rendered:?}"
+    );
+    assert!(
+        joined.contains("의미") && joined.contains("대체휴무") && joined.contains('│'),
+        "table body rows should render after separator normalization: {rendered:?}"
+    );
+    assert!(
+        rendered.iter().all(|line| {
+            !line.trim_start().starts_with("|---|") && !line.contains("| 법정공휴일")
+        }),
+        "raw malformed pipe table source should not leak: {rendered:?}"
+    );
+
+    let lazy_rendered: Vec<String> = render_markdown_lazy(md, Some(160), 0..usize::MAX)
+        .iter()
+        .map(line_to_string)
+        .collect();
+    let lazy_joined = lazy_rendered.join("\n");
+    assert!(
+        lazy_joined.contains("법정공휴일") && lazy_joined.contains("사용자 추가") && lazy_joined.contains('│'),
+        "lazy renderer should normalize single-cell separators too: {lazy_rendered:?}"
+    );
+    assert!(
+        lazy_rendered.iter().all(|line| {
+            !line.trim_start().starts_with("|---|") && !line.contains("| 법정공휴일")
+        }),
+        "lazy renderer should not leak raw malformed pipe table source: {lazy_rendered:?}"
+    );
+}
+
+#[test]
+fn test_glued_pipe_table_header_with_single_cell_separator_is_repaired() {
+    let md = concat!(
+        "핵심은 이렇게 정리됩니다:| 법정공휴일 | 사용자 추가 |\n",
+        "|---|\n",
+        "| 의미 | 공휴일인데 일하려는 날 | 공휴일에 못 쉬어서 따로 쉬는 대체휴무 |"
+    );
+
+    let rendered: Vec<String> = render_markdown_with_width(md, Some(160))
+        .iter()
+        .map(line_to_string)
+        .collect();
+    let joined = rendered.join("\n");
+
+    assert_eq!(
+        rendered.first().map(String::as_str),
+        Some("핵심은 이렇게 정리됩니다:")
+    );
+    assert!(
+        joined.contains("법정공휴일") && joined.contains("사용자 추가") && joined.contains('│'),
+        "glued header should render as a table even with a single-cell separator: {rendered:?}"
+    );
+    assert!(
+        rendered.iter().all(|line| {
+            !line.contains("정리됩니다:|") && !line.trim_start().starts_with("|---|")
+        }),
+        "raw glued malformed table source should not leak: {rendered:?}"
+    );
+}
+
+#[test]
 fn test_table_width_truncation() {
     let md = "| Column | Value |\n| - | - |\n| very_long_cell_value | 1234567890 |";
     let lines = render_markdown_with_width(md, Some(20));

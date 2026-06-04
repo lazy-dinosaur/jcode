@@ -1447,15 +1447,26 @@ fn repair_wrapped_pipe_table_rows(text: &str) -> String {
             continue;
         }
 
-        if is_pipe_table_separator_line(trimmed)
-            && out
-                .last()
-                .is_some_and(|prev| looks_like_pipe_table_row_relaxed(prev))
+        if let Some(header_cols) = out
+            .last()
+            .and_then(|prev| pipe_table_row_column_count(prev))
         {
-            in_pipe_table = true;
-            out.push(line.to_string());
-            i += 1;
-            continue;
+            let target_cols = inferred_pipe_table_column_count(&lines, i, header_cols);
+            if let Some(separator) =
+                normalize_pipe_table_separator_line_to_columns(line, target_cols)
+            {
+                if target_cols > header_cols
+                    && let Some(header) = out.last_mut()
+                    && let Some(expanded_header) =
+                        expand_pipe_table_header_row_to_columns(header, target_cols)
+                {
+                    *header = expanded_header;
+                }
+                in_pipe_table = true;
+                out.push(separator);
+                i += 1;
+                continue;
+            }
         }
 
         if in_pipe_table && looks_like_pipe_table_row_relaxed(line) {
@@ -1488,20 +1499,83 @@ fn looks_like_pipe_table_row_relaxed(line: &str) -> bool {
     trimmed.starts_with('|') && trimmed.matches('|').count() >= 2
 }
 
-fn is_pipe_table_separator_line(line: &str) -> bool {
+fn normalize_pipe_table_separator_line_to_columns(
+    line: &str,
+    target_cols: usize,
+) -> Option<String> {
+    if target_cols < 2 {
+        return None;
+    }
+
+    let separator_cols = pipe_table_separator_column_count_relaxed(line)?;
+    if separator_cols == target_cols {
+        return Some(line.to_string());
+    }
+    if separator_cols > target_cols {
+        return None;
+    }
+
+    let leading_len = line.len() - line.trim_start().len();
+    let leading = &line[..leading_len];
+    Some(format!(
+        "{}|{}|",
+        leading,
+        vec!["---"; target_cols].join("|")
+    ))
+}
+
+fn pipe_table_separator_column_count_relaxed(line: &str) -> Option<usize> {
     let trimmed = line.trim();
     if !trimmed.starts_with('|') || !trimmed.ends_with('|') {
-        return false;
+        return None;
     }
     let cells: Vec<&str> = trimmed.trim_matches('|').split('|').collect();
-    if cells.len() < 2 {
-        return false;
+    if cells.is_empty() || !cells.iter().all(|cell| is_pipe_table_separator_cell(cell)) {
+        return None;
     }
-    cells.iter().all(|cell| {
-        let cell = cell.trim();
-        cell.chars().all(|ch| matches!(ch, '-' | ':' | ' ' | '\t'))
-            && cell.chars().filter(|ch| *ch == '-').count() >= 3
-    })
+    Some(cells.len())
+}
+
+fn is_pipe_table_separator_cell(cell: &str) -> bool {
+    let cell = cell.trim();
+    cell.chars().all(|ch| matches!(ch, '-' | ':' | ' ' | '\t'))
+        && cell.chars().filter(|ch| *ch == '-').count() >= 3
+}
+
+fn inferred_pipe_table_column_count(
+    lines: &[&str],
+    separator_idx: usize,
+    header_cols: usize,
+) -> usize {
+    let mut target_cols = header_cols;
+
+    for line in lines.iter().skip(separator_idx + 1).take(4) {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || !looks_like_pipe_table_row_relaxed(line) {
+            break;
+        }
+        if pipe_table_separator_column_count_relaxed(trimmed).is_some() {
+            break;
+        }
+        if let Some(cols) = pipe_table_row_column_count_allowing_empty(line) {
+            target_cols = target_cols.max(cols);
+        }
+    }
+
+    target_cols
+}
+
+fn expand_pipe_table_header_row_to_columns(row: &str, target_cols: usize) -> Option<String> {
+    let (leading, mut cells) = pipe_table_row_cells_allowing_empty(row)?;
+    if cells.len() >= target_cols {
+        return Some(row.to_string());
+    }
+
+    let missing = target_cols - cells.len();
+    let mut expanded = vec![String::new(); missing];
+    expanded.append(&mut cells);
+
+    Some(format!("{}| {} |", leading, expanded.join(" | ")))
 }
 
 fn is_pipe_table_row_continuation_line(line: &str) -> bool {
@@ -1516,13 +1590,12 @@ fn split_glued_pipe_table_header_before_separator(
     line: &str,
     next_line: &str,
 ) -> Option<(String, String)> {
-    let separator_cols = pipe_table_separator_column_count(next_line.trim())?;
     let trimmed_end = line.trim_end();
 
     if trimmed_end.is_empty() || trimmed_end.starts_with('|') || !trimmed_end.ends_with('|') {
         return None;
     }
-    if trimmed_end.matches('|').count() < separator_cols.saturating_sub(1).max(2) {
+    if trimmed_end.matches('|').count() < 2 {
         return None;
     }
 
@@ -1535,7 +1608,8 @@ fn split_glued_pipe_table_header_before_separator(
     if prose.is_empty() || header.is_empty() {
         return None;
     }
-    if pipe_table_row_column_count(header)? != separator_cols {
+    let header_cols = pipe_table_row_column_count(header)?;
+    if normalize_pipe_table_separator_line_to_columns(next_line, header_cols).is_none() {
         return None;
     }
 
@@ -1611,15 +1685,26 @@ fn is_inline_markdown_closing_delimiter(ch: char) -> bool {
     matches!(ch, '*' | '_' | '~')
 }
 
-fn pipe_table_separator_column_count(line: &str) -> Option<usize> {
-    if !is_pipe_table_separator_line(line) {
+fn pipe_table_row_column_count(line: &str) -> Option<usize> {
+    let (_, cells) = pipe_table_row_cells_allowing_empty(line)?;
+    if cells.len() < 2 || cells.iter().any(|cell| cell.trim().is_empty()) {
         return None;
     }
-    Some(line.trim().trim_matches('|').split('|').count())
+    Some(cells.len())
 }
 
-fn pipe_table_row_column_count(line: &str) -> Option<usize> {
+fn pipe_table_row_column_count_allowing_empty(line: &str) -> Option<usize> {
+    let (_, cells) = pipe_table_row_cells_allowing_empty(line)?;
+    (cells.len() >= 2).then_some(cells.len())
+}
+
+fn pipe_table_row_cells_allowing_empty(line: &str) -> Option<(String, Vec<String>)> {
+    let leading_len = line.len() - line.trim_start().len();
+    let leading = line[..leading_len].to_string();
     let mut row = line.trim();
+    if !row.contains('|') {
+        return None;
+    }
     if row.starts_with('|') {
         row = &row['|'.len_utf8()..];
     }
@@ -1627,11 +1712,8 @@ fn pipe_table_row_column_count(line: &str) -> Option<usize> {
         row = &row[..row.len() - '|'.len_utf8()];
     }
 
-    let cells: Vec<&str> = row.split('|').collect();
-    if cells.len() < 2 || cells.iter().any(|cell| cell.trim().is_empty()) {
-        return None;
-    }
-    Some(cells.len())
+    let cells: Vec<String> = row.split('|').map(|cell| cell.trim().to_string()).collect();
+    Some((leading, cells))
 }
 
 fn normalize_pipe_table_row(row: &str) -> String {
