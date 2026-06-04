@@ -1544,9 +1544,8 @@ fn split_glued_pipe_table_header_before_separator(
 
 fn sentence_boundary_before_embedded_table_header(before_first_pipe: &str) -> Option<usize> {
     let mut boundary = None;
-    let mut chars = before_first_pipe.char_indices().peekable();
 
-    while let Some((idx, ch)) = chars.next() {
+    for (idx, ch) in before_first_pipe.char_indices() {
         if !matches!(
             ch,
             ':' | '：' | '.' | '。' | '!' | '！' | '?' | '？' | ')' | '”' | '"'
@@ -1555,26 +1554,61 @@ fn sentence_boundary_before_embedded_table_header(before_first_pipe: &str) -> Op
         }
 
         let after_punctuation = idx + ch.len_utf8();
-        let mut after_whitespace = after_punctuation;
-        while let Some((next_idx, next_ch)) = chars.peek().copied() {
-            if !next_ch.is_whitespace() {
-                break;
-            }
-            after_whitespace = next_idx + next_ch.len_utf8();
-            chars.next();
-        }
-
-        if after_whitespace == before_first_pipe.len()
-            || (after_whitespace > after_punctuation
-                && before_first_pipe[after_whitespace..]
-                    .chars()
-                    .any(|candidate| !candidate.is_whitespace()))
+        if let Some(after_boundary) =
+            embedded_table_boundary_after_punctuation(before_first_pipe, after_punctuation)
         {
-            boundary = Some(after_whitespace);
+            boundary = Some(after_boundary);
         }
     }
 
     boundary
+}
+
+fn embedded_table_boundary_after_punctuation(text: &str, mut idx: usize) -> Option<usize> {
+    let after_punctuation = idx;
+
+    while let Some(ch) = text[idx..].chars().next() {
+        if !ch.is_whitespace() {
+            break;
+        }
+        idx += ch.len_utf8();
+    }
+
+    if idx == text.len() {
+        return Some(idx);
+    }
+
+    if idx > after_punctuation {
+        return text[idx..]
+            .chars()
+            .any(|candidate| !candidate.is_whitespace())
+            .then_some(idx);
+    }
+
+    let before_closing_delimiters = idx;
+    while let Some(ch) = text[idx..].chars().next() {
+        if !is_inline_markdown_closing_delimiter(ch) {
+            break;
+        }
+        idx += ch.len_utf8();
+    }
+
+    if idx == before_closing_delimiters {
+        return None;
+    }
+
+    while let Some(ch) = text[idx..].chars().next() {
+        if !ch.is_whitespace() {
+            break;
+        }
+        idx += ch.len_utf8();
+    }
+
+    (idx == text.len()).then_some(idx)
+}
+
+fn is_inline_markdown_closing_delimiter(ch: char) -> bool {
+    matches!(ch, '*' | '_' | '~')
 }
 
 fn pipe_table_separator_column_count(line: &str) -> Option<usize> {

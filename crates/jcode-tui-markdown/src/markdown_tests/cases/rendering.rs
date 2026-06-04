@@ -670,6 +670,96 @@ fn test_colon_directly_glued_to_pipe_table_header_is_repaired() {
 }
 
 #[test]
+fn test_bold_colon_directly_glued_to_pipe_table_header_is_repaired() {
+    let md = concat!(
+        "**최종 시각 검증 (electron-test MCP, dashboard 창):**| 항목 | Figma 6594:35407 | 실제 앱 | 일치 |\n",
+        "|---|---|---|---|\n",
+        "| 제목 | 신청 현황 | 신청 현황 | ✅ |\n",
+        "| 컬럼 6개 | 신청일/종류/휴가기간/대체인원/사유/처리상태 | 신청일/종류/휴가기간/대체 인원/사유/처리 상태 | ✅ |"
+    );
+
+    let rendered: Vec<String> = render_markdown_with_width(md, Some(120))
+        .iter()
+        .map(line_to_string)
+        .collect();
+
+    assert_eq!(
+        rendered.first().map(String::as_str),
+        Some("최종 시각 검증 (electron-test MCP, dashboard 창):")
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("항목") && line.contains("Figma 6594:35407") && line.contains('│')),
+        "bold-colon-glued header should render as a table header: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("컬럼 6개") && line.contains("신청일/종류")),
+        "body rows should render as table rows: {rendered:?}"
+    );
+    assert!(
+        rendered.iter().all(|line| {
+            !line.contains("창):| 항목")
+                && !line.contains("**|")
+                && !line.trim_start().starts_with("|---|")
+        }),
+        "raw pipe table source should not leak after bold text: {rendered:?}"
+    );
+
+    let lazy_rendered: Vec<String> = render_markdown_lazy(md, Some(120), 0..usize::MAX)
+        .iter()
+        .map(line_to_string)
+        .collect();
+    assert!(
+        lazy_rendered
+            .iter()
+            .any(|line| line.contains("항목") && line.contains("Figma 6594:35407") && line.contains('│')),
+        "lazy renderer should apply the same bold-glued table header repair: {lazy_rendered:?}"
+    );
+    assert!(
+        lazy_rendered.iter().all(|line| {
+            !line.contains("창):| 항목")
+                && !line.contains("**|")
+                && !line.trim_start().starts_with("|---|")
+        }),
+        "lazy renderer should not leak raw pipe table source after bold text: {lazy_rendered:?}"
+    );
+}
+
+#[test]
+fn test_bold_first_cell_after_colon_boundary_keeps_opening_marker_with_table() {
+    let md = concat!(
+        "현재 구현 기준: **대상** | 액션카드 | 알림 |\n",
+        "|---|---|---|\n",
+        "| 회의 참석자료 선택된 전원 | 회의록 작성하기 액션 추가됨 | 액션 알림 대상 |"
+    );
+
+    let rendered: Vec<String> = render_markdown_with_width(md, Some(160))
+        .iter()
+        .map(line_to_string)
+        .collect();
+
+    assert_eq!(
+        rendered.first().map(String::as_str),
+        Some("현재 구현 기준:")
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("대상") && line.contains("액션카드") && line.contains('│')),
+        "bold first cell should stay attached to the repaired table: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .all(|line| !line.contains("기준: **") && !line.contains("**대상")),
+        "opening bold marker must not be left in the prose prefix: {rendered:?}"
+    );
+}
+
+#[test]
 fn test_pipe_table_cell_node_id_is_not_split_as_ordered_list_marker() {
     let md = concat!(
         "Gate 1(metadata) + 현재 코드를 확보했습니다. 차이가 큽니다. metadata로 파악한 새 디자인:\n\n",
