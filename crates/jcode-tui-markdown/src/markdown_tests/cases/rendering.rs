@@ -760,6 +760,63 @@ fn test_bold_first_cell_after_colon_boundary_keeps_opening_marker_with_table() {
 }
 
 #[test]
+fn test_heading_glued_to_pipe_table_and_following_heading_are_repaired() {
+    let md = concat!(
+        "## 현재 완성도 요약| 영역 | 완성도 | 상태 |\n",
+        "|---|---|---|\n",
+        "| 기본 철학 / record-first memory | 높음 | .lazy-harness가 canonical memory라는 방향은 확립됨 |\n",
+        "| Product UX / dashboard | 낮음~중간 | 강력하지만 아직 사용 흐름이 무겁고 command가 많음 |## 지금 잘 된 부분\n",
+        "- cli-tool-boundary.md 추가\n"
+    );
+
+    let rendered: Vec<String> = render_markdown_with_width(md, Some(160))
+        .iter()
+        .map(line_to_string)
+        .collect();
+    let joined = rendered.join("\n");
+
+    let summary_heading = rendered
+        .iter()
+        .find(|line| line.contains("현재 완성도 요약"))
+        .unwrap_or_else(|| panic!("missing repaired summary heading in {rendered:?}"));
+    assert!(
+        !summary_heading.contains("| 영역") && !summary_heading.contains("##"),
+        "heading must not stay glued to the table header: {rendered:?}"
+    );
+    assert!(
+        joined.contains("영역") && joined.contains("완성도") && joined.contains('│'),
+        "glued table header should render as a table: {rendered:?}"
+    );
+    assert!(
+        joined.contains("Product UX / dashboard") && joined.contains("command가 많음"),
+        "last table row should remain in the table: {rendered:?}"
+    );
+
+    let next_heading = rendered
+        .iter()
+        .find(|line| line.contains("지금 잘 된 부분"))
+        .unwrap_or_else(|| panic!("missing repaired following heading in {rendered:?}"));
+    assert!(
+        !next_heading.contains("| Product UX") && !next_heading.contains("##"),
+        "following heading must not stay glued to the final table row: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("• cli-tool-boundary.md 추가")),
+        "bullet following repaired heading should render as a list item: {rendered:?}"
+    );
+    assert!(
+        rendered.iter().all(|line| {
+            !line.contains("요약| 영역")
+                && !line.contains("|---|---|---|")
+                && !line.contains("많음 |##")
+        }),
+        "raw malformed table/heading source should not leak: {rendered:?}"
+    );
+}
+
+#[test]
 fn test_pipe_table_cell_node_id_is_not_split_as_ordered_list_marker() {
     let md = concat!(
         "Gate 1(metadata) + 현재 코드를 확보했습니다. 차이가 큽니다. metadata로 파악한 새 디자인:\n\n",

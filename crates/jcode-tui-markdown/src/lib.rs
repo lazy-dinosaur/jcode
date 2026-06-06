@@ -1402,6 +1402,7 @@ fn repair_wrapped_pipe_table_rows(text: &str) -> String {
     let mut fence_char = '\0';
     let mut fence_len = 0usize;
     let mut in_pipe_table = false;
+    let mut pipe_table_cols = None;
     let mut i = 0usize;
 
     while i < lines.len() {
@@ -1430,6 +1431,7 @@ fn repair_wrapped_pipe_table_rows(text: &str) -> String {
         let trimmed = line.trim();
         if trimmed.is_empty() {
             in_pipe_table = false;
+            pipe_table_cols = None;
             out.push(line.to_string());
             i += 1;
             continue;
@@ -1463,6 +1465,7 @@ fn repair_wrapped_pipe_table_rows(text: &str) -> String {
                     *header = expanded_header;
                 }
                 in_pipe_table = true;
+                pipe_table_cols = Some(target_cols);
                 out.push(separator);
                 i += 1;
                 continue;
@@ -1479,6 +1482,16 @@ fn repair_wrapped_pipe_table_rows(text: &str) -> String {
                 row.push(' ');
                 row.push_str(lines[i].trim());
             }
+            if let Some((table_row, glued_heading)) =
+                split_pipe_table_row_before_glued_heading(&row, pipe_table_cols.unwrap_or(2))
+            {
+                out.push(table_row);
+                out.push(glued_heading);
+                in_pipe_table = false;
+                pipe_table_cols = None;
+                i += 1;
+                continue;
+            }
             out.push(row);
             i += 1;
             continue;
@@ -1486,6 +1499,7 @@ fn repair_wrapped_pipe_table_rows(text: &str) -> String {
 
         if in_pipe_table && !is_pipe_table_row_continuation_line(line) {
             in_pipe_table = false;
+            pipe_table_cols = None;
         }
         out.push(line.to_string());
         i += 1;
@@ -1557,7 +1571,10 @@ fn inferred_pipe_table_column_count(
         if pipe_table_separator_column_count_relaxed(trimmed).is_some() {
             break;
         }
-        if let Some(cols) = pipe_table_row_column_count_allowing_empty(line) {
+        let count_line = split_pipe_table_row_before_glued_heading(line, header_cols)
+            .map(|(row, _)| row)
+            .unwrap_or_else(|| line.to_string());
+        if let Some(cols) = pipe_table_row_column_count_allowing_empty(&count_line) {
             target_cols = target_cols.max(cols);
         }
     }
@@ -1601,7 +1618,8 @@ fn split_glued_pipe_table_header_before_separator(
 
     let first_pipe = trimmed_end.find('|')?;
     let before_first_pipe = &trimmed_end[..first_pipe];
-    let split_at = sentence_boundary_before_embedded_table_header(before_first_pipe)?;
+    let split_at = heading_boundary_before_embedded_table_header(before_first_pipe)
+        .or_else(|| sentence_boundary_before_embedded_table_header(before_first_pipe))?;
     let prose = trimmed_end[..split_at].trim_end();
     let header = trimmed_end[split_at..].trim_start();
 
@@ -1614,6 +1632,40 @@ fn split_glued_pipe_table_header_before_separator(
     }
 
     Some((prose.to_string(), normalize_pipe_table_row(header)))
+}
+
+fn heading_boundary_before_embedded_table_header(before_first_pipe: &str) -> Option<usize> {
+    is_heading_line_for_boundary_repair(before_first_pipe.trim_start())
+        .then_some(before_first_pipe.len())
+}
+
+fn split_pipe_table_row_before_glued_heading(
+    line: &str,
+    min_table_cols: usize,
+) -> Option<(String, String)> {
+    let mut scan = 1usize;
+    while scan < line.len() {
+        let Some(idx) = line[scan..].find("##").map(|idx| scan + idx) else {
+            break;
+        };
+
+        if line.is_char_boundary(idx)
+            && !inside_inline_backticks(line, idx)
+            && is_heading_line_for_boundary_repair(&line[idx..])
+        {
+            let row = line[..idx].trim_end();
+            if looks_like_pipe_table_row_for_boundary_repair(row)
+                && pipe_table_row_column_count_allowing_empty(row)
+                    .is_some_and(|cols| cols >= min_table_cols)
+            {
+                return Some((row.to_string(), line[idx..].trim_start().to_string()));
+            }
+        }
+
+        scan = idx + 2;
+    }
+
+    None
 }
 
 fn sentence_boundary_before_embedded_table_header(before_first_pipe: &str) -> Option<usize> {
