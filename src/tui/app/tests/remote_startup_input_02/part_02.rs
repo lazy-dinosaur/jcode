@@ -70,6 +70,39 @@ fn test_handle_background_task_completed_with_wake_starts_pending_turn() {
 }
 
 #[test]
+fn test_handle_background_task_completed_with_wake_queues_followup_while_processing() {
+    let mut app = create_test_app();
+    app.is_processing = true;
+    app.status = ProcessingStatus::Streaming;
+    let event = BusEvent::BackgroundTaskCompleted(BackgroundTaskCompleted {
+        task_id: "bgwakebusy".to_string(),
+        tool_name: "bash".to_string(),
+        display_name: None,
+        session_id: app.session.id.clone(),
+        delivery_session_id: app.session.id.clone(),
+        status: BackgroundTaskStatus::Completed,
+        exit_code: Some(0),
+        output_preview: "done while busy\n".to_string(),
+        output_file: std::env::temp_dir().join("bgwakebusy.output"),
+        duration_secs: 2.4,
+        notify: true,
+        wake: true,
+    });
+
+    super::local::handle_bus_event(&mut app, Ok(event));
+
+    assert!(app.is_processing());
+    assert!(!app.pending_turn, "active turn should finish before follow-up starts");
+    assert_eq!(app.hidden_queued_system_messages.len(), 1);
+    assert!(app.hidden_queued_system_messages[0].contains("bgwakebusy"));
+    assert_eq!(app.queued_messages.len(), 0, "follow-up should not duplicate the visible background card as a user bubble");
+    assert_eq!(
+        app.status_notice(),
+        Some("Background task completed · bash · queued follow-up".to_string())
+    );
+}
+
+#[test]
 fn test_handle_background_task_progress_updates_status_notice() {
     let mut app = create_test_app();
     let event = BusEvent::BackgroundTaskProgress(BackgroundTaskProgressEvent {

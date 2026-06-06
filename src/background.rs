@@ -642,7 +642,7 @@ impl BackgroundTaskManager {
         session_id: &str,
         handle: JoinHandle<Result<crate::tool::ToolOutput>>,
     ) -> BackgroundTaskInfo {
-        self.adopt_with_delivery(tool_name, session_id, session_id, false, handle)
+        self.adopt_with_delivery(tool_name, session_id, session_id, true, handle)
             .await
     }
 

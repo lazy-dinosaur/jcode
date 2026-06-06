@@ -360,35 +360,44 @@ fn handle_background_task_completed(app: &mut App, task: BackgroundTaskCompleted
     app.push_display_message(DisplayMessage::background_task(notification.clone()));
     app.set_status_notice(background_task_status_notice(&task));
 
-    if !app.is_processing {
-        app.add_provider_message(Message {
-            role: Role::User,
-            content: vec![ContentBlock::Text {
-                text: notification,
-                cache_control: None,
-            }],
-            timestamp: Some(chrono::Utc::now()),
-            tool_duration_ms: None,
-        });
-        app.session.add_message_with_display_role(
-            Role::User,
-            vec![ContentBlock::Text {
-                text: format_background_task_notification_markdown(&task),
-                cache_control: None,
-            }],
-            Some(StoredDisplayRole::BackgroundTask),
-        );
-        let _ = app.session.save();
-
+    if app.is_processing {
         if task.wake {
-            app.pending_turn = true;
-            app.is_processing = true;
-            app.status = ProcessingStatus::Sending;
-            if app.processing_started.is_none() {
-                app.processing_started = Some(std::time::Instant::now());
-            }
-            app.visible_turn_started = Some(std::time::Instant::now());
+            app.enqueue_hidden_system_message(notification);
+            app.set_status_notice(format!(
+                "{} · queued follow-up",
+                background_task_status_notice(&task)
+            ));
         }
+        return;
+    }
+
+    app.add_provider_message(Message {
+        role: Role::User,
+        content: vec![ContentBlock::Text {
+            text: notification,
+            cache_control: None,
+        }],
+        timestamp: Some(chrono::Utc::now()),
+        tool_duration_ms: None,
+    });
+    app.session.add_message_with_display_role(
+        Role::User,
+        vec![ContentBlock::Text {
+            text: format_background_task_notification_markdown(&task),
+            cache_control: None,
+        }],
+        Some(StoredDisplayRole::BackgroundTask),
+    );
+    let _ = app.session.save();
+
+    if task.wake {
+        app.pending_turn = true;
+        app.is_processing = true;
+        app.status = ProcessingStatus::Sending;
+        if app.processing_started.is_none() {
+            app.processing_started = Some(std::time::Instant::now());
+        }
+        app.visible_turn_started = Some(std::time::Instant::now());
     }
 }
 

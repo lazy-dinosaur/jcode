@@ -120,7 +120,7 @@ async fn adopt_with_delivery_persists_parent_delivery_session_and_wake_policy() 
 }
 
 #[tokio::test]
-async fn adopt_keeps_default_wake_policy_false() -> Result<()> {
+async fn adopt_defaults_to_wake_on_completion() -> Result<()> {
     let tmp = tempdir()?;
     let manager = BackgroundTaskManager::with_output_dir(tmp.path().to_path_buf());
     let handle = tokio::spawn(async { Ok(ToolOutput::new("done")) });
@@ -135,7 +135,7 @@ async fn adopt_keeps_default_wake_policy_false() -> Result<()> {
     assert_eq!(wait_result.task.session_id, "session");
     assert_eq!(wait_result.task.delivery_session_id, "session");
     assert!(wait_result.task.notify);
-    assert!(!wait_result.task.wake);
+    assert!(wait_result.task.wake);
     assert_eq!(wait_result.task.status, BackgroundTaskStatus::Completed);
     Ok(())
 }
