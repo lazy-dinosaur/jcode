@@ -1268,10 +1268,23 @@ fn repair_glued_list_markers(text: &str) -> String {
     let mut in_code_fence = false;
     let mut fence_char = '\0';
     let mut fence_len = 0usize;
+    let mut carried_alpha_option_mode = false;
+    let mut join_next_line_to_terminal_alpha_marker = false;
 
     for (idx, line) in text.split('\n').enumerate() {
         if idx > 0 {
-            out.push('\n');
+            if join_next_line_to_terminal_alpha_marker
+                && should_join_after_terminal_alpha_option_marker(line)
+            {
+                out.push(' ');
+            } else {
+                out.push('\n');
+            }
+            join_next_line_to_terminal_alpha_marker = false;
+        }
+
+        if line.trim().is_empty() {
+            carried_alpha_option_mode = false;
         }
 
         if in_code_fence || looks_like_pipe_table_row_relaxed(line) {
@@ -1282,16 +1295,34 @@ fn repair_glued_list_markers(text: &str) -> String {
                 &mut fence_char,
                 &mut fence_len,
             );
+            if !in_code_fence {
+                carried_alpha_option_mode = false;
+            }
             continue;
         }
 
-        let repaired = repair_glued_list_markers_in_line(line);
+        let initial_alpha_option_mode =
+            if starts_with_alpha_option_marker(line.trim_start()).is_some() {
+                AlphaOptionMode::SameLine
+            } else if carried_alpha_option_mode {
+                AlphaOptionMode::CrossLine
+            } else {
+                AlphaOptionMode::Disabled
+            };
+        let (repaired, alpha_option_mode_after_line, ends_with_terminal_alpha_marker) =
+            repair_glued_list_markers_in_line(line, initial_alpha_option_mode);
+        carried_alpha_option_mode = alpha_option_mode_after_line.is_enabled();
+        join_next_line_to_terminal_alpha_marker = ends_with_terminal_alpha_marker;
         update_code_fence_state_after_line(
             &repaired,
             &mut in_code_fence,
             &mut fence_char,
             &mut fence_len,
         );
+        if in_code_fence {
+            carried_alpha_option_mode = false;
+            join_next_line_to_terminal_alpha_marker = false;
+        }
         out.push_str(&repaired);
     }
 
@@ -1777,12 +1808,39 @@ fn normalize_pipe_table_row(row: &str) -> String {
     }
 }
 
-fn repair_glued_list_markers_in_line(line: &str) -> String {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AlphaOptionMode {
+    Disabled,
+    /// Alpha option markers were seen on a previous source line. Keep repairing
+    /// only markers that follow a strong sentence/list boundary so normal prose
+    /// such as `plan B. Move on` does not get split on continuation lines.
+    CrossLine,
+    /// Alpha option markers were seen on this source line. This preserves the
+    /// existing compact `A. foo B. bar C. baz` repair behavior, where later
+    /// markers may be separated by plain whitespace rather than punctuation.
+    SameLine,
+}
+
+impl AlphaOptionMode {
+    fn is_enabled(self) -> bool {
+        !matches!(self, Self::Disabled)
+    }
+
+    fn allow_plain_whitespace_marker(self) -> bool {
+        matches!(self, Self::SameLine)
+    }
+}
+
+fn repair_glued_list_markers_in_line(
+    line: &str,
+    initial_alpha_option_mode: AlphaOptionMode,
+) -> (String, AlphaOptionMode, bool) {
     let mut out = String::with_capacity(line.len());
     let mut cursor = 0usize;
     let mut scan = 0usize;
     let mut line_start = true;
-    let mut alpha_option_mode = starts_with_alpha_option_marker(line.trim_start()).is_some();
+    let mut alpha_option_mode = initial_alpha_option_mode;
+    let mut ends_with_terminal_alpha_marker = false;
 
     while scan < line.len() {
         if !line.is_char_boundary(scan) {
@@ -1796,7 +1854,10 @@ fn repair_glued_list_markers_in_line(line: &str) -> String {
                 out.push_str("  ");
             }
             out.push('\n');
-            alpha_option_mode |= marker.enables_alpha_option_mode;
+            if marker.enables_alpha_option_mode {
+                alpha_option_mode = AlphaOptionMode::SameLine;
+            }
+            ends_with_terminal_alpha_marker = marker.terminal_alpha_marker;
             if let Some(replacement) = marker.replacement {
                 out.push_str(replacement);
                 cursor = scan + marker.len;
@@ -1810,6 +1871,7 @@ fn repair_glued_list_markers_in_line(line: &str) -> String {
         }
 
         if let Some(ch) = line[scan..].chars().next() {
+            ends_with_terminal_alpha_marker = false;
             if ch == '\n' {
                 line_start = true;
             } else if !ch.is_whitespace() {
@@ -1822,7 +1884,7 @@ fn repair_glued_list_markers_in_line(line: &str) -> String {
     }
 
     out.push_str(&line[cursor..]);
-    out
+    (out, alpha_option_mode, ends_with_terminal_alpha_marker)
 }
 
 struct GluedListMarker {
@@ -1830,13 +1892,14 @@ struct GluedListMarker {
     replacement: Option<&'static str>,
     enables_alpha_option_mode: bool,
     requires_hardbreak_before: bool,
+    terminal_alpha_marker: bool,
 }
 
 fn glued_list_marker_at(
     line: &str,
     idx: usize,
     line_start: bool,
-    alpha_option_mode: bool,
+    alpha_option_mode: AlphaOptionMode,
 ) -> Option<GluedListMarker> {
     if idx == 0 || line_start || inside_inline_backticks(line, idx) {
         return None;
@@ -1845,7 +1908,8 @@ fn glued_list_marker_at(
     let before = previous_non_whitespace_char(line, idx)?;
     if !is_list_glue_boundary_char(before) {
         return alpha_option_mode
-            .then(|| alpha_option_marker_at(line, idx, true, before))
+            .allow_plain_whitespace_marker()
+            .then(|| alpha_option_marker_at(line, idx, alpha_option_mode, before))
             .flatten();
     }
 
@@ -1889,6 +1953,7 @@ fn ordered_list_marker_len_at(line: &str, idx: usize) -> Option<GluedListMarker>
         replacement: None,
         enables_alpha_option_mode: false,
         requires_hardbreak_before: false,
+        terminal_alpha_marker: false,
     })
 }
 
@@ -1908,13 +1973,14 @@ fn bullet_list_marker_at(line: &str, idx: usize) -> Option<GluedListMarker> {
         replacement: (marker == '•').then_some("- "),
         enables_alpha_option_mode: false,
         requires_hardbreak_before: false,
+        terminal_alpha_marker: false,
     })
 }
 
 fn alpha_option_marker_at(
     line: &str,
     idx: usize,
-    alpha_option_mode: bool,
+    alpha_option_mode: AlphaOptionMode,
     previous_boundary: char,
 ) -> Option<GluedListMarker> {
     let previous_char = line[..idx].chars().next_back()?;
@@ -1929,9 +1995,10 @@ fn alpha_option_marker_at(
 
     let (marker_letter, marker_len) = alpha_option_label_at(line, idx)?;
 
-    if !alpha_option_mode
+    if !alpha_option_mode.is_enabled()
         && !matches!(previous_boundary, ':' | ';' | '：')
         && !looks_like_alpha_option_run(line, idx, marker_letter, marker_len, previous_boundary)
+        && !looks_like_terminal_alpha_option_intro(line, idx, marker_letter, marker_len)
     {
         return None;
     }
@@ -1941,7 +2008,26 @@ fn alpha_option_marker_at(
         replacement: None,
         enables_alpha_option_mode: true,
         requires_hardbreak_before: true,
+        terminal_alpha_marker: idx.saturating_add(marker_len) == line.len(),
     })
+}
+
+fn should_join_after_terminal_alpha_option_marker(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    if trimmed.is_empty()
+        || parse_opening_fence(trimmed).is_some()
+        || looks_like_pipe_table_row_relaxed(trimmed)
+        || ordered_list_marker_len_at(trimmed, 0).is_some()
+        || bullet_list_marker_at(trimmed, 0).is_some()
+    {
+        return false;
+    }
+
+    if starts_with_alpha_option_marker(trimmed).is_some() {
+        return false;
+    }
+
+    true
 }
 
 fn alpha_option_label_at(line: &str, idx: usize) -> Option<(char, usize)> {
@@ -1955,6 +2041,9 @@ fn alpha_option_label_at(line: &str, idx: usize) -> Option<(char, usize)> {
 
     if matches!(marker, '.' | ')') {
         let after_marker_idx = marker_idx + marker.len_utf8();
+        if after_marker_idx == rest.len() {
+            return Some((marker_letter, after_marker_idx));
+        }
         let after_marker = rest[after_marker_idx..].chars().next()?;
         return after_marker
             .is_whitespace()
@@ -1963,6 +2052,9 @@ fn alpha_option_label_at(line: &str, idx: usize) -> Option<(char, usize)> {
 
     if matches!(marker, ':' | '：') {
         let after_marker_idx = marker_idx + marker.len_utf8();
+        if after_marker_idx == rest.len() {
+            return Some((marker_letter, after_marker_idx));
+        }
         let after_marker = rest[after_marker_idx..].chars().next()?;
         return after_marker
             .is_whitespace()
@@ -2040,8 +2132,48 @@ fn looks_like_alpha_option_run(
     false
 }
 
-fn starts_with_alpha_option_marker(line: &str) -> Option<usize> {
-    alpha_option_label_at(line, 0).map(|(_, len)| len)
+fn looks_like_terminal_alpha_option_intro(
+    line: &str,
+    idx: usize,
+    marker_letter: char,
+    marker_len: usize,
+) -> bool {
+    if marker_letter != 'A' || idx.saturating_add(marker_len) != line.len() {
+        return false;
+    }
+    let prefix = line[..idx].trim_end();
+    if prefix.is_empty() {
+        return false;
+    }
+    let Some(prev) = prefix.chars().next_back() else {
+        return false;
+    };
+    if !matches!(
+        prev,
+        ':' | ';' | '：' | '?' | '？' | '!' | '！' | '.' | '。'
+    ) {
+        return false;
+    }
+
+    let prompt_tail: String = prefix
+        .chars()
+        .rev()
+        .take(48)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    let prompt_tail_lower = prompt_tail.to_ascii_lowercase();
+    prompt_tail.contains("선택")
+        || prompt_tail.contains("골라")
+        || prompt_tail.contains("고르")
+        || prompt_tail_lower.contains("choose")
+        || prompt_tail_lower.contains("choice")
+        || prompt_tail_lower.contains("option")
+}
+
+fn starts_with_alpha_option_marker(line: &str) -> Option<(char, usize)> {
+    alpha_option_label_at(line, 0)
 }
 
 fn is_list_glue_boundary_char(ch: char) -> bool {

@@ -276,6 +276,68 @@ fn test_source_newlines_before_alphabetic_option_markers_are_preserved() {
 }
 
 #[test]
+fn test_terminal_alpha_option_marker_before_recommended_line_is_repaired() {
+    let md = "버튼 동작 선택해주세요.A.\n(Recommended) 첫 화면 유지 구현\n/forgot-password를 Figma 그대로 구현하고, 휴대폰 인증 버튼은 placeholder로 둡니다. reset flow는 record/backlog로 남깁니다.B. 기존 본인인증 mock 연결\n버튼 클릭 시 기존 startPhoneIdentityVerification()을 호출합니다.C. 재설정 폼까지 임시 구현";
+    let rendered: Vec<String> = render_markdown_with_width(md, Some(220))
+        .iter()
+        .map(line_to_string)
+        .collect();
+
+    assert_eq!(
+        rendered.first().map(String::as_str),
+        Some("버튼 동작 선택해주세요.")
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("A. (Recommended) 첫 화면 유지")),
+        "terminal A marker should attach to following recommended text: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("B. 기존 본인인증 mock 연결")),
+        "B option after multiline A description should render on its own line: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("C. 재설정 폼까지")),
+        "C option after multiline B description should render on its own line: {rendered:?}"
+    );
+    assert!(
+        rendered.iter().all(|line| {
+            !line.contains("선택해주세요.A.")
+                && !line.contains("남깁니다.B.")
+                && !line.contains("호출합니다.C.")
+        }),
+        "glued terminal/cross-line option markers must be repaired: {rendered:?}"
+    );
+}
+
+#[test]
+fn test_cross_line_alpha_option_mode_does_not_split_plain_plan_b_sentence() {
+    let md = "버튼 동작 선택해주세요.A.\n첫 번째 선택지는 설명만 이어집니다\nWe can keep plan B. Move forward without adding a choice list.";
+    let rendered: Vec<String> = render_markdown_with_width(md, Some(220))
+        .iter()
+        .map(line_to_string)
+        .collect();
+
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("We can keep plan B. Move forward")),
+        "plain plan B sentence on a later source line should stay intact: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .all(|line| !line.trim_start().starts_with("B. Move forward")),
+        "cross-line alpha mode should require a sentence/list boundary before B: {rendered:?}"
+    );
+}
+
+#[test]
 fn test_alpha_abbreviation_is_not_split_as_option_marker() {
     let md = "참고 문장. U.S.A. 표기는 그대로 둡니다.";
     let rendered: Vec<String> = render_markdown_with_width(md, Some(120))
