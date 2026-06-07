@@ -372,6 +372,140 @@ async fn test_persistent_ws_continuation_rejects_changed_input_prefix() {
     server.abort();
 }
 
+#[tokio::test]
+async fn test_persistent_ws_continuation_finalizes_after_assistant_message_done_without_response_completed()
+{
+    let prefix_item = serde_json::json!({
+        "type": "message",
+        "role": "user",
+        "content": [{"type": "input_text", "text": "old prefix"}],
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test websocket listener");
+    let addr = listener.local_addr().expect("listener local addr");
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("accept websocket client");
+        let mut ws = tokio_tungstenite::accept_async(stream)
+            .await
+            .expect("accept websocket handshake");
+        let _request = ws.next().await.expect("continuation request").expect("request frame");
+        ws.send(WsMessage::Text(
+            serde_json::json!({
+                "type": "response.created",
+                "response": {"id": "resp_after_tool"}
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("send response.created");
+        ws.send(WsMessage::Text(
+            serde_json::json!({
+                "type": "response.output_text.delta",
+                "delta": "final text"
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("send text delta");
+        ws.send(WsMessage::Text(
+            serde_json::json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "id": "msg_final",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "final text"}]
+                }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("send assistant message done");
+        loop {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            if ws
+                .send(WsMessage::Text(
+                    serde_json::json!({
+                        "type": "response.in_progress",
+                        "response": {"status": "in_progress"}
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
+
+    let (client_ws, _) = connect_async(format!("ws://{}", addr))
+        .await
+        .expect("connect websocket client");
+    let persistent_ws = Arc::new(tokio::sync::Mutex::new(Some(PersistentWsState {
+        ws_stream: client_ws,
+        last_response_id: "resp_test".to_string(),
+        connected_at: Instant::now(),
+        last_activity_at: Instant::now(),
+        message_count: 1,
+        last_input_item_count: 1,
+        last_input_item_hashes: crate::provider::fingerprint::item_hashes(&[prefix_item.clone()]),
+    })));
+    let input = vec![
+        prefix_item,
+        serde_json::json!({
+            "type": "function_call_output",
+            "call_id": "call_123",
+            "output": "tool done",
+        }),
+    ];
+    let request = serde_json::json!({
+        "model": "gpt-test",
+        "input": input,
+        "tools": [],
+    });
+    let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+
+    let result = tokio::time::timeout(
+        Duration::from_secs(3),
+        super::openai_stream_runtime::try_persistent_ws_continuation(
+            &persistent_ws,
+            &request,
+            request.get("input").unwrap().as_array().unwrap(),
+            2,
+            &tx,
+        ),
+    )
+    .await
+    .expect("assistant message done should drain instead of hanging");
+
+    assert!(matches!(result, PersistentWsResult::Success));
+    assert!(
+        persistent_ws.lock().await.is_none(),
+        "synthetic completion must discard the still in-flight persistent socket"
+    );
+
+    let mut saw_text = false;
+    let mut saw_message_end = false;
+    while let Ok(event) = rx.try_recv() {
+        match event.expect("stream event should be ok") {
+            StreamEvent::TextDelta(text) if text == "final text" => saw_text = true,
+            StreamEvent::MessageEnd { stop_reason } => {
+                saw_message_end = stop_reason.as_deref() == Some("assistant_message_done")
+            }
+            _ => {}
+        }
+    }
+    assert!(saw_text, "final text delta should be forwarded before synthetic completion");
+    assert!(saw_message_end, "synthetic MessageEnd should be emitted after drain");
+    server.abort();
+}
+
 #[test]
 fn test_websocket_activity_payload_counts_response_completed() {
     assert!(is_websocket_activity_payload(

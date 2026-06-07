@@ -25,6 +25,8 @@ use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
+use self::stream::is_assistant_message_output_item_done_payload;
+
 const OPENAI_API_BASE: &str = "https://api.openai.com/v1";
 const CHATGPT_API_BASE: &str = "https://chatgpt.com/backend-api/codex";
 const RESPONSES_PATH: &str = "responses";
@@ -41,6 +43,7 @@ const WEBSOCKET_FALLBACK_NOTICE: &str = "falling back from websockets to https t
 const WEBSOCKET_CONNECT_TIMEOUT_SECS: u64 = 8;
 const WEBSOCKET_FIRST_EVENT_TIMEOUT_SECS: u64 = 8;
 const WEBSOCKET_COMPLETION_TIMEOUT_SECS: u64 = 180;
+const WEBSOCKET_ASSISTANT_MESSAGE_DONE_DRAIN_MS: u64 = 750;
 /// Maximum age of a persistent WebSocket connection before forcing reconnect
 const WEBSOCKET_PERSISTENT_MAX_AGE_SECS: u64 = 3000; // 50 min (server limit is 60 min)
 /// If a persistent socket sits idle this long, reconnect before reuse instead of
