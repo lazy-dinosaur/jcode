@@ -317,6 +317,38 @@ fn render_assistant_message_splits_glued_blockquote_marker() {
 }
 
 #[test]
+fn render_assistant_message_de_orphans_cjk_after_centered_indent() {
+    let saved = crate::tui::markdown::center_code_blocks();
+    crate::tui::markdown::set_center_code_blocks(true);
+    let msg = DisplayMessage::assistant(
+        "맞아요, 이제부터는 계속 사용하면서 자동 후보는 쌓이고, 확정 record는 내가/우리가 확인 후 승격하는 방식입니다. 정확히는:\n\n- 자동으로 쌓이는 것\n  - `.lazy-harness/knowledge/candidates.jsonl`\n  - BDD/user-flow 같은 ‘후보’는 hook이 조용히 dedupe 저장할 수 있음\n  - 현재도 candidate queue에 기록 있음 – 자동으로 확정되면 안 되는 것\n  - `.lazy-harness/domain/`, `spec/`, `behavior/`, `tests/`, `decisions/`, `ssot/`의 canonical record – `.lazy-harness/knowledge/graph.jsonl`의 confirmed fact – 이건 사용자 확인, 코드/테스트 근거, source read, implementation map이 필요함– 운영 방식 1. 평소처럼 사용2. 내가 작업/검수 중 발견한 지식은 candidate 또는 planning에 남김3. 사용자가 “맞다/이게 source of truth다/이렇게 하자”라고 확인하면 정식 record로 승격 4. `lazy record-audit`, `lazy impl-map`, graph-hygiene로 누락/품질을 주기적으로 확인한 줄로 말하면: 자동 기록 = 후보까지, canonical memory = 확인 후 축적입니다. 이 방향이 지금 만든 harness 원칙이랑 맞습니다.",
+    );
+    let lines = render_assistant_message(&msg, 112, crate::config::DiffDisplayMode::Off);
+    crate::tui::markdown::set_center_code_blocks(saved);
+    let plain_lines = lines.iter().map(extract_line_text).collect::<Vec<_>>();
+
+    assert!(
+        plain_lines
+            .iter()
+            .any(|line| line.contains("후 축적입니다")),
+        "moved CJK token should be inserted after centered/list indentation: {plain_lines:?}"
+    );
+    assert!(
+        plain_lines.iter().all(|line| {
+            !line.contains("후     축적")
+                && !line.contains("후    축적")
+                && !line.contains("중     발견한")
+                && !line.contains("중    발견한")
+        }),
+        "de-orphaning must not prepend CJK tokens before indentation padding: {plain_lines:?}"
+    );
+    assert!(
+        lines.iter().all(|line| line.width() <= 112),
+        "assistant markdown should stay within viewport: {plain_lines:?}"
+    );
+}
+
+#[test]
 fn render_system_message_centered_mode_left_aligns_with_padding() {
     let saved = crate::tui::markdown::center_code_blocks();
     crate::tui::markdown::set_center_code_blocks(true);

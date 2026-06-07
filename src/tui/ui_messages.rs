@@ -151,10 +151,48 @@ fn split_short_cjk_trailing_word(
     Some((trimmed_line, spans_from_styled_chars(&moved), moved_width))
 }
 
-fn prepend_spans_preserving_alignment(line: &mut Line<'static>, mut prefix: Vec<Span<'static>>) {
-    prefix.extend(line.spans.clone());
+fn prepend_spans_after_leading_whitespace_preserving_alignment(
+    line: &mut Line<'static>,
+    prefix: Vec<Span<'static>>,
+) {
     let alignment = line.alignment;
-    *line = Line::from(prefix);
+    let mut spans = std::mem::take(&mut line.spans);
+    let mut insert_idx = 0usize;
+
+    while insert_idx < spans.len() {
+        let content = spans[insert_idx].content.as_ref();
+        if content.is_empty() || content.chars().all(char::is_whitespace) {
+            insert_idx += 1;
+            continue;
+        }
+
+        let split_at = content
+            .char_indices()
+            .find_map(|(idx, ch)| (!ch.is_whitespace()).then_some(idx))
+            .unwrap_or(content.len());
+        if split_at > 0 {
+            let style = spans[insert_idx].style;
+            let leading = content[..split_at].to_string();
+            let rest = content[split_at..].to_string();
+            let mut replacement = Vec::with_capacity(prefix.len() + 2);
+            replacement.push(Span::styled(leading, style));
+            replacement.extend(prefix);
+            if !rest.is_empty() {
+                replacement.push(Span::styled(rest, style));
+            }
+            spans.splice(insert_idx..=insert_idx, replacement);
+            *line = Line::from(spans);
+            if let Some(alignment) = alignment {
+                *line = std::mem::take(line).alignment(alignment);
+            }
+            return;
+        }
+
+        break;
+    }
+
+    spans.splice(insert_idx..insert_idx, prefix);
+    *line = Line::from(spans);
     if let Some(alignment) = alignment {
         *line = std::mem::take(line).alignment(alignment);
     }
@@ -185,7 +223,7 @@ fn de_orphan_short_cjk_trailing_words(
         }
 
         lines[index] = trimmed;
-        prepend_spans_preserving_alignment(&mut lines[index + 1], moved);
+        prepend_spans_after_leading_whitespace_preserving_alignment(&mut lines[index + 1], moved);
     }
 
     lines
