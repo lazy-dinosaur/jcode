@@ -914,6 +914,8 @@ impl AnthropicProvider {
             ));
         }
 
+        Self::dedupe_tool_results(&mut merged);
+
         Self::normalize_tool_result_adjacency(&mut merged);
 
         // Validate: check each assistant message with tool_use has matching tool_result in next user message
@@ -974,6 +976,43 @@ impl AnthropicProvider {
         }
 
         merged
+    }
+
+    /// Anthropic rejects a request when the same `tool_use_id` appears in more
+    /// than one `tool_result` block ("each tool_use must have a single
+    /// result"). Our persisted transcript can end up with duplicate
+    /// tool_results for one id (e.g. a retried/continued turn that re-recorded
+    /// the same result, or merged consecutive user messages). Keep only the
+    /// first result per id across the whole conversation and drop the rest.
+    fn dedupe_tool_results(messages: &mut Vec<ApiMessage>) {
+        use std::collections::HashSet;
+
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut removed = 0usize;
+
+        for msg in messages.iter_mut() {
+            if msg.role != "user" {
+                continue;
+            }
+            msg.content.retain(|block| {
+                if let ApiContentBlock::ToolResult { tool_use_id, .. } = block {
+                    if seen.contains(tool_use_id) {
+                        removed += 1;
+                        return false;
+                    }
+                    seen.insert(tool_use_id.clone());
+                }
+                true
+            });
+        }
+
+        messages.retain(|msg| !msg.content.is_empty());
+
+        if removed > 0 {
+            crate::logging::info(&format!(
+                "[anthropic] Removed {removed} duplicate tool_result block(s)"
+            ));
+        }
     }
 
     /// Anthropic requires every assistant `tool_use` to be followed immediately
