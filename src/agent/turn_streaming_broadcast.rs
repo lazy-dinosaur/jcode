@@ -213,14 +213,29 @@ impl Agent {
             let mut retry_after_compaction = false;
             let mut keepalive = stream_keepalive_ticker();
             let mut count_noise_lines_seen = 0usize;
+            let mut saw_message_end = false;
             loop {
                 let next_event = std::pin::pin!(stream.next());
-                let event = tokio::select! {
-                    _ = keepalive.tick() => {
-                        send_stream_keepalive_broadcast(&event_tx);
-                        continue;
+                let event = if saw_message_end {
+                    let drain_timeout = tokio::time::sleep(MESSAGE_END_DRAIN_TIMEOUT);
+                    tokio::pin!(drain_timeout);
+                    tokio::select! {
+                        _ = &mut drain_timeout => {
+                            logging::warn(
+                                "Provider stream did not close after MessageEnd; finalizing after drain timeout",
+                            );
+                            break;
+                        }
+                        event = next_event => event,
                     }
-                    event = next_event => event,
+                } else {
+                    tokio::select! {
+                        _ = keepalive.tick() => {
+                            send_stream_keepalive_broadcast(&event_tx);
+                            continue;
+                        }
+                        event = next_event => event,
+                    }
                 };
                 let Some(event) = event else {
                     break;
@@ -466,6 +481,7 @@ impl Agent {
                     StreamEvent::MessageEnd {
                         stop_reason: reason,
                     } => {
+                        saw_message_end = true;
                         if reason.is_some() {
                             stop_reason = reason;
                         }
@@ -475,6 +491,9 @@ impl Agent {
                         self.provider_session_id = Some(sid.clone());
                         self.session.provider_session_id = Some(sid.clone());
                         let _ = event_tx.send(ServerEvent::SessionId { session_id: sid });
+                        if saw_message_end {
+                            break;
+                        }
                     }
                     StreamEvent::Compaction {
                         openai_encrypted_content,

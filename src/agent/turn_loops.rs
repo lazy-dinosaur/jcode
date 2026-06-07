@@ -533,12 +533,30 @@ impl Agent {
             let turn_stop_signal = self.turn_stop_signal();
             let mut count_noise_lines_seen = 0usize;
             loop {
-                let Some(event) = (tokio::select! {
-                    event = stream.next() => event,
-                    _ = turn_stop_signal.notified() => {
-                        return Err(anyhow::anyhow!("[Cancelled: user interrupted]"));
+                let event = if saw_message_end {
+                    let drain_timeout = tokio::time::sleep(MESSAGE_END_DRAIN_TIMEOUT);
+                    tokio::pin!(drain_timeout);
+                    tokio::select! {
+                        event = stream.next() => event,
+                        _ = turn_stop_signal.notified() => {
+                            return Err(anyhow::anyhow!("[Cancelled: user interrupted]"));
+                        }
+                        _ = &mut drain_timeout => {
+                            logging::warn(
+                                "Provider stream did not close after MessageEnd; finalizing after drain timeout",
+                            );
+                            break;
+                        }
                     }
-                }) else {
+                } else {
+                    tokio::select! {
+                        event = stream.next() => event,
+                        _ = turn_stop_signal.notified() => {
+                            return Err(anyhow::anyhow!("[Cancelled: user interrupted]"));
+                        }
+                    }
+                };
+                let Some(event) = event else {
                     break;
                 };
                 let event = match event {

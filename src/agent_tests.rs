@@ -45,6 +45,11 @@ struct PendingAfterTextProvider {
     text_sent: Arc<tokio::sync::Notify>,
 }
 
+struct PendingAfterMessageEndProvider {
+    include_session_id: bool,
+    ended: Arc<tokio::sync::Notify>,
+}
+
 struct CapturingSplitProvider {
     captured_dynamic: Arc<std::sync::Mutex<Vec<String>>>,
 }
@@ -533,6 +538,50 @@ impl Provider for PendingAfterTextProvider {
 }
 
 #[async_trait]
+impl Provider for PendingAfterMessageEndProvider {
+    async fn complete(
+        &self,
+        _messages: &[Message],
+        _tools: &[ToolDefinition],
+        _system: &str,
+        _resume_session_id: Option<&str>,
+    ) -> Result<EventStream> {
+        let include_session_id = self.include_session_id;
+        let ended = self.ended.clone();
+        let (tx, rx) = tokio_mpsc::channel::<Result<StreamEvent>>(8);
+        tokio::spawn(async move {
+            let _ = tx
+                .send(Ok(StreamEvent::TextDelta("final answer".to_string())))
+                .await;
+            let _ = tx
+                .send(Ok(StreamEvent::MessageEnd {
+                    stop_reason: Some("end_turn".to_string()),
+                }))
+                .await;
+            if include_session_id {
+                let _ = tx
+                    .send(Ok(StreamEvent::SessionId("session-after-end".to_string())))
+                    .await;
+            }
+            ended.notify_waiters();
+            std::future::pending::<()>().await;
+        });
+        Ok(Box::pin(ReceiverStream::new(rx)))
+    }
+
+    fn name(&self) -> &str {
+        "pending-after-message-end"
+    }
+
+    fn fork(&self) -> Arc<dyn Provider> {
+        Arc::new(Self {
+            include_session_id: self.include_session_id,
+            ended: self.ended.clone(),
+        })
+    }
+}
+
+#[async_trait]
 impl Tool for DelayTestTool {
     fn name(&self) -> &str {
         "delay_test"
@@ -927,6 +976,101 @@ async fn run_turn_streaming_mpsc_persists_partial_text_on_user_interrupt() {
 }
 
 #[tokio::test]
+async fn run_turn_streaming_mpsc_finishes_when_session_id_follows_message_end_even_if_stream_stays_open()
+ {
+    let _guard = crate::storage::lock_test_env();
+    let ended = Arc::new(tokio::sync::Notify::new());
+    let provider: Arc<dyn Provider> = Arc::new(PendingAfterMessageEndProvider {
+        include_session_id: true,
+        ended: ended.clone(),
+    });
+    let registry = Registry::new(provider.clone()).await;
+    let mut agent = Agent::new(provider, registry);
+    agent.add_message(
+        Role::User,
+        vec![ContentBlock::Text {
+            text: "finish after message end".to_string(),
+            cache_control: None,
+        }],
+    );
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let task = tokio::spawn(async move {
+        let result = agent.run_turn_streaming_mpsc(tx).await;
+        (result, agent)
+    });
+
+    tokio::time::timeout(Duration::from_secs(5), ended.notified())
+        .await
+        .expect("provider should emit MessageEnd and SessionId");
+    let (result, agent) = tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .expect("streaming task should not wait forever after MessageEnd + SessionId")
+        .expect("task should join");
+    result.expect("turn should finalize cleanly");
+
+    assert_eq!(
+        agent.provider_session_id.as_deref(),
+        Some("session-after-end")
+    );
+    assert!(
+        assistant_text_messages(&agent)
+            .iter()
+            .any(|text| text == "final answer")
+    );
+    let events: Vec<ServerEvent> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, ServerEvent::MessageEnd))
+    );
+    assert!(events.iter().any(|event| {
+        matches!(event, ServerEvent::SessionId { session_id } if session_id == "session-after-end")
+    }));
+}
+
+#[tokio::test]
+async fn run_turn_streaming_mpsc_drains_after_message_end_when_stream_stays_open_without_session_id()
+ {
+    let _guard = crate::storage::lock_test_env();
+    let ended = Arc::new(tokio::sync::Notify::new());
+    let provider: Arc<dyn Provider> = Arc::new(PendingAfterMessageEndProvider {
+        include_session_id: false,
+        ended: ended.clone(),
+    });
+    let registry = Registry::new(provider.clone()).await;
+    let mut agent = Agent::new(provider, registry);
+    agent.add_message(
+        Role::User,
+        vec![ContentBlock::Text {
+            text: "finish after message end without session id".to_string(),
+            cache_control: None,
+        }],
+    );
+
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let task = tokio::spawn(async move {
+        let result = agent.run_turn_streaming_mpsc(tx).await;
+        (result, agent)
+    });
+
+    tokio::time::timeout(Duration::from_secs(5), ended.notified())
+        .await
+        .expect("provider should emit MessageEnd");
+    let (result, agent) = tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .expect("streaming task should drain and finish after MessageEnd")
+        .expect("task should join");
+    result.expect("turn should finalize cleanly after MessageEnd drain timeout");
+
+    assert!(
+        assistant_text_messages(&agent)
+            .iter()
+            .any(|text| text == "final answer")
+    );
+}
+
+#[tokio::test]
 async fn interrupted_transcript_finalization_pairs_inflight_tool_use() {
     let _guard = crate::storage::lock_test_env();
     let (provider, _calls) = SequentialProvider::new(vec![]);
@@ -1055,13 +1199,13 @@ async fn run_turn_streaming_mpsc_parallel_tools_observe_turn_cancel_signal() {
                 id: "parallel_cancel_a".to_string(),
                 name: "counting_cancel_aware_test".to_string(),
             },
-            StreamEvent::ToolInputDelta("{}".to_string()),
+            StreamEvent::ToolInputDelta(serde_json::json!({"slot":"a"}).to_string()),
             StreamEvent::ToolUseEnd,
             StreamEvent::ToolUseStart {
                 id: "parallel_cancel_b".to_string(),
                 name: "counting_cancel_aware_test".to_string(),
             },
-            StreamEvent::ToolInputDelta("{}".to_string()),
+            StreamEvent::ToolInputDelta(serde_json::json!({"slot":"b"}).to_string()),
             StreamEvent::ToolUseEnd,
             StreamEvent::MessageEnd {
                 stop_reason: Some("tool_use".to_string()),

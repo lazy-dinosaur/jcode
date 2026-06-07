@@ -219,33 +219,67 @@ impl Agent {
             let mut keepalive = stream_keepalive_ticker();
             let turn_stop_signal = self.turn_stop_signal();
             let mut count_noise_lines_seen = 0usize;
+            let mut saw_message_end = false;
             loop {
                 let next_event = std::pin::pin!(stream.next());
-                let event = tokio::select! {
-                    _ = keepalive.tick() => {
-                        send_stream_keepalive_mpsc(&event_tx);
-                        continue;
-                    }
-                    _ = turn_stop_signal.notified() => {
-                        if turn_stop_signal.is_set() {
-                            let reason = self.turn_control.reason();
-                            let _ = event_tx.send(ServerEvent::TextDelta {
-                                text: format!("\n\n{}", Self::interruption_text_for_reason(reason)),
-                            });
-                            self.persist_interrupted_assistant_turn(
-                                &text_content,
-                                &reasoning_content,
-                                store_reasoning_content,
-                                &tool_calls,
-                                current_tool.take(),
-                                &current_tool_input,
-                                reason,
-                            )?;
-                            return Ok(());
+                let event = if saw_message_end {
+                    let drain_timeout = tokio::time::sleep(MESSAGE_END_DRAIN_TIMEOUT);
+                    tokio::pin!(drain_timeout);
+                    tokio::select! {
+                        _ = turn_stop_signal.notified() => {
+                            if turn_stop_signal.is_set() {
+                                let reason = self.turn_control.reason();
+                                let _ = event_tx.send(ServerEvent::TextDelta {
+                                    text: format!("\n\n{}", Self::interruption_text_for_reason(reason)),
+                                });
+                                self.persist_interrupted_assistant_turn(
+                                    &text_content,
+                                    &reasoning_content,
+                                    store_reasoning_content,
+                                    &tool_calls,
+                                    current_tool.take(),
+                                    &current_tool_input,
+                                    reason,
+                                )?;
+                                return Ok(());
+                            }
+                            continue;
                         }
-                        continue;
+                        _ = &mut drain_timeout => {
+                            logging::warn(
+                                "Provider stream did not close after MessageEnd; finalizing after drain timeout",
+                            );
+                            break;
+                        }
+                        event = next_event => event,
                     }
-                    event = next_event => event,
+                } else {
+                    tokio::select! {
+                        _ = keepalive.tick() => {
+                            send_stream_keepalive_mpsc(&event_tx);
+                            continue;
+                        }
+                        _ = turn_stop_signal.notified() => {
+                            if turn_stop_signal.is_set() {
+                                let reason = self.turn_control.reason();
+                                let _ = event_tx.send(ServerEvent::TextDelta {
+                                    text: format!("\n\n{}", Self::interruption_text_for_reason(reason)),
+                                });
+                                self.persist_interrupted_assistant_turn(
+                                    &text_content,
+                                    &reasoning_content,
+                                    store_reasoning_content,
+                                    &tool_calls,
+                                    current_tool.take(),
+                                    &current_tool_input,
+                                    reason,
+                                )?;
+                                return Ok(());
+                            }
+                            continue;
+                        }
+                        event = next_event => event,
+                    }
                 };
                 let Some(event) = event else {
                     break;
@@ -517,6 +551,7 @@ impl Agent {
                     StreamEvent::MessageEnd {
                         stop_reason: reason,
                     } => {
+                        saw_message_end = true;
                         if reason.is_some() {
                             stop_reason = reason;
                         }
@@ -526,6 +561,9 @@ impl Agent {
                         self.provider_session_id = Some(sid.clone());
                         self.session.provider_session_id = Some(sid.clone());
                         let _ = event_tx.send(ServerEvent::SessionId { session_id: sid });
+                        if saw_message_end {
+                            break;
+                        }
                     }
                     StreamEvent::Compaction {
                         openai_encrypted_content,
