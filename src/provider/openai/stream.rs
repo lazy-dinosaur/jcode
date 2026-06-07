@@ -553,6 +553,10 @@ pub(super) fn is_assistant_message_output_item_done_payload(data: &str) -> bool 
     };
     item.get("type").and_then(|v| v.as_str()) == Some("message")
         && item.get("role").and_then(|v| v.as_str()) == Some("assistant")
+        && !matches!(
+            item.get("phase").and_then(|v| v.as_str()),
+            Some("commentary")
+        )
 }
 
 fn extract_last_assistant_message_phase(response: &Value) -> Option<String> {
@@ -1052,5 +1056,39 @@ mod tests {
         assert!(streaming_tool_calls.is_empty());
         assert!(completed_tool_items.is_empty());
         assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn assistant_message_done_completion_candidate_allows_final_phase() {
+        let payload = serde_json::json!({
+            "type": "response.output_item.done",
+            "item": {
+                "id": "msg_final",
+                "type": "message",
+                "role": "assistant",
+                "phase": "final",
+                "content": [{"type": "output_text", "text": "done"}]
+            }
+        })
+        .to_string();
+
+        assert!(is_assistant_message_output_item_done_payload(&payload));
+    }
+
+    #[test]
+    fn assistant_message_done_completion_candidate_ignores_commentary_phase() {
+        let payload = serde_json::json!({
+            "type": "response.output_item.done",
+            "item": {
+                "id": "msg_commentary",
+                "type": "message",
+                "role": "assistant",
+                "phase": "commentary",
+                "content": [{"type": "output_text", "text": "I will inspect it."}]
+            }
+        })
+        .to_string();
+
+        assert!(!is_assistant_message_output_item_done_payload(&payload));
     }
 }
