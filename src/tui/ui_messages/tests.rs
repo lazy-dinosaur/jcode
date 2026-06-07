@@ -349,6 +349,53 @@ fn render_assistant_message_de_orphans_cjk_after_centered_indent() {
 }
 
 #[test]
+fn render_assistant_message_preserves_lettered_option_source_lines() {
+    let saved = crate::tui::markdown::center_code_blocks();
+    crate::tui::markdown::set_center_code_blocks(true);
+    let msg = DisplayMessage::assistant(
+        "맞아요. 확인해보니 지금 seed는 제가 만든 가짜 SVG data URL이라 실제 업로드 preview 검증으로 부적절합니다. 수정 방향 옵션입니다.
+A. (Recommended) public/dev-seed/pending-license-sample.pdf 예시
+PDF를 추가하고, seed가 그 PDF URL을 보여주게 수정
+B. 예시 이미지를 추가해서 이미지 preview 기준으로 검증
+C. seed에는 파일 없음 상태를 보여주고, 실제 회원가입 업로드에서만 preview 표시
+D. 직접 넣을 PDF/이미지 파일을 받아서 그걸 seed fixture로 사용추천은 A입니다. 없으면 “첨부파일 없음” empty state를 보여주고, PDF/이미지는 실제 파일 URL 또는 data URL을 <object>/img로 preview 하게 고치겠습니다.
+A로 바로 진행해도 될까요?"
+    );
+    let lines = render_assistant_message(&msg, 112, crate::config::DiffDisplayMode::Off);
+    crate::tui::markdown::set_center_code_blocks(saved);
+    let plain_lines = lines.iter().map(extract_line_text).collect::<Vec<_>>();
+
+    assert!(
+        plain_lines.iter().any(|line| line
+            .trim_start()
+            .starts_with("A. (Recommended) public/dev-seed")),
+        "A option should render on its source line: {plain_lines:?}"
+    );
+    assert!(
+        plain_lines
+            .iter()
+            .any(|line| line.trim_start().starts_with("PDF를 추가하고")),
+        "A option continuation should render on its source line: {plain_lines:?}"
+    );
+    assert!(
+        plain_lines
+            .iter()
+            .any(|line| line.trim_start().starts_with("B. 예시 이미지를")),
+        "B option should render on its source line: {plain_lines:?}"
+    );
+    assert!(
+        plain_lines.iter().all(|line| {
+            !line.contains("옵션입니다. A.") && !line.contains("수정 B. 예시")
+        }),
+        "lettered option lines should not collapse into adjacent prose: {plain_lines:?}"
+    );
+    assert!(
+        lines.iter().all(|line| line.width() <= 112),
+        "assistant markdown should stay within viewport: {plain_lines:?}"
+    );
+}
+
+#[test]
 fn render_system_message_centered_mode_left_aligns_with_padding() {
     let saved = crate::tui::markdown::center_code_blocks();
     crate::tui::markdown::set_center_code_blocks(true);

@@ -276,6 +276,44 @@ fn test_source_newlines_before_alphabetic_option_markers_are_preserved() {
 }
 
 #[test]
+fn test_source_newlines_around_multiline_alphabetic_options_are_preserved() {
+    let md = "수정 방향 옵션입니다.\nA. (Recommended) public/dev-seed/pending-license-sample.pdf 예시\nPDF를 추가하고, seed가 그 PDF URL을 보여주게 수정\nB. 예시 이미지를 추가해서 이미지 preview 기준으로 검증\nC. seed에는 파일 없음 상태를 보여주고, 실제 회원가입 업로드에서만 preview 표시";
+    let rendered: Vec<String> = render_markdown_with_width(md, Some(120))
+        .iter()
+        .map(line_to_string)
+        .collect();
+
+    assert_eq!(
+        rendered.first().map(String::as_str),
+        Some("수정 방향 옵션입니다.")
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("A. (Recommended) public/dev-seed")),
+        "A option should preserve source newline after intro sentence: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("PDF를 추가하고")),
+        "A option continuation should preserve its source line: {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.trim_start().starts_with("B. 예시 이미지를")),
+        "B option should preserve source newline after A continuation: {rendered:?}"
+    );
+    assert!(
+        rendered.iter().all(|line| {
+            !line.contains("옵션입니다. A.") && !line.contains("수정 B. 예시")
+        }),
+        "alphabetic option source lines must not collapse into adjacent prose: {rendered:?}"
+    );
+}
+
+#[test]
 fn test_terminal_alpha_option_marker_before_recommended_line_is_repaired() {
     let md = "버튼 동작 선택해주세요.A.\n(Recommended) 첫 화면 유지 구현\n/forgot-password를 Figma 그대로 구현하고, 휴대폰 인증 버튼은 placeholder로 둡니다. reset flow는 record/backlog로 남깁니다.B. 기존 본인인증 mock 연결\n버튼 클릭 시 기존 startPhoneIdentityVerification()을 호출합니다.C. 재설정 폼까지 임시 구현";
     let rendered: Vec<String> = render_markdown_with_width(md, Some(220))

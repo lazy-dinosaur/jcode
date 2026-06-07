@@ -2451,7 +2451,7 @@ fn should_preserve_alpha_option_line_break(line: &str, next: &str, in_code_fence
     let current_is_option = starts_with_alpha_option_marker(trimmed).is_some();
     let next_is_option = starts_with_alpha_option_marker(next_trimmed).is_some();
 
-    (next_is_option && (line.trim_end().ends_with(':') || current_is_option))
+    (next_is_option && !trimmed.is_empty())
         || (current_is_option
             && !line_starts_interrupting_markdown_block(next)
             && !next.starts_with(' ')
