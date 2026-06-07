@@ -541,20 +541,6 @@ pub(super) fn parse_openai_response_event(
     None
 }
 
-pub(super) fn is_assistant_message_output_item_done_payload(data: &str) -> bool {
-    let Ok(event) = serde_json::from_str::<ResponseSseEvent>(data) else {
-        return false;
-    };
-    if event.kind != "response.output_item.done" {
-        return false;
-    }
-    let Some(item) = event.item else {
-        return false;
-    };
-    item.get("type").and_then(|v| v.as_str()) == Some("message")
-        && item.get("role").and_then(|v| v.as_str()) == Some("assistant")
-}
-
 fn extract_last_assistant_message_phase(response: &Value) -> Option<String> {
     let output = response.get("output")?.as_array()?;
     output.iter().rev().find_map(|item| {

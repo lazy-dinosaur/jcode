@@ -184,21 +184,6 @@ fn test_parse_openai_response_output_item_done_skips_duplicate_after_arguments_d
 }
 
 #[test]
-fn test_assistant_message_output_item_done_detector() {
-    let assistant_message_done = r#"{"type":"response.output_item.done","item":{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}}"#;
-    let tool_done = r#"{"type":"response.output_item.done","item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"bash","arguments":"{}"}}"#;
-    let user_message_done = r#"{"type":"response.output_item.done","item":{"id":"msg_2","type":"message","role":"user","content":[]}}"#;
-
-    assert!(is_assistant_message_output_item_done_payload(
-        assistant_message_done
-    ));
-    assert!(!is_assistant_message_output_item_done_payload(tool_done));
-    assert!(!is_assistant_message_output_item_done_payload(
-        user_message_done
-    ));
-}
-
-#[test]
 fn test_parse_openai_response_output_item_done_emits_native_compaction() {
     let mut saw_text_delta = false;
     let mut streaming_tool_calls = HashMap::new();

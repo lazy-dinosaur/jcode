@@ -470,25 +470,8 @@ pub(super) async fn try_persistent_ws_continuation(
     let mut last_api_activity_at = stream_started;
     let mut saw_api_activity = false;
     let mut logged_first_server_event = false;
-    let mut assistant_message_done_at: Option<Instant> = None;
-    let mut discard_persistent_connection = false;
 
     loop {
-        if let Some(done_at) = assistant_message_done_at
-            && done_at.elapsed() >= Duration::from_millis(WEBSOCKET_ASSISTANT_MESSAGE_DONE_DRAIN_MS)
-        {
-            crate::logging::warn(
-                "Persistent WS did not emit response.completed after assistant message output_item.done; finalizing response and discarding socket",
-            );
-            let _ = tx
-                .send(Ok(StreamEvent::MessageEnd {
-                    stop_reason: Some("assistant_message_done".to_string()),
-                }))
-                .await;
-            discard_persistent_connection = true;
-            break;
-        }
-
         if stream_started.elapsed() >= Duration::from_secs(WEBSOCKET_COMPLETION_TIMEOUT_SECS) {
             return PersistentWsResult::Failed("completion timeout".to_string());
         }
@@ -511,28 +494,19 @@ pub(super) async fn try_persistent_ws_continuation(
                 ));
             }
         };
-        let mut wait_timeout = Duration::from_secs(timeout_secs);
-        if let Some(done_at) = assistant_message_done_at {
-            let drain = Duration::from_millis(WEBSOCKET_ASSISTANT_MESSAGE_DONE_DRAIN_MS);
-            wait_timeout = wait_timeout.min(
-                drain
-                    .saturating_sub(done_at.elapsed())
-                    .max(Duration::from_millis(1)),
-            );
-        }
-        let next_item = match tokio::time::timeout(wait_timeout, state.ws_stream.next()).await {
-            Ok(item) => item,
-            Err(_) => {
-                if assistant_message_done_at.is_some() {
-                    continue;
+        let next_item =
+            match tokio::time::timeout(Duration::from_secs(timeout_secs), state.ws_stream.next())
+                .await
+            {
+                Ok(item) => item,
+                Err(_) => {
+                    return PersistentWsResult::Failed(format!(
+                        "timed out waiting for {} websocket activity on persistent WS ({}s)",
+                        websocket_activity_timeout_kind(saw_api_activity),
+                        timeout_secs
+                    ));
                 }
-                return PersistentWsResult::Failed(format!(
-                    "timed out waiting for {} websocket activity on persistent WS ({}s)",
-                    websocket_activity_timeout_kind(saw_api_activity),
-                    timeout_secs
-                ));
-            }
-        };
+            };
 
         let Some(result) = next_item else {
             if saw_response_completed {
@@ -557,12 +531,6 @@ pub(super) async fn try_persistent_ws_continuation(
                 }
                 if is_websocket_fallback_notice(&text) {
                     return PersistentWsResult::Failed("server requested fallback".to_string());
-                }
-
-                if assistant_message_done_at.is_none()
-                    && is_assistant_message_output_item_done_payload(&text)
-                {
-                    assistant_message_done_at = Some(Instant::now());
                 }
 
                 let mut made_api_activity = if saw_api_activity {
@@ -662,11 +630,6 @@ pub(super) async fn try_persistent_ws_continuation(
                 return PersistentWsResult::Failed(format!("ws error: {}", e));
             }
         }
-    }
-
-    if discard_persistent_connection {
-        *guard = None;
-        return PersistentWsResult::Success;
     }
 
     // Update persistent state for next turn
@@ -867,25 +830,8 @@ pub(super) async fn stream_response_websocket_persistent(
     let mut response_id: Option<String> = None;
     let connected_at = Instant::now();
     let mut logged_first_server_event = false;
-    let mut assistant_message_done_at: Option<Instant> = None;
-    let mut discard_persistent_connection = false;
 
     loop {
-        if let Some(done_at) = assistant_message_done_at
-            && done_at.elapsed() >= Duration::from_millis(WEBSOCKET_ASSISTANT_MESSAGE_DONE_DRAIN_MS)
-        {
-            crate::logging::warn(
-                "Fresh WS did not emit response.completed after assistant message output_item.done; finalizing response and discarding socket",
-            );
-            let _ = tx
-                .send(Ok(StreamEvent::MessageEnd {
-                    stop_reason: Some("assistant_message_done".to_string()),
-                }))
-                .await;
-            discard_persistent_connection = true;
-            break;
-        }
-
         if !saw_response_completed
             && ws_started_at.elapsed() >= Duration::from_secs(WEBSOCKET_COMPLETION_TIMEOUT_SECS)
         {
@@ -920,28 +866,15 @@ pub(super) async fn stream_response_websocket_persistent(
                 }
             ))
         })?;
-        let mut wait_timeout = Duration::from_secs(timeout_secs);
-        if let Some(done_at) = assistant_message_done_at {
-            let drain = Duration::from_millis(WEBSOCKET_ASSISTANT_MESSAGE_DONE_DRAIN_MS);
-            wait_timeout = wait_timeout.min(
-                drain
-                    .saturating_sub(done_at.elapsed())
-                    .max(Duration::from_millis(1)),
-            );
-        }
-        let next_item = match tokio::time::timeout(wait_timeout, ws_stream.next()).await {
-            Ok(item) => item,
-            Err(_) => {
-                if assistant_message_done_at.is_some() {
-                    continue;
-                }
-                return Err(OpenAIStreamFailure::FallbackToHttps(anyhow::anyhow!(
+        let next_item = tokio::time::timeout(Duration::from_secs(timeout_secs), ws_stream.next())
+            .await
+            .map_err(|_| {
+                OpenAIStreamFailure::FallbackToHttps(anyhow::anyhow!(
                     "WebSocket stream timed out waiting for {} websocket activity ({}s)",
                     websocket_activity_timeout_kind(saw_api_activity),
                     timeout_secs
-                )));
-            }
-        };
+                ))
+            })?;
 
         let Some(result) = next_item else {
             if saw_response_completed {
@@ -970,12 +903,6 @@ pub(super) async fn stream_response_websocket_persistent(
                             "{} reported by websocket stream",
                             WEBSOCKET_FALLBACK_NOTICE
                         )));
-                    }
-
-                    if assistant_message_done_at.is_none()
-                        && is_assistant_message_output_item_done_payload(&text)
-                    {
-                        assistant_message_done_at = Some(Instant::now());
                     }
 
                     // Extract response_id from response.created event
@@ -1097,14 +1024,8 @@ pub(super) async fn stream_response_websocket_persistent(
         }
     }
 
-    // Save the WebSocket connection and response_id for reuse on next turn.
-    // If we finalized from assistant message completion without response.completed,
-    // do not reuse this socket: the server still considers that response in-flight.
-    if discard_persistent_connection {
-        crate::logging::info(
-            "Discarding fresh persistent WS after synthetic assistant-message completion",
-        );
-    } else if let Some(resp_id) = response_id {
+    // Save the WebSocket connection and response_id for reuse on next turn
+    if let Some(resp_id) = response_id {
         let mut guard = persistent_ws.lock().await;
         crate::logging::info(&format!(
             "Saving persistent WS connection after {}ms (response_id={}, {})",
