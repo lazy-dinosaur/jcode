@@ -186,16 +186,27 @@ fn test_parse_openai_response_output_item_done_skips_duplicate_after_arguments_d
 #[test]
 fn test_assistant_message_output_item_done_detector() {
     let assistant_message_done = r#"{"type":"response.output_item.done","item":{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}}"#;
+    let commentary_message_done = r#"{"type":"response.output_item.done","item":{"id":"msg_commentary","type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"still working"}]}}"#;
     let tool_done = r#"{"type":"response.output_item.done","item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"bash","arguments":"{}"}}"#;
     let user_message_done = r#"{"type":"response.output_item.done","item":{"id":"msg_2","type":"message","role":"user","content":[]}}"#;
+    let tool_added = r#"{"type":"response.output_item.added","item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"bash","arguments":""}}"#;
+    let arguments_delta = r#"{"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":"{}"}"#;
 
     assert!(is_assistant_message_output_item_done_payload(
         assistant_message_done
+    ));
+    assert!(is_assistant_message_output_item_done_payload(
+        commentary_message_done
     ));
     assert!(!is_assistant_message_output_item_done_payload(tool_done));
     assert!(!is_assistant_message_output_item_done_payload(
         user_message_done
     ));
+
+    assert!(!is_openai_tool_call_payload(assistant_message_done));
+    assert!(is_openai_tool_call_payload(tool_done));
+    assert!(is_openai_tool_call_payload(tool_added));
+    assert!(is_openai_tool_call_payload(arguments_delta));
 }
 
 #[test]

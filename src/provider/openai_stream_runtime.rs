@@ -51,6 +51,14 @@ pub(super) async fn openai_access_token(
     Ok(new_access_token)
 }
 
+fn assistant_message_done_drain_duration(phase: AssistantMessageDonePhase) -> Duration {
+    let millis = match phase {
+        AssistantMessageDonePhase::Commentary => WEBSOCKET_ASSISTANT_COMMENTARY_DONE_DRAIN_MS,
+        AssistantMessageDonePhase::Other => WEBSOCKET_ASSISTANT_MESSAGE_DONE_DRAIN_MS,
+    };
+    Duration::from_millis(millis)
+}
+
 /// Stream the response from OpenAI API
 pub(super) async fn stream_response(
     client: Client,
@@ -470,16 +478,17 @@ pub(super) async fn try_persistent_ws_continuation(
     let mut last_api_activity_at = stream_started;
     let mut saw_api_activity = false;
     let mut logged_first_server_event = false;
-    let mut assistant_message_done_at: Option<Instant> = None;
+    let mut assistant_message_done_at: Option<(Instant, AssistantMessageDonePhase)> = None;
     let mut discard_persistent_connection = false;
 
     loop {
-        if let Some(done_at) = assistant_message_done_at
-            && done_at.elapsed() >= Duration::from_millis(WEBSOCKET_ASSISTANT_MESSAGE_DONE_DRAIN_MS)
+        if let Some((done_at, phase)) = assistant_message_done_at
+            && done_at.elapsed() >= assistant_message_done_drain_duration(phase)
         {
-            crate::logging::warn(
-                "Persistent WS did not emit response.completed after assistant message output_item.done; finalizing response and discarding socket",
-            );
+            crate::logging::warn(&format!(
+                "Persistent WS did not emit response.completed after assistant {:?} message output_item.done; finalizing response and discarding socket",
+                phase
+            ));
             let _ = tx
                 .send(Ok(StreamEvent::MessageEnd {
                     stop_reason: Some("assistant_message_done".to_string()),
@@ -512,8 +521,8 @@ pub(super) async fn try_persistent_ws_continuation(
             }
         };
         let mut wait_timeout = Duration::from_secs(timeout_secs);
-        if let Some(done_at) = assistant_message_done_at {
-            let drain = Duration::from_millis(WEBSOCKET_ASSISTANT_MESSAGE_DONE_DRAIN_MS);
+        if let Some((done_at, phase)) = assistant_message_done_at {
+            let drain = assistant_message_done_drain_duration(phase);
             wait_timeout = wait_timeout.min(
                 drain
                     .saturating_sub(done_at.elapsed())
@@ -559,10 +568,13 @@ pub(super) async fn try_persistent_ws_continuation(
                     return PersistentWsResult::Failed("server requested fallback".to_string());
                 }
 
+                if assistant_message_done_at.is_some() && is_openai_tool_call_payload(&text) {
+                    assistant_message_done_at = None;
+                }
                 if assistant_message_done_at.is_none()
-                    && is_assistant_message_output_item_done_payload(&text)
+                    && let Some(phase) = assistant_message_output_item_done_phase(&text)
                 {
-                    assistant_message_done_at = Some(Instant::now());
+                    assistant_message_done_at = Some((Instant::now(), phase));
                 }
 
                 let mut made_api_activity = if saw_api_activity {
@@ -867,16 +879,17 @@ pub(super) async fn stream_response_websocket_persistent(
     let mut response_id: Option<String> = None;
     let connected_at = Instant::now();
     let mut logged_first_server_event = false;
-    let mut assistant_message_done_at: Option<Instant> = None;
+    let mut assistant_message_done_at: Option<(Instant, AssistantMessageDonePhase)> = None;
     let mut discard_persistent_connection = false;
 
     loop {
-        if let Some(done_at) = assistant_message_done_at
-            && done_at.elapsed() >= Duration::from_millis(WEBSOCKET_ASSISTANT_MESSAGE_DONE_DRAIN_MS)
+        if let Some((done_at, phase)) = assistant_message_done_at
+            && done_at.elapsed() >= assistant_message_done_drain_duration(phase)
         {
-            crate::logging::warn(
-                "Fresh WS did not emit response.completed after assistant message output_item.done; finalizing response and discarding socket",
-            );
+            crate::logging::warn(&format!(
+                "Fresh WS did not emit response.completed after assistant {:?} message output_item.done; finalizing response and discarding socket",
+                phase
+            ));
             let _ = tx
                 .send(Ok(StreamEvent::MessageEnd {
                     stop_reason: Some("assistant_message_done".to_string()),
@@ -921,8 +934,8 @@ pub(super) async fn stream_response_websocket_persistent(
             ))
         })?;
         let mut wait_timeout = Duration::from_secs(timeout_secs);
-        if let Some(done_at) = assistant_message_done_at {
-            let drain = Duration::from_millis(WEBSOCKET_ASSISTANT_MESSAGE_DONE_DRAIN_MS);
+        if let Some((done_at, phase)) = assistant_message_done_at {
+            let drain = assistant_message_done_drain_duration(phase);
             wait_timeout = wait_timeout.min(
                 drain
                     .saturating_sub(done_at.elapsed())
@@ -972,10 +985,13 @@ pub(super) async fn stream_response_websocket_persistent(
                         )));
                     }
 
+                    if assistant_message_done_at.is_some() && is_openai_tool_call_payload(&text) {
+                        assistant_message_done_at = None;
+                    }
                     if assistant_message_done_at.is_none()
-                        && is_assistant_message_output_item_done_payload(&text)
+                        && let Some(phase) = assistant_message_output_item_done_phase(&text)
                     {
-                        assistant_message_done_at = Some(Instant::now());
+                        assistant_message_done_at = Some((Instant::now(), phase));
                     }
 
                     // Extract response_id from response.created event

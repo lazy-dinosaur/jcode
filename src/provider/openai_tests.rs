@@ -1,5 +1,6 @@
 #![allow(clippy::collapsible_match)]
 
+use super::stream::{is_assistant_message_output_item_done_payload, is_openai_tool_call_payload};
 use super::*;
 use crate::auth::codex::CodexCredentials;
 use crate::message::{ContentBlock, Role};

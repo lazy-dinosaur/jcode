@@ -541,22 +541,58 @@ pub(super) fn parse_openai_response_event(
     None
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum AssistantMessageDonePhase {
+    Commentary,
+    Other,
+}
+
+pub(super) fn assistant_message_output_item_done_phase(
+    data: &str,
+) -> Option<AssistantMessageDonePhase> {
+    let Ok(event) = serde_json::from_str::<ResponseSseEvent>(data) else {
+        return None;
+    };
+    if event.kind != "response.output_item.done" {
+        return None;
+    }
+    let Some(item) = event.item else {
+        return None;
+    };
+    if item.get("type").and_then(|v| v.as_str()) != Some("message")
+        || item.get("role").and_then(|v| v.as_str()) != Some("assistant")
+    {
+        return None;
+    }
+
+    Some(match item.get("phase").and_then(|v| v.as_str()) {
+        Some("commentary") => AssistantMessageDonePhase::Commentary,
+        _ => AssistantMessageDonePhase::Other,
+    })
+}
+
+#[cfg(test)]
 pub(super) fn is_assistant_message_output_item_done_payload(data: &str) -> bool {
+    assistant_message_output_item_done_phase(data).is_some()
+}
+
+pub(super) fn is_openai_tool_call_payload(data: &str) -> bool {
     let Ok(event) = serde_json::from_str::<ResponseSseEvent>(data) else {
         return false;
     };
-    if event.kind != "response.output_item.done" {
-        return false;
+
+    match event.kind.as_str() {
+        "response.function_call_arguments.delta" | "response.function_call_arguments.done" => true,
+        "response.output_item.added" | "response.output_item.done" => {
+            event.item.is_some_and(|item| {
+                matches!(
+                    item.get("type").and_then(|v| v.as_str()),
+                    Some("function_call") | Some("custom_tool_call")
+                )
+            })
+        }
+        _ => false,
     }
-    let Some(item) = event.item else {
-        return false;
-    };
-    item.get("type").and_then(|v| v.as_str()) == Some("message")
-        && item.get("role").and_then(|v| v.as_str()) == Some("assistant")
-        && !matches!(
-            item.get("phase").and_then(|v| v.as_str()),
-            Some("commentary")
-        )
 }
 
 fn extract_last_assistant_message_phase(response: &Value) -> Option<String> {
@@ -1073,10 +1109,14 @@ mod tests {
         .to_string();
 
         assert!(is_assistant_message_output_item_done_payload(&payload));
+        assert_eq!(
+            assistant_message_output_item_done_phase(&payload),
+            Some(AssistantMessageDonePhase::Other)
+        );
     }
 
     #[test]
-    fn assistant_message_done_completion_candidate_ignores_commentary_phase() {
+    fn assistant_message_done_completion_candidate_tracks_commentary_phase() {
         let payload = serde_json::json!({
             "type": "response.output_item.done",
             "item": {
@@ -1089,6 +1129,10 @@ mod tests {
         })
         .to_string();
 
-        assert!(!is_assistant_message_output_item_done_payload(&payload));
+        assert!(is_assistant_message_output_item_done_payload(&payload));
+        assert_eq!(
+            assistant_message_output_item_done_phase(&payload),
+            Some(AssistantMessageDonePhase::Commentary)
+        );
     }
 }

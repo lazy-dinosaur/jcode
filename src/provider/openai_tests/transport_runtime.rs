@@ -506,6 +506,185 @@ async fn test_persistent_ws_continuation_finalizes_after_assistant_message_done_
     server.abort();
 }
 
+#[tokio::test]
+async fn test_persistent_ws_continuation_does_not_finalize_commentary_done_before_tool_call() {
+    let prefix_item = serde_json::json!({
+        "type": "message",
+        "role": "user",
+        "content": [{"type": "input_text", "text": "old prefix"}],
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test websocket listener");
+    let addr = listener.local_addr().expect("listener local addr");
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("accept websocket client");
+        let mut ws = tokio_tungstenite::accept_async(stream)
+            .await
+            .expect("accept websocket handshake");
+        let _request = ws.next().await.expect("continuation request").expect("request frame");
+        ws.send(WsMessage::Text(
+            serde_json::json!({
+                "type": "response.created",
+                "response": {"id": "resp_commentary_tool"}
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("send response.created");
+        ws.send(WsMessage::Text(
+            serde_json::json!({
+                "type": "response.output_text.delta",
+                "delta": "I will inspect it."
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("send commentary text delta");
+        ws.send(WsMessage::Text(
+            serde_json::json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "id": "msg_commentary",
+                    "type": "message",
+                    "role": "assistant",
+                    "phase": "commentary",
+                    "content": [{"type": "output_text", "text": "I will inspect it."}]
+                }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("send commentary assistant message done");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        ws.send(WsMessage::Text(
+            serde_json::json!({
+                "type": "response.output_item.added",
+                "item": {
+                    "id": "fc_1",
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "bash",
+                    "arguments": ""
+                }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("send tool call item");
+        ws.send(WsMessage::Text(
+            serde_json::json!({
+                "type": "response.function_call_arguments.done",
+                "item_id": "fc_1",
+                "call_id": "call_1",
+                "name": "bash",
+                "arguments": "{\"command\":\"echo hi\"}"
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("send tool call arguments done");
+        ws.send(WsMessage::Text(
+            serde_json::json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "id": "fc_1",
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "bash",
+                    "arguments": "{\"command\":\"echo hi\"}"
+                }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("send duplicate tool item done");
+        ws.send(WsMessage::Text(
+            serde_json::json!({
+                "type": "response.completed",
+                "response": {"status": "completed"}
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("send response.completed");
+    });
+
+    let (client_ws, _) = connect_async(format!("ws://{}", addr))
+        .await
+        .expect("connect websocket client");
+    let persistent_ws = Arc::new(tokio::sync::Mutex::new(Some(PersistentWsState {
+        ws_stream: client_ws,
+        last_response_id: "resp_test".to_string(),
+        connected_at: Instant::now(),
+        last_activity_at: Instant::now(),
+        message_count: 1,
+        last_input_item_count: 1,
+        last_input_item_hashes: crate::provider::fingerprint::item_hashes(&[prefix_item.clone()]),
+    })));
+    let input = vec![
+        prefix_item,
+        serde_json::json!({
+            "type": "function_call_output",
+            "call_id": "call_previous",
+            "output": "previous tool done",
+        }),
+    ];
+    let request = serde_json::json!({
+        "model": "gpt-test",
+        "input": input,
+        "tools": [],
+    });
+    let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+
+    let result = tokio::time::timeout(
+        Duration::from_secs(3),
+        super::openai_stream_runtime::try_persistent_ws_continuation(
+            &persistent_ws,
+            &request,
+            request.get("input").unwrap().as_array().unwrap(),
+            2,
+            &tx,
+        ),
+    )
+    .await
+    .expect("commentary done should be cancelled by subsequent tool call");
+
+    assert!(matches!(result, PersistentWsResult::Success));
+    assert!(persistent_ws.lock().await.is_some());
+
+    let mut saw_tool_start = false;
+    let mut saw_synthetic_message_end = false;
+    let mut saw_normal_message_end = false;
+    while let Ok(event) = rx.try_recv() {
+        match event.expect("stream event should be ok") {
+            StreamEvent::ToolUseStart { name, .. } if name == "bash" => saw_tool_start = true,
+            StreamEvent::MessageEnd { stop_reason } => {
+                if stop_reason.as_deref() == Some("assistant_message_done") {
+                    saw_synthetic_message_end = true;
+                } else {
+                    saw_normal_message_end = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    assert!(saw_tool_start, "tool call after commentary should still be emitted");
+    assert!(saw_normal_message_end, "response.completed should end the stream normally");
+    assert!(
+        !saw_synthetic_message_end,
+        "commentary done before a tool call must not be treated as final completion"
+    );
+    server.abort();
+}
+
 #[test]
 fn test_websocket_activity_payload_counts_response_completed() {
     assert!(is_websocket_activity_payload(
