@@ -917,6 +917,65 @@ fn test_heading_glued_to_pipe_table_and_following_heading_are_repaired() {
 }
 
 #[test]
+fn test_heading_colon_glued_to_first_pipe_table_cell_is_repaired() {
+    let md = concat!(
+        "## 지금까지 완료된 것: 단계 | 내용 | 상태 |\n",
+        "|---|---|---|\n",
+        "| 1 | 기존 record/index 기반 확인 | 완료 |\n",
+        "| 2 | Graphify 방식 검토, 단 Python vendoring 금지 | 완료 |\n",
+        "| 3 | lazy harness graph query 구현 | 완료 |\n",
+        "| 4 | graph query output compactness 개선 | 완료 |\n",
+        "| 5 | workflow benchmark 구현 | 완료 |\n",
+        "## 아직 남은 것\n",
+        "중요한 건 benchmark 결과가 좋아졌지만 coverage가 아직 부족하다는 점입니다."
+    );
+
+    for rendered in [
+        render_markdown_with_width(md, Some(160)),
+        render_markdown_lazy(md, Some(160), 0..usize::MAX),
+    ] {
+        let rendered: Vec<String> = rendered.iter().map(line_to_string).collect();
+        let joined = rendered.join("\n");
+
+        let completed_heading = rendered
+            .iter()
+            .find(|line| line.contains("지금까지 완료된 것"))
+            .unwrap_or_else(|| panic!("missing completed heading in {rendered:?}"));
+        assert!(
+            !completed_heading.contains("단계 | 내용") && !completed_heading.contains("##"),
+            "heading must not swallow the table header: {rendered:?}"
+        );
+
+        assert!(
+            joined.contains("단계") && joined.contains("내용") && joined.contains("상태") && joined.contains('│'),
+            "colon-glued header row should render as a table: {rendered:?}"
+        );
+        assert!(
+            joined.contains("workflow benchmark 구현") && joined.contains("완료"),
+            "last table row should remain in the table: {rendered:?}"
+        );
+
+        let remaining_heading = rendered
+            .iter()
+            .find(|line| line.contains("아직 남은 것"))
+            .unwrap_or_else(|| panic!("missing following heading in {rendered:?}"));
+        assert!(
+            !remaining_heading.contains("| 5 |") && !remaining_heading.contains("##"),
+            "following heading must not stay glued to the final table row: {rendered:?}"
+        );
+
+        assert!(
+            rendered.iter().all(|line| {
+                !line.contains("완료된 것: 단계 |")
+                    && !line.trim_start().starts_with("|---|")
+                    && !line.contains("완료 |##")
+            }),
+            "raw malformed table/heading source should not leak: {rendered:?}"
+        );
+    }
+}
+
+#[test]
 fn test_pipe_table_cell_node_id_is_not_split_as_ordered_list_marker() {
     let md = concat!(
         "Gate 1(metadata) + 현재 코드를 확보했습니다. 차이가 큽니다. metadata로 파악한 새 디자인:\n\n",

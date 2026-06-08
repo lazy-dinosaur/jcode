@@ -1649,20 +1649,34 @@ fn split_glued_pipe_table_header_before_separator(
 
     let first_pipe = trimmed_end.find('|')?;
     let before_first_pipe = &trimmed_end[..first_pipe];
-    let split_at = heading_boundary_before_embedded_table_header(before_first_pipe)
-        .or_else(|| sentence_boundary_before_embedded_table_header(before_first_pipe))?;
-    let prose = trimmed_end[..split_at].trim_end();
-    let header = trimmed_end[split_at..].trim_start();
-
-    if prose.is_empty() || header.is_empty() {
-        return None;
+    let mut split_candidates = Vec::new();
+    if let Some(split_at) = heading_boundary_before_embedded_table_header(before_first_pipe) {
+        split_candidates.push(split_at);
     }
-    let header_cols = pipe_table_row_column_count(header)?;
-    if normalize_pipe_table_separator_line_to_columns(next_line, header_cols).is_none() {
-        return None;
+    if let Some(split_at) = sentence_boundary_before_embedded_table_header(before_first_pipe)
+        && !split_candidates.contains(&split_at)
+    {
+        split_candidates.push(split_at);
     }
 
-    Some((prose.to_string(), normalize_pipe_table_row(header)))
+    for split_at in split_candidates {
+        let prose = trimmed_end[..split_at].trim_end();
+        let header = trimmed_end[split_at..].trim_start();
+
+        if prose.is_empty() || header.is_empty() {
+            continue;
+        }
+        let Some(header_cols) = pipe_table_row_column_count(header) else {
+            continue;
+        };
+        if normalize_pipe_table_separator_line_to_columns(next_line, header_cols).is_none() {
+            continue;
+        }
+
+        return Some((prose.to_string(), normalize_pipe_table_row(header)));
+    }
+
+    None
 }
 
 fn heading_boundary_before_embedded_table_header(before_first_pipe: &str) -> Option<usize> {
