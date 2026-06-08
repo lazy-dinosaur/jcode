@@ -23,6 +23,7 @@ fn anthropic_text_delta_suppresses_standalone_count_noise() {
     let mut output_tokens = None;
     let mut cache_read_input_tokens = None;
     let mut cache_creation_input_tokens = None;
+    let mut saw_message_end = false;
     let event = SseEvent {
         event_type: "content_block_delta".to_string(),
         data: r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"count\n\n"}}"#
@@ -37,6 +38,7 @@ fn anthropic_text_delta_suppresses_standalone_count_noise() {
         &mut cache_read_input_tokens,
         &mut cache_creation_input_tokens,
         true,
+        &mut saw_message_end,
     );
 
     assert!(events.is_empty());
@@ -49,6 +51,7 @@ fn anthropic_text_delta_suppresses_standalone_call_noise() {
     let mut output_tokens = None;
     let mut cache_read_input_tokens = None;
     let mut cache_creation_input_tokens = None;
+    let mut saw_message_end = false;
     let event = SseEvent {
         event_type: "content_block_delta".to_string(),
         data: r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"call\n\n"}}"#
@@ -63,6 +66,7 @@ fn anthropic_text_delta_suppresses_standalone_call_noise() {
         &mut cache_read_input_tokens,
         &mut cache_creation_input_tokens,
         true,
+        &mut saw_message_end,
     );
 
     assert!(events.is_empty());
@@ -75,6 +79,7 @@ fn anthropic_text_delta_recovers_xml_invoke_tool_call() {
     let mut output_tokens = None;
     let mut cache_read_input_tokens = None;
     let mut cache_creation_input_tokens = None;
+    let mut saw_message_end = false;
     let event = SseEvent {
         event_type: "content_block_delta".to_string(),
         data: r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"<invoke name=\"read\"><parameter name=\"file_path\">Cargo.toml</parameter><parameter name=\"limit\">20</parameter></invoke>"}}"#
@@ -89,6 +94,7 @@ fn anthropic_text_delta_recovers_xml_invoke_tool_call() {
         &mut cache_read_input_tokens,
         &mut cache_creation_input_tokens,
         true,
+        &mut saw_message_end,
     );
 
     assert!(matches!(
@@ -104,6 +110,94 @@ fn anthropic_text_delta_recovers_xml_invoke_tool_call() {
         other => panic!("expected tool input delta, got {other:?}"),
     }
     assert!(matches!(events.get(2), Some(StreamEvent::ToolUseEnd)));
+}
+
+#[test]
+fn anthropic_message_stop_emits_message_end_when_delta_stop_reason_missing() {
+    let mut current_tool_use = None;
+    let mut input_tokens = None;
+    let mut output_tokens = None;
+    let mut cache_read_input_tokens = None;
+    let mut cache_creation_input_tokens = None;
+    let mut saw_message_end = false;
+    let event = SseEvent {
+        event_type: "message_stop".to_string(),
+        data: r#"{"type":"message_stop"}"#.to_string(),
+    };
+
+    let events = process_sse_event(
+        &event,
+        &mut current_tool_use,
+        &mut input_tokens,
+        &mut output_tokens,
+        &mut cache_read_input_tokens,
+        &mut cache_creation_input_tokens,
+        true,
+        &mut saw_message_end,
+    );
+
+    assert!(saw_message_end);
+    assert!(matches!(
+        events.as_slice(),
+        [StreamEvent::MessageEnd { stop_reason }] if stop_reason.is_none()
+    ));
+}
+
+#[test]
+fn anthropic_message_stop_does_not_duplicate_message_delta_end() {
+    let mut current_tool_use = None;
+    let mut input_tokens = None;
+    let mut output_tokens = None;
+    let mut cache_read_input_tokens = None;
+    let mut cache_creation_input_tokens = None;
+    let mut saw_message_end = false;
+    let delta = SseEvent {
+        event_type: "message_delta".to_string(),
+        data: r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7}}"#
+            .to_string(),
+    };
+    let stop = SseEvent {
+        event_type: "message_stop".to_string(),
+        data: r#"{"type":"message_stop"}"#.to_string(),
+    };
+
+    let delta_events = process_sse_event(
+        &delta,
+        &mut current_tool_use,
+        &mut input_tokens,
+        &mut output_tokens,
+        &mut cache_read_input_tokens,
+        &mut cache_creation_input_tokens,
+        true,
+        &mut saw_message_end,
+    );
+    let stop_events = process_sse_event(
+        &stop,
+        &mut current_tool_use,
+        &mut input_tokens,
+        &mut output_tokens,
+        &mut cache_read_input_tokens,
+        &mut cache_creation_input_tokens,
+        true,
+        &mut saw_message_end,
+    );
+
+    assert!(matches!(
+        delta_events.as_slice(),
+        [StreamEvent::MessageEnd { stop_reason }] if stop_reason.as_deref() == Some("end_turn")
+    ));
+    assert!(stop_events.is_empty());
+    assert_eq!(output_tokens, Some(7));
+}
+
+#[test]
+fn anthropic_eof_emits_synthetic_message_end_when_terminal_event_missing() {
+    assert!(matches!(
+        anthropic_message_end_for_eof(true, false),
+        Some(StreamEvent::MessageEnd { stop_reason }) if stop_reason.is_none()
+    ));
+    assert!(anthropic_message_end_for_eof(true, true).is_none());
+    assert!(anthropic_message_end_for_eof(false, false).is_none());
 }
 
 #[test]
@@ -140,20 +234,24 @@ async fn test_available_models() {
 }
 
 #[test]
-fn test_effectively_1m_requires_explicit_suffix() {
-    assert!(!effectively_1m("claude-opus-4-6"));
-    assert!(!effectively_1m("claude-sonnet-4-6"));
+fn test_effectively_1m_matches_current_long_context_defaults() {
+    assert!(effectively_1m("claude-opus-4-8"));
+    assert!(effectively_1m("claude-opus-4-7"));
+    assert!(effectively_1m("claude-opus-4-6"));
+    assert!(effectively_1m("claude-sonnet-4-6"));
     assert!(effectively_1m("claude-opus-4-6[1m]"));
     assert!(effectively_1m("claude-sonnet-4-6[1m]"));
+    assert!(!effectively_1m("claude-opus-4-5"));
 }
 
 #[test]
-fn test_oauth_beta_headers_require_explicit_1m_suffix() {
-    assert_eq!(oauth_beta_headers("claude-opus-4-6"), OAUTH_BETA_HEADERS);
+fn test_oauth_beta_headers_match_current_long_context_defaults() {
+    assert_eq!(oauth_beta_headers("claude-opus-4-6"), OAUTH_BETA_HEADERS_1M);
     assert_eq!(
         oauth_beta_headers("claude-opus-4-6[1m]"),
         OAUTH_BETA_HEADERS_1M
     );
+    assert_eq!(oauth_beta_headers("claude-opus-4-5"), OAUTH_BETA_HEADERS);
 }
 
 #[test]

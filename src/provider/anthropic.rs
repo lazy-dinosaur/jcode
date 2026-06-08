@@ -2047,6 +2047,8 @@ async fn stream_response(
     let mut output_tokens: Option<u64> = None;
     let mut cache_read_input_tokens: Option<u64> = None;
     let mut cache_creation_input_tokens: Option<u64> = None;
+    let mut saw_stream_event = false;
+    let mut saw_message_end = false;
 
     const SSE_CHUNK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 
@@ -2073,6 +2075,7 @@ async fn stream_response(
 
         // Process complete SSE events
         while let Some(event) = parse_sse_event(&mut buffer) {
+            saw_stream_event = true;
             let events = process_sse_event(
                 &event,
                 &mut current_tool_use,
@@ -2081,6 +2084,7 @@ async fn stream_response(
                 &mut cache_read_input_tokens,
                 &mut cache_creation_input_tokens,
                 is_oauth,
+                &mut saw_message_end,
             );
             for stream_event in events {
                 if let StreamEvent::Error { ref message, .. } = stream_event
@@ -2114,7 +2118,25 @@ async fn stream_response(
             .await;
     }
 
+    if let Some(message_end) = anthropic_message_end_for_eof(saw_stream_event, saw_message_end) {
+        crate::logging::warn(
+            "Anthropic SSE stream ended without message_delta stop_reason or message_stop; emitting synthetic MessageEnd",
+        );
+        let _ = tx.send(Ok(message_end)).await;
+    }
+
     Ok(())
+}
+
+fn anthropic_message_end_for_eof(
+    saw_stream_event: bool,
+    saw_message_end: bool,
+) -> Option<StreamEvent> {
+    if saw_stream_event && !saw_message_end {
+        Some(StreamEvent::MessageEnd { stop_reason: None })
+    } else {
+        None
+    }
 }
 
 /// Check if an error is transient and should be retried
@@ -2359,6 +2381,7 @@ fn process_sse_event(
     cache_read_input_tokens: &mut Option<u64>,
     cache_creation_input_tokens: &mut Option<u64>,
     is_oauth: bool,
+    saw_message_end: &mut bool,
 ) -> Vec<StreamEvent> {
     let mut events = Vec::new();
 
@@ -2424,14 +2447,23 @@ fn process_sse_event(
                     *output_tokens = usage.output_tokens.map(|t| t as u64);
                 }
                 if let Some(stop_reason) = parsed.delta.stop_reason {
-                    events.push(StreamEvent::MessageEnd {
-                        stop_reason: Some(stop_reason),
-                    });
+                    if !*saw_message_end {
+                        *saw_message_end = true;
+                        events.push(StreamEvent::MessageEnd {
+                            stop_reason: Some(stop_reason),
+                        });
+                    }
                 }
             }
         }
         "message_stop" => {
-            // Final message stop - we may have already sent MessageEnd via message_delta
+            // Final message stop. Anthropic usually sends stop_reason in the
+            // preceding message_delta, but some transports/surfaces can omit it.
+            // Ensure the agent/UI always sees a terminal event.
+            if !*saw_message_end {
+                *saw_message_end = true;
+                events.push(StreamEvent::MessageEnd { stop_reason: None });
+            }
         }
         "ping" => {
             // Keepalive, ignore
