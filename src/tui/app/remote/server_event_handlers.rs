@@ -45,6 +45,7 @@ pub(super) fn handle_tool_done(
         app.batch_progress = None;
     }
     app.streaming_tool_calls.clear();
+    app.stream_message_ended = false;
     app.status = ProcessingStatus::Streaming;
     true
 }

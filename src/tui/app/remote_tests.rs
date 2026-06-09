@@ -1,8 +1,8 @@
 use super::reconnect;
 use super::{
     ProcessingStatus, RemoteRunState, auth_provider_hint_for_login_provider,
-    detect_and_cancel_stall, handle_post_connect, handle_server_event,
-    maybe_process_pending_queued_dispatch, process_remote_followups,
+    detect_and_cancel_stall, finalize_orphaned_message_end, handle_post_connect,
+    handle_server_event, maybe_process_pending_queued_dispatch, process_remote_followups,
 };
 use crate::protocol::{
     MemoryActivitySnapshot, MemoryPipelineSnapshot, MemoryStateSnapshot, MemoryStepStatusSnapshot,
@@ -517,6 +517,69 @@ fn stale_remote_resume_activity_does_not_spin_forever_in_thinking() {
     assert!(app.remote_resume_activity.is_none());
     assert!(app.processing_started.is_none());
     assert!(app.last_stream_activity.is_none());
+}
+
+#[test]
+fn message_end_without_done_finalizes_remote_ui_after_short_grace() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let _guard = rt.enter();
+    let mut app = create_test_app();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+    let stale = std::time::Duration::from_secs(6);
+
+    app.is_processing = true;
+    app.status = ProcessingStatus::Streaming;
+    app.current_message_id = Some(42);
+    app.streaming_text = "Done.".to_string();
+    app.stream_message_ended = true;
+    app.processing_started = Some(std::time::Instant::now() - stale);
+    app.last_stream_activity = Some(std::time::Instant::now() - stale);
+
+    let redrew = rt.block_on(finalize_orphaned_message_end(&mut app, &mut remote));
+
+    assert!(redrew);
+    assert!(!app.is_processing);
+    assert!(matches!(app.status, ProcessingStatus::Idle));
+    assert!(app.current_message_id.is_none());
+    assert!(!app.stream_message_ended);
+    assert!(app.status_detail.is_none());
+    assert!(
+        app.display_messages()
+            .iter()
+            .any(|msg| { msg.role == "assistant" && msg.content == "Done." })
+    );
+}
+
+#[test]
+fn tool_done_resets_message_end_marker_so_watchdog_does_not_finish_next_call() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let _guard = rt.enter();
+    let mut app = create_test_app();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+    let stale = std::time::Duration::from_secs(6);
+
+    app.is_processing = true;
+    app.status = ProcessingStatus::RunningTool("bash".to_string());
+    app.current_message_id = Some(7);
+    app.stream_message_ended = true;
+    app.last_stream_activity = Some(std::time::Instant::now() - stale);
+
+    handle_server_event(
+        &mut app,
+        ServerEvent::ToolDone {
+            id: "tool-1".to_string(),
+            name: "bash".to_string(),
+            output: "ok".to_string(),
+            error: None,
+        },
+        &mut remote,
+    );
+
+    assert!(!app.stream_message_ended);
+    let redrew = rt.block_on(finalize_orphaned_message_end(&mut app, &mut remote));
+    assert!(!redrew);
+    assert!(app.is_processing);
+    assert!(matches!(app.status, ProcessingStatus::Streaming));
 }
 
 #[test]

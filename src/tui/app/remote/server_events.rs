@@ -3,6 +3,57 @@ use crate::tool::selfdev::ReloadContext;
 use crate::tui::app as app_mod;
 use crate::tui::app::remote::swarm_plan_core::RemoteSwarmPlanSnapshot;
 
+pub(in crate::tui::app) fn finish_remote_processing_turn(
+    app: &mut App,
+    remote: &mut impl RemoteEventState,
+    memory_reason: &'static str,
+) -> bool {
+    app.clear_pending_remote_retry();
+    if let Some(chunk) = app.stream_buffer.flush() {
+        app.append_streaming_text(&chunk);
+    }
+    app.pause_streaming_tps(false);
+    if !app.streaming_text.is_empty() {
+        let duration = app.display_turn_duration_secs();
+        let content = app.take_streaming_text();
+        app.push_display_message(DisplayMessage {
+            role: "assistant".to_string(),
+            content,
+            tool_calls: vec![],
+            duration_secs: duration,
+            title: None,
+            tool_data: None,
+        });
+        app.push_turn_footer(duration);
+    } else if app.has_streaming_footer_stats() {
+        let duration = app.display_turn_duration_secs();
+        app.push_turn_footer(duration);
+    }
+    crate::tui::mermaid::clear_streaming_preview_diagram();
+    app.is_processing = false;
+    app.status = ProcessingStatus::Idle;
+    app.status_detail = None;
+    app.stream_message_ended = false;
+    app.processing_started = None;
+    app.replay_processing_started_ms = None;
+    app.replay_elapsed_override = None;
+    app.batch_progress = None;
+    app.streaming_tool_calls.clear();
+    app.current_message_id = None;
+    app.thought_line_inserted = false;
+    app.thinking_prefix_emitted = false;
+    app.thinking_buffer.clear();
+    remote.clear_pending();
+    remote.reset_call_output_tokens_seen();
+    app.note_runtime_memory_event_force("turn_completed", memory_reason);
+    let auto_poked = app.schedule_auto_poke_followup_if_needed()
+        || app.schedule_overnight_poke_followup_if_needed();
+    if !auto_poked {
+        app.clear_visible_turn_started();
+    }
+    auto_poked
+}
+
 pub(in crate::tui::app) fn handle_server_event(
     app: &mut App,
     event: ServerEvent,
@@ -120,6 +171,7 @@ pub(in crate::tui::app) fn handle_server_event(
         ServerEvent::ToolStart { id, name } => {
             app.reset_streaming_redraw_coalescer();
             app.pause_streaming_tps(false);
+            app.stream_message_ended = false;
             app.clear_active_experimental_feature_notice();
             remote.handle_tool_start(&id, &name);
             app.commit_pending_streaming_assistant_message();
@@ -404,49 +456,7 @@ pub(in crate::tui::app) fn handle_server_event(
             let matches_woken_server_turn = app.current_message_id.is_none() && app.is_processing;
             if app.current_message_id == Some(id) || matches_woken_server_turn {
                 completed_current_message = true;
-                app.clear_pending_remote_retry();
-                if let Some(chunk) = app.stream_buffer.flush() {
-                    app.append_streaming_text(&chunk);
-                }
-                app.pause_streaming_tps(false);
-                if !app.streaming_text.is_empty() {
-                    let duration = app.display_turn_duration_secs();
-                    let content = app.take_streaming_text();
-                    app.push_display_message(DisplayMessage {
-                        role: "assistant".to_string(),
-                        content,
-                        tool_calls: vec![],
-                        duration_secs: duration,
-                        title: None,
-                        tool_data: None,
-                    });
-                    app.push_turn_footer(duration);
-                } else if app.has_streaming_footer_stats() {
-                    let duration = app.display_turn_duration_secs();
-                    app.push_turn_footer(duration);
-                }
-                crate::tui::mermaid::clear_streaming_preview_diagram();
-                app.is_processing = false;
-                app.status = ProcessingStatus::Idle;
-                app.status_detail = None;
-                app.stream_message_ended = false;
-                app.processing_started = None;
-                app.replay_processing_started_ms = None;
-                app.replay_elapsed_override = None;
-                app.batch_progress = None;
-                app.streaming_tool_calls.clear();
-                app.current_message_id = None;
-                app.thought_line_inserted = false;
-                app.thinking_prefix_emitted = false;
-                app.thinking_buffer.clear();
-                remote.clear_pending();
-                remote.reset_call_output_tokens_seen();
-                app.note_runtime_memory_event_force("turn_completed", "remote_turn_finished");
-                auto_poked = app.schedule_auto_poke_followup_if_needed()
-                    || app.schedule_overnight_poke_followup_if_needed();
-                if !auto_poked {
-                    app.clear_visible_turn_started();
-                }
+                auto_poked = finish_remote_processing_turn(app, remote, "remote_turn_finished");
             } else if app.is_processing {
                 let is_stale = app.current_message_id.is_some_and(|mid| id < mid);
                 if is_stale {

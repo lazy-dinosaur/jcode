@@ -51,7 +51,7 @@ pub(super) use input_dispatch::{
 pub(super) use key_handling::{
     handle_remote_char_input, handle_remote_key, handle_remote_key_event, send_interleave_now,
 };
-pub(super) use server_events::handle_server_event;
+pub(super) use server_events::{finish_remote_processing_turn, handle_server_event};
 
 const CONNECTION_MESSAGE_TITLE: &str = "Connection";
 const RELOAD_MARKER_MAX_AGE: Duration = Duration::from_secs(30);
@@ -191,6 +191,7 @@ pub(super) async fn handle_tick(app: &mut App, remote: &mut RemoteConnection) ->
         needs_redraw = true;
     }
 
+    needs_redraw |= finalize_orphaned_message_end(app, remote).await;
     detect_and_cancel_stall(app, remote).await;
     needs_redraw
 }
@@ -1042,6 +1043,46 @@ async fn detect_and_cancel_stall(app: &mut App, remote: &mut RemoteConnection) {
             }
         }
     }
+}
+
+async fn finalize_orphaned_message_end(app: &mut App, remote: &mut RemoteConnection) -> bool {
+    // `MessageEnd` means the provider finished the assistant output. Normally the
+    // server follows it with terminal `Done` after bookkeeping and optional hooks.
+    // If that terminal event is lost or the server-side completion path wedges,
+    // the TUI used to stay `is_processing=true` forever even though the visible
+    // response was complete, so further user input only showed as `queued`.
+    const MESSAGE_END_FINALIZE_TIMEOUT: Duration = Duration::from_secs(5);
+
+    if !app.is_processing || !app.stream_message_ended {
+        return false;
+    }
+    if matches!(app.status, ProcessingStatus::RunningTool(_))
+        || app.foreground_tool_handoff_started.is_some()
+    {
+        return false;
+    }
+
+    let quiet_for = app
+        .last_stream_activity
+        .map(|at| at.elapsed())
+        .unwrap_or_default();
+    if quiet_for < MESSAGE_END_FINALIZE_TIMEOUT {
+        return false;
+    }
+
+    crate::logging::warn(&format!(
+        "Remote turn received MessageEnd but no Done for {:?}; finalizing client UI fail-open",
+        quiet_for
+    ));
+    let auto_poked = finish_remote_processing_turn(
+        app,
+        remote,
+        "remote_turn_finished_after_message_end_timeout",
+    );
+    if !auto_poked {
+        app.set_status_notice("Finalized response after missing Done");
+    }
+    true
 }
 
 fn handle_mouse_event(app: &mut App, mouse: MouseEvent) {
