@@ -1,5 +1,8 @@
 use super::*;
 
+const OPENAI_ACCESS_TOKEN_REFRESHED_RETRY_MARKER: &str =
+    "openai access token was refreshed after auth rejection";
+
 pub(super) async fn openai_access_token(
     credentials: &Arc<RwLock<CodexCredentials>>,
 ) -> anyhow::Result<String> {
@@ -31,7 +34,18 @@ pub(super) async fn openai_access_token(
         return Ok(access_token);
     }
 
-    let refreshed = oauth::refresh_openai_tokens(&refresh_token).await?;
+    refresh_openai_access_token(credentials, &refresh_token).await
+}
+
+async fn refresh_openai_access_token(
+    credentials: &Arc<RwLock<CodexCredentials>>,
+    refresh_token: &str,
+) -> anyhow::Result<String> {
+    if refresh_token.is_empty() {
+        anyhow::bail!("OpenAI refresh token is empty");
+    }
+
+    let refreshed = oauth::refresh_openai_tokens(refresh_token).await?;
     let mut tokens = credentials.write().await;
     let account_id = tokens.account_id.clone();
     let id_token = refreshed
@@ -49,6 +63,16 @@ pub(super) async fn openai_access_token(
     };
 
     Ok(new_access_token)
+}
+
+async fn force_refresh_openai_access_token(
+    credentials: &Arc<RwLock<CodexCredentials>>,
+) -> anyhow::Result<String> {
+    let refresh_token = {
+        let tokens = credentials.read().await;
+        tokens.refresh_token.clone()
+    };
+    refresh_openai_access_token(credentials, &refresh_token).await
 }
 
 fn assistant_message_done_drain_duration(phase: AssistantMessageDonePhase) -> Duration {
@@ -139,9 +163,13 @@ pub(super) async fn stream_response(
 
         // Check if we need to refresh token
         if should_refresh_token(status, &body) {
-            // Token refresh needed - this is a retryable error
+            force_refresh_openai_access_token(&credentials)
+                .await
+                .context("Failed to refresh OpenAI access token after auth rejection")
+                .map_err(OpenAIStreamFailure::Other)?;
             return Err(OpenAIStreamFailure::Other(anyhow::anyhow!(
-                "Token refresh needed: {}",
+                "{}: {}",
+                OPENAI_ACCESS_TOKEN_REFRESHED_RETRY_MARKER,
                 body
             )));
         }
@@ -1311,4 +1339,21 @@ pub(super) fn is_retryable_error(error_str: &str) -> bool {
         || error_str.contains("internal server error")
         || error_str.contains("an error occurred while processing your request")
         || error_str.contains("please include the request id")
+        // Auth errors that already refreshed credentials and should immediately retry once.
+        || error_str.contains(OPENAI_ACCESS_TOKEN_REFRESHED_RETRY_MARKER)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refreshed_access_token_auth_rejection_is_retryable() {
+        let err = format!(
+            "{}: unauthorized: token expired",
+            OPENAI_ACCESS_TOKEN_REFRESHED_RETRY_MARKER
+        );
+
+        assert!(is_retryable_error(&err));
+    }
 }
