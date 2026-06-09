@@ -654,10 +654,15 @@ impl App {
             )
         }
 
-        const RECOMMENDED_MODELS: &[&str] =
-            &["gpt-5.5", "claude-opus-4-8", "deepseek/deepseek-v4-pro"];
+        const RECOMMENDED_MODELS: &[&str] = &[
+            "claude-fable-5",
+            "gpt-5.5",
+            "claude-opus-4-8",
+            "deepseek/deepseek-v4-pro",
+        ];
 
-        const CLAUDE_OAUTH_ONLY_MODELS: &[&str] = &["claude-opus-4-8", "claude-opus-4-7"];
+        const CLAUDE_OAUTH_ONLY_MODELS: &[&str] =
+            &["claude-fable-5", "claude-opus-4-8", "claude-opus-4-7"];
 
         const OPENAI_OAUTH_ONLY_MODELS: &[&str] =
             &["gpt-5.5", "gpt-5.4", "gpt-5.4[1m]", "gpt-5.4-pro"];

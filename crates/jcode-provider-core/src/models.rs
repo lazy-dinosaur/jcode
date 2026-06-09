@@ -1,5 +1,7 @@
 /// Available Claude models used by model lists and provider routing.
 pub const ALL_CLAUDE_MODELS: &[&str] = &[
+    "claude-fable-5",
+    "claude-fable-5[1m]",
     "claude-opus-4-8",
     "claude-opus-4-8[1m]",
     "claude-opus-4-7",
@@ -192,7 +194,8 @@ pub fn context_limit_for_model_with_provider_and_cache(
         return Some(272_000);
     }
 
-    if model.starts_with("claude-opus-4-8")
+    if model.starts_with("claude-fable-5")
+        || model.starts_with("claude-opus-4-8")
         || model.starts_with("claude-opus-4.8")
         || model.starts_with("claude-opus-4-7")
         || model.starts_with("claude-opus-4.7")
@@ -258,6 +261,14 @@ mod tests {
 
     #[test]
     fn context_limit_handles_claude_1m_aliases() {
+        assert_eq!(
+            context_limit_for_model_with_provider("claude-fable-5", Some("claude")),
+            Some(1_048_576)
+        );
+        assert_eq!(
+            context_limit_for_model_with_provider("claude-fable-5[1m]", Some("claude")),
+            Some(1_048_576)
+        );
         assert_eq!(
             context_limit_for_model_with_provider("claude-opus-4-8", Some("claude")),
             Some(1_048_576)

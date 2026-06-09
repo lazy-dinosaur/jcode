@@ -35,6 +35,7 @@ const TRANSPORT_ERROR_DELAY_MS: u64 = 2000;
 
 /// Available Claude models
 const AVAILABLE_MODELS: &[&str] = &[
+    "claude-fable-5",
     "claude-opus-4-8",
     "claude-opus-4-7",
     "claude-opus-4-6",

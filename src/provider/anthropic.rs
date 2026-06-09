@@ -545,9 +545,12 @@ const RETRY_BASE_DELAY_MS: u64 = 1000;
 /// Set to 32k to avoid truncating long tool calls (e.g. writing large files).
 /// Override with JCODE_ANTHROPIC_MAX_TOKENS env var.
 const DEFAULT_MAX_TOKENS: u32 = 32_768;
+const FABLE_5_MAX_TOKENS: u32 = 128_000;
 
 /// Available models
 pub const AVAILABLE_MODELS: &[&str] = &[
+    "claude-fable-5",
+    "claude-fable-5[1m]",
     "claude-opus-4-8",
     "claude-opus-4-8[1m]",
     "claude-opus-4-7",
@@ -624,7 +627,8 @@ impl AnthropicProvider {
 
     fn supports_adaptive_thinking_effort(model: &str) -> bool {
         let model = strip_1m_suffix(model).trim().to_ascii_lowercase();
-        model.starts_with("claude-opus-4-8")
+        model.starts_with("claude-fable-5")
+            || model.starts_with("claude-opus-4-8")
             || model.starts_with("claude-opus-4.8")
             || model.starts_with("claude-opus-4-7")
             || model.starts_with("claude-opus-4.7")
@@ -632,6 +636,23 @@ impl AnthropicProvider {
             || model.starts_with("claude-opus-4.6")
             || model.starts_with("claude-sonnet-4-6")
             || model.starts_with("claude-sonnet-4.6")
+    }
+
+    fn default_max_tokens_for_model(model: &str) -> u32 {
+        let model = strip_1m_suffix(model).trim().to_ascii_lowercase();
+        if model.starts_with("claude-fable-5") {
+            FABLE_5_MAX_TOKENS
+        } else {
+            DEFAULT_MAX_TOKENS
+        }
+    }
+
+    fn effective_max_tokens_for_model(&self, model: &str) -> u32 {
+        if self.max_tokens == DEFAULT_MAX_TOKENS {
+            Self::default_max_tokens_for_model(model)
+        } else {
+            self.max_tokens
+        }
     }
 
     fn current_reasoning_controls_for_model(
@@ -1374,7 +1395,7 @@ impl Provider for AnthropicProvider {
 
         let request = ApiRequest {
             model: api_model,
-            max_tokens: self.max_tokens,
+            max_tokens: self.effective_max_tokens_for_model(&model),
             system: build_system_param(system, is_oauth),
             messages: format_messages_with_identity(api_messages, is_oauth),
             tools: if api_tools.is_empty() {

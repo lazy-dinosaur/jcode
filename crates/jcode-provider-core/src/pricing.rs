@@ -15,6 +15,14 @@ pub fn anthropic_api_pricing(model: &str) -> Option<RouteCheapnessEstimate> {
     let base = model.strip_suffix("[1m]").unwrap_or(model);
     let long_context = model.ends_with("[1m]");
     match base {
+        "claude-fable-5" => Some(RouteCheapnessEstimate::metered(
+            RouteCostSource::PublicApiPricing,
+            RouteCostConfidence::Exact,
+            usd_to_micros(10.0),
+            usd_to_micros(50.0),
+            Some(usd_to_micros(1.0)),
+            Some("Anthropic API pricing; Fable 5 has 1M context by default".to_string()),
+        )),
         "claude-opus-4-8" | "claude-opus-4-7" | "claude-opus-4-6" => {
             Some(RouteCheapnessEstimate::metered(
                 RouteCostSource::PublicApiPricing,
@@ -83,6 +91,7 @@ pub fn anthropic_api_pricing(model: &str) -> Option<RouteCheapnessEstimate> {
 
 pub fn anthropic_oauth_pricing(model: &str, subscription: Option<&str>) -> RouteCheapnessEstimate {
     let base = model.strip_suffix("[1m]").unwrap_or(model);
+    let is_fable = base == "claude-fable-5";
     let is_opus = base.contains("opus");
     let is_1m = model.ends_with("[1m]");
 
@@ -96,7 +105,10 @@ pub fn anthropic_oauth_pricing(model: &str, subscription: Option<&str>) -> Route
             RouteCostConfidence::Medium,
             usd_to_micros(100.0),
             None,
-            Some(if is_opus {
+            Some(if is_fable {
+                "Claude Max plan; Fable 5 access included through Jun 23, 2026; 1M context"
+                    .to_string()
+            } else if is_opus {
                 "Claude Max plan; Opus access included; 1M context".to_string()
             } else {
                 "Claude Max plan; 1M context".to_string()
@@ -107,7 +119,9 @@ pub fn anthropic_oauth_pricing(model: &str, subscription: Option<&str>) -> Route
             RouteCostConfidence::Medium,
             usd_to_micros(20.0),
             None,
-            Some(if is_1m {
+            Some(if is_fable {
+                "Claude Pro plan; Fable 5 access included through Jun 23, 2026, then requires usage credits".to_string()
+            } else if is_1m {
                 "Claude Pro plan; 1M context requires extra usage".to_string()
             } else {
                 "Claude Pro plan".to_string()
@@ -128,7 +142,9 @@ pub fn anthropic_oauth_pricing(model: &str, subscription: Option<&str>) -> Route
             RouteCostConfidence::Low,
             usd_to_micros(if is_opus { 100.0 } else { 20.0 }),
             None,
-            Some(if is_opus {
+            Some(if is_fable {
+                "Claude OAuth subscription pricing; Fable 5 access included through Jun 23, 2026, then requires usage credits".to_string()
+            } else if is_opus {
                 "Opus access implies Claude Max-like subscription pricing".to_string()
             } else {
                 "Claude OAuth subscription pricing (plan not detected)".to_string()
@@ -265,6 +281,17 @@ mod tests {
         assert_eq!(estimate.confidence, RouteCostConfidence::Exact);
         assert_eq!(estimate.input_price_per_mtok_micros, Some(10_000_000));
         assert_eq!(estimate.output_price_per_mtok_micros, Some(37_500_000));
+        assert_eq!(estimate.cache_read_price_per_mtok_micros, Some(1_000_000));
+    }
+
+    #[test]
+    fn anthropic_api_pricing_includes_fable_5() {
+        let estimate = anthropic_api_pricing("claude-fable-5").expect("priced model");
+        assert_eq!(estimate.billing_kind, RouteBillingKind::Metered);
+        assert_eq!(estimate.source, RouteCostSource::PublicApiPricing);
+        assert_eq!(estimate.confidence, RouteCostConfidence::Exact);
+        assert_eq!(estimate.input_price_per_mtok_micros, Some(10_000_000));
+        assert_eq!(estimate.output_price_per_mtok_micros, Some(50_000_000));
         assert_eq!(estimate.cache_read_price_per_mtok_micros, Some(1_000_000));
     }
 

@@ -276,7 +276,8 @@ impl SubagentTool {
     }
 
     fn supports_claude_max_variant(model: &str) -> bool {
-        model.starts_with("claude-opus-4-8")
+        model.starts_with("claude-fable-5")
+            || model.starts_with("claude-opus-4-8")
             || model.starts_with("claude-opus-4-7")
             || model.starts_with("claude-opus-4-6")
             || model.starts_with("claude-sonnet-4-6")
@@ -991,6 +992,10 @@ mod tests {
 
     #[test]
     fn route_variant_max_maps_supported_claude_models_to_1m_suffix() {
+        assert_eq!(
+            super::SubagentTool::apply_route_variant_to_model("claude-fable-5", Some("max")),
+            "claude-fable-5[1m]"
+        );
         assert_eq!(
             super::SubagentTool::apply_route_variant_to_model("claude-opus-4-8", Some("max")),
             "claude-opus-4-8[1m]"

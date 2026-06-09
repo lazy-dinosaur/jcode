@@ -221,6 +221,8 @@ fn anthropic_text_delta_preserves_meaningful_prefix() {
 async fn test_available_models() {
     let provider = AnthropicProvider::new();
     let models = provider.available_models();
+    assert!(models.contains(&"claude-fable-5"));
+    assert!(models.contains(&"claude-fable-5[1m]"));
     assert!(models.contains(&"claude-opus-4-8"));
     assert!(models.contains(&"claude-opus-4-8[1m]"));
     assert!(models.contains(&"claude-opus-4-7"));
@@ -235,6 +237,7 @@ async fn test_available_models() {
 
 #[test]
 fn test_effectively_1m_matches_current_long_context_defaults() {
+    assert!(effectively_1m("claude-fable-5"));
     assert!(effectively_1m("claude-opus-4-8"));
     assert!(effectively_1m("claude-opus-4-7"));
     assert!(effectively_1m("claude-opus-4-6"));
@@ -245,7 +248,24 @@ fn test_effectively_1m_matches_current_long_context_defaults() {
 }
 
 #[test]
+fn fable_5_uses_128k_default_output_cap() {
+    assert_eq!(
+        AnthropicProvider::default_max_tokens_for_model("claude-fable-5"),
+        128_000
+    );
+    assert_eq!(
+        AnthropicProvider::default_max_tokens_for_model("claude-fable-5[1m]"),
+        128_000
+    );
+    assert_eq!(
+        AnthropicProvider::default_max_tokens_for_model("claude-opus-4-8"),
+        32_768
+    );
+}
+
+#[test]
 fn test_oauth_beta_headers_match_current_long_context_defaults() {
+    assert_eq!(oauth_beta_headers("claude-fable-5"), OAUTH_BETA_HEADERS_1M);
     assert_eq!(oauth_beta_headers("claude-opus-4-6"), OAUTH_BETA_HEADERS_1M);
     assert_eq!(
         oauth_beta_headers("claude-opus-4-6[1m]"),

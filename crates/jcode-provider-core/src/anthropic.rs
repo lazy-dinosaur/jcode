@@ -6,7 +6,8 @@ pub const ANTHROPIC_OAUTH_BETA_HEADERS_1M: &str = "claude-code-20250219,oauth-20
 
 fn anthropic_base_model_has_default_1m_context(model: &str) -> bool {
     let model = anthropic_strip_1m_suffix(model).trim().to_ascii_lowercase();
-    model.starts_with("claude-opus-4-8")
+    model.starts_with("claude-fable-5")
+        || model.starts_with("claude-opus-4-8")
         || model.starts_with("claude-opus-4.8")
         || model.starts_with("claude-opus-4-7")
         || model.starts_with("claude-opus-4.7")
@@ -22,9 +23,9 @@ pub fn anthropic_is_1m_model(model: &str) -> bool {
     model.ends_with("[1m]")
 }
 
-/// Check if a model should use 1M context. Newer Claude models such as Opus
-/// 4.8, Opus 4.7, Opus 4.6, and Sonnet 4.6 have 1M context by default on the
-/// Claude API/Claude Code surfaces; `[1m]` remains as an explicit legacy alias.
+/// Check if a model should use 1M context. Newer Claude models such as Fable 5,
+/// Opus 4.8, Opus 4.7, Opus 4.6, and Sonnet 4.6 have 1M context by default on
+/// the Claude API/Claude Code surfaces; `[1m]` remains as an explicit legacy alias.
 pub fn anthropic_effectively_1m(model: &str) -> bool {
     anthropic_is_1m_model(model) || anthropic_base_model_has_default_1m_context(model)
 }
@@ -108,6 +109,7 @@ mod tests {
 
     #[test]
     fn model_suffix_helpers_treat_current_long_context_models_as_1m() {
+        assert!(anthropic_effectively_1m("claude-fable-5"));
         assert!(anthropic_effectively_1m("claude-opus-4-8"));
         assert!(anthropic_effectively_1m("claude-opus-4-7"));
         assert!(anthropic_effectively_1m("claude-opus-4-6"));
@@ -122,6 +124,10 @@ mod tests {
 
     #[test]
     fn oauth_beta_headers_follow_1m_suffix() {
+        assert_eq!(
+            anthropic_oauth_beta_headers("claude-fable-5"),
+            ANTHROPIC_OAUTH_BETA_HEADERS_1M
+        );
         assert_eq!(
             anthropic_oauth_beta_headers("claude-opus-4-6"),
             ANTHROPIC_OAUTH_BETA_HEADERS_1M
