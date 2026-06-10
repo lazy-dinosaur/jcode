@@ -71,6 +71,7 @@ type ChannelSubscriptions = Arc<RwLock<HashMap<String, HashMap<String, HashSet<S
 const RELOAD_STARTING_GUARD_MAX_AGE: Duration = Duration::from_secs(30);
 const PROCESSING_CANCEL_GRACE: Duration = Duration::from_millis(1500);
 const PROCESSING_ABORT_JOIN_GRACE: Duration = Duration::from_secs(2);
+const MAX_PENDING_USER_MESSAGES: usize = 32;
 
 fn parse_swarm_spawn_mode(
     id: u64,
@@ -1211,6 +1212,7 @@ pub(super) async fn handle_client(
         }
     };
     let mut pending_bg_completions: VecDeque<BackgroundCompletion> = VecDeque::new();
+    let mut pending_user_messages: VecDeque<ProcessingMessage> = VecDeque::new();
     let mut next_bg_wake_request_id = u64::MAX / 2;
 
     loop {
@@ -1316,20 +1318,11 @@ pub(super) async fn handle_client(
                             });
                         }
                     }
-                    if !client_is_processing
-                        && pending_bg_completions.pop_front().is_some()
-                    {
-                        let id = next_bg_wake_request_id;
-                        next_bg_wake_request_id = next_bg_wake_request_id.saturating_add(1);
-                        start_processing_message(
-                            ProcessingMessage {
-                                id,
-                                content: String::new(),
-                                images: vec![],
-                                system_reminder: None,
-                            },
+                    if !client_is_processing {
+                        start_next_pending_turn(
                             &client_session_id,
                             &client_connection_id,
+                            &client_connections,
                             &mut ProcessingState {
                                 client_is_processing: &mut client_is_processing,
                                 message_id: &mut processing_message_id,
@@ -1347,6 +1340,9 @@ pub(super) async fn handle_client(
                                 event_counter: &event_counter,
                                 event_tx: &swarm_event_tx,
                             },
+                            &mut pending_user_messages,
+                            &mut pending_bg_completions,
+                            &mut next_bg_wake_request_id,
                         )
                         .await;
                     }
@@ -1372,20 +1368,12 @@ pub(super) async fn handle_client(
                             err
                         )),
                     }
-                    if client_is_processing {
-                        pending_bg_completions.push_back(completion);
-                    } else {
-                        let id = next_bg_wake_request_id;
-                        next_bg_wake_request_id = next_bg_wake_request_id.saturating_add(1);
-                        start_processing_message(
-                            ProcessingMessage {
-                                id,
-                                content: String::new(),
-                                images: vec![],
-                                system_reminder: None,
-                            },
+                    pending_bg_completions.push_back(completion);
+                    if !client_is_processing {
+                        start_next_pending_turn(
                             &client_session_id,
                             &client_connection_id,
+                            &client_connections,
                             &mut ProcessingState {
                                 client_is_processing: &mut client_is_processing,
                                 message_id: &mut processing_message_id,
@@ -1403,6 +1391,9 @@ pub(super) async fn handle_client(
                                 event_counter: &event_counter,
                                 event_tx: &swarm_event_tx,
                             },
+                            &mut pending_user_messages,
+                            &mut pending_bg_completions,
+                            &mut next_bg_wake_request_id,
                         )
                         .await;
                     }
@@ -1544,7 +1535,40 @@ pub(super) async fn handle_client(
                 images,
                 system_reminder,
             } => {
-                if !client_is_processing {
+                if client_is_processing {
+                    if server_reload_starting() {
+                        crate::logging::info(&format!(
+                            "Rejecting busy-time queued message for session {} because server reload is starting",
+                            client_session_id
+                        ));
+                        let _ = client_event_tx.send(ServerEvent::Reloading { new_socket: None });
+                    } else if pending_user_messages.len() >= MAX_PENDING_USER_MESSAGES {
+                        let _ = client_event_tx.send(ServerEvent::Error {
+                            id,
+                            message: format!(
+                                "Already processing a message and the pending message queue is full ({}). Wait for the current turn to finish, then retry.",
+                                MAX_PENDING_USER_MESSAGES
+                            ),
+                            retry_after_secs: None,
+                        });
+                    } else {
+                        pending_user_messages.push_back(ProcessingMessage {
+                            id,
+                            content,
+                            images,
+                            system_reminder,
+                        });
+                        let queued_count = pending_user_messages.len();
+                        crate::logging::info(&format!(
+                            "Queued user message id={} while session {} is already processing ({} pending)",
+                            id, client_session_id, queued_count
+                        ));
+                        let _ = client_event_tx.send(ServerEvent::StatusDetail {
+                            detail: format!("queued next user message ({} pending)", queued_count),
+                        });
+                    }
+                    continue;
+                } else {
                     let mut connections = client_connections.write().await;
                     if let Some(info) = connections.get_mut(&client_connection_id) {
                         info.is_processing = true;
@@ -1608,6 +1632,34 @@ pub(super) async fn handle_client(
                         info.is_processing = false;
                         info.current_tool_name = None;
                     }
+                }
+                if !client_is_processing {
+                    start_next_pending_turn(
+                        &client_session_id,
+                        &client_connection_id,
+                        &client_connections,
+                        &mut ProcessingState {
+                            client_is_processing: &mut client_is_processing,
+                            message_id: &mut processing_message_id,
+                            session_id: &mut processing_session_id,
+                            task: &mut processing_task,
+                            cancel_state: &mut processing_cancel_state,
+                        },
+                        &agent,
+                        &client_event_tx,
+                        &processing_done_tx,
+                        &SwarmStatusRefs {
+                            members: &swarm_members,
+                            swarms_by_id: &swarms_by_id,
+                            event_history: &event_history,
+                            event_counter: &event_counter,
+                            event_tx: &swarm_event_tx,
+                        },
+                        &mut pending_user_messages,
+                        &mut pending_bg_completions,
+                        &mut next_bg_wake_request_id,
+                    )
+                    .await;
                 }
             }
 
@@ -2990,7 +3042,7 @@ async fn start_processing_message(
     client_event_tx: &mpsc::UnboundedSender<ServerEvent>,
     processing_done_tx: &mpsc::UnboundedSender<(u64, Result<()>, Option<String>)>,
     swarm: &SwarmStatusRefs<'_>,
-) {
+) -> bool {
     let ProcessingMessage {
         id,
         content,
@@ -3003,7 +3055,7 @@ async fn start_processing_message(
             client_session_id
         ));
         let _ = client_event_tx.send(ServerEvent::Reloading { new_socket: None });
-        return;
+        return false;
     }
 
     if *state.client_is_processing {
@@ -3012,7 +3064,7 @@ async fn start_processing_message(
             message: "Already processing a message".to_string(),
             retry_after_secs: None,
         });
-        return;
+        return false;
     }
 
     *state.client_is_processing = true;
@@ -3159,6 +3211,98 @@ async fn start_processing_message(
         };
         let _ = done_tx.send((id, result, completion_report));
     }));
+    true
+}
+
+async fn start_next_pending_turn(
+    client_session_id: &str,
+    client_connection_id: &str,
+    client_connections: &Arc<RwLock<HashMap<String, ClientConnectionInfo>>>,
+    state: &mut ProcessingState<'_>,
+    agent: &Arc<Mutex<Agent>>,
+    client_event_tx: &mpsc::UnboundedSender<ServerEvent>,
+    processing_done_tx: &mpsc::UnboundedSender<(u64, Result<()>, Option<String>)>,
+    swarm: &SwarmStatusRefs<'_>,
+    pending_user_messages: &mut VecDeque<ProcessingMessage>,
+    pending_bg_completions: &mut VecDeque<BackgroundCompletion>,
+    next_bg_wake_request_id: &mut u64,
+) -> bool {
+    if *state.client_is_processing {
+        return false;
+    }
+
+    if server_reload_starting() {
+        crate::logging::info(&format!(
+            "Deferring pending turn for session {} because server reload is starting",
+            client_session_id
+        ));
+        let _ = client_event_tx.send(ServerEvent::Reloading { new_socket: None });
+        return false;
+    }
+
+    if let Some(message) = pending_user_messages.pop_front() {
+        let id = message.id;
+        crate::logging::info(&format!(
+            "Starting queued user message id={} ({} user message(s) remain queued)",
+            id,
+            pending_user_messages.len()
+        ));
+        let started = start_processing_message(
+            message,
+            client_session_id,
+            client_connection_id,
+            state,
+            agent,
+            client_event_tx,
+            processing_done_tx,
+            swarm,
+        )
+        .await;
+        if started {
+            let mut connections = client_connections.write().await;
+            if let Some(info) = connections.get_mut(client_connection_id) {
+                info.is_processing = true;
+                info.current_tool_name = None;
+            }
+        } else {
+            crate::logging::warn(&format!(
+                "Queued user message id={} did not start after dequeue",
+                id
+            ));
+        }
+        return started;
+    }
+
+    if pending_bg_completions.pop_front().is_some() {
+        let id = *next_bg_wake_request_id;
+        *next_bg_wake_request_id = next_bg_wake_request_id.saturating_add(1);
+        let started = start_processing_message(
+            ProcessingMessage {
+                id,
+                content: String::new(),
+                images: vec![],
+                system_reminder: None,
+            },
+            client_session_id,
+            client_connection_id,
+            state,
+            agent,
+            client_event_tx,
+            processing_done_tx,
+            swarm,
+        )
+        .await;
+        if started {
+            let mut connections = client_connections.write().await;
+            if let Some(info) = connections.get_mut(client_connection_id) {
+                info.is_processing = true;
+                info.current_tool_name = None;
+            }
+        }
+        return started;
+    }
+
+    false
 }
 
 async fn cancel_processing_message(

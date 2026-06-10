@@ -1,9 +1,9 @@
 use super::*;
-use crate::message::{Message, ToolDefinition};
+use crate::message::{Message, StreamEvent, ToolDefinition};
 use crate::provider::{EventStream, Provider};
 use async_trait::async_trait;
 use jcode_agent_runtime::TurnControl;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 struct IsolatedRuntimeDir {
@@ -683,6 +683,221 @@ impl Provider for PanicOnForkProvider {
         self.forked.store(true, Ordering::SeqCst);
         panic!("fork should not run for lightweight control requests")
     }
+}
+
+struct CompletingProvider {
+    calls: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl Provider for CompletingProvider {
+    async fn complete(
+        &self,
+        _messages: &[Message],
+        _tools: &[ToolDefinition],
+        _system: &str,
+        _resume_session_id: Option<&str>,
+    ) -> Result<EventStream> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let (_tx, rx) = mpsc::channel::<Result<StreamEvent>>(1);
+        Ok(Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx)))
+    }
+
+    fn name(&self) -> &str {
+        "completing"
+    }
+
+    fn fork(&self) -> Arc<dyn Provider> {
+        Arc::new(Self {
+            calls: Arc::clone(&self.calls),
+        })
+    }
+}
+
+fn background_completion(session_id: &str, task_id: &str) -> BackgroundCompletion {
+    BackgroundCompletion {
+        task_id: task_id.to_string(),
+        exit_code: 0,
+        stdout: String::new(),
+        stderr: String::new(),
+        duration_ms: 1,
+        session_id: session_id.to_string(),
+        notify: true,
+        auto_inject: true,
+        auto_inject_format: crate::turn::injected_context::InjectionFormat::SystemReminder,
+        auto_inject_max_bytes: None,
+    }
+}
+
+#[tokio::test]
+async fn pending_turn_helper_does_not_dequeue_while_processing() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider: Arc<dyn Provider> = Arc::new(CompletingProvider {
+        calls: Arc::clone(&calls),
+    });
+    let registry = Registry::new(Arc::clone(&provider)).await;
+    let agent = Arc::new(Mutex::new(Agent::new(provider, registry)));
+
+    let (client_event_tx, _client_event_rx) = mpsc::unbounded_channel::<ServerEvent>();
+    let (processing_done_tx, _processing_done_rx) = mpsc::unbounded_channel();
+    let mut client_is_processing = true;
+    let mut processing_message_id = Some(1);
+    let mut processing_session_id = Some("session_pending_busy".to_string());
+    let mut processing_task = None;
+    let mut processing_cancel_state = ProcessingCancelState::Idle;
+    let client_connections = Arc::new(RwLock::new(HashMap::new()));
+    let swarm_members = Arc::new(RwLock::new(HashMap::new()));
+    let swarms_by_id = Arc::new(RwLock::new(HashMap::new()));
+    let event_history = Arc::new(RwLock::new(std::collections::VecDeque::new()));
+    let event_counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let (swarm_event_tx, _) = broadcast::channel(8);
+    let mut pending_user_messages = VecDeque::from([ProcessingMessage {
+        id: 2,
+        content: "queued user".to_string(),
+        images: Vec::new(),
+        system_reminder: None,
+    }]);
+    let mut pending_bg_completions =
+        VecDeque::from([background_completion("session_pending_busy", "bg_busy")]);
+    let mut next_bg_wake_request_id = 900;
+
+    let started = start_next_pending_turn(
+        "session_pending_busy",
+        "conn_pending_busy",
+        &client_connections,
+        &mut ProcessingState {
+            client_is_processing: &mut client_is_processing,
+            message_id: &mut processing_message_id,
+            session_id: &mut processing_session_id,
+            task: &mut processing_task,
+            cancel_state: &mut processing_cancel_state,
+        },
+        &agent,
+        &client_event_tx,
+        &processing_done_tx,
+        &SwarmStatusRefs {
+            members: &swarm_members,
+            swarms_by_id: &swarms_by_id,
+            event_history: &event_history,
+            event_counter: &event_counter,
+            event_tx: &swarm_event_tx,
+        },
+        &mut pending_user_messages,
+        &mut pending_bg_completions,
+        &mut next_bg_wake_request_id,
+    )
+    .await;
+
+    assert!(!started);
+    assert_eq!(pending_user_messages.len(), 1);
+    assert_eq!(pending_bg_completions.len(), 1);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn pending_turn_helper_starts_user_message_before_bg_completion() {
+    let _guard = crate::storage::lock_test_env();
+    let _runtime = IsolatedRuntimeDir::new();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider: Arc<dyn Provider> = Arc::new(CompletingProvider {
+        calls: Arc::clone(&calls),
+    });
+    let registry = Registry::new(Arc::clone(&provider)).await;
+    let mut session =
+        crate::session::Session::create_with_id("session_pending_priority".to_string(), None, None);
+    session.model = Some("completing".to_string());
+    let agent = Arc::new(Mutex::new(Agent::new_with_session(
+        provider, registry, session, None,
+    )));
+
+    let (client_event_tx, _client_event_rx) = mpsc::unbounded_channel::<ServerEvent>();
+    let (processing_done_tx, mut processing_done_rx) = mpsc::unbounded_channel();
+    let mut client_is_processing = false;
+    let mut processing_message_id = None;
+    let mut processing_session_id = None;
+    let mut processing_task = None;
+    let mut processing_cancel_state = ProcessingCancelState::Idle;
+    let (disconnect_tx, _disconnect_rx) = mpsc::unbounded_channel();
+    let client_connections = Arc::new(RwLock::new(HashMap::from([(
+        "conn_pending_priority".to_string(),
+        ClientConnectionInfo {
+            client_id: "conn_pending_priority".to_string(),
+            session_id: "session_pending_priority".to_string(),
+            client_instance_id: None,
+            debug_client_id: None,
+            connected_at: Instant::now(),
+            last_seen: Instant::now(),
+            is_processing: false,
+            current_tool_name: None,
+            disconnect_tx,
+        },
+    )])));
+    let swarm_members = Arc::new(RwLock::new(HashMap::new()));
+    let swarms_by_id = Arc::new(RwLock::new(HashMap::new()));
+    let event_history = Arc::new(RwLock::new(std::collections::VecDeque::new()));
+    let event_counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let (swarm_event_tx, _) = broadcast::channel(8);
+    let mut pending_user_messages = VecDeque::from([ProcessingMessage {
+        id: 7,
+        content: "queued user first".to_string(),
+        images: Vec::new(),
+        system_reminder: None,
+    }]);
+    let mut pending_bg_completions = VecDeque::from([background_completion(
+        "session_pending_priority",
+        "bg_second",
+    )]);
+    let mut next_bg_wake_request_id = 901;
+
+    let started = start_next_pending_turn(
+        "session_pending_priority",
+        "conn_pending_priority",
+        &client_connections,
+        &mut ProcessingState {
+            client_is_processing: &mut client_is_processing,
+            message_id: &mut processing_message_id,
+            session_id: &mut processing_session_id,
+            task: &mut processing_task,
+            cancel_state: &mut processing_cancel_state,
+        },
+        &agent,
+        &client_event_tx,
+        &processing_done_tx,
+        &SwarmStatusRefs {
+            members: &swarm_members,
+            swarms_by_id: &swarms_by_id,
+            event_history: &event_history,
+            event_counter: &event_counter,
+            event_tx: &swarm_event_tx,
+        },
+        &mut pending_user_messages,
+        &mut pending_bg_completions,
+        &mut next_bg_wake_request_id,
+    )
+    .await;
+
+    assert!(started);
+    assert!(client_is_processing);
+    assert_eq!(processing_message_id, Some(7));
+    assert!(pending_user_messages.is_empty());
+    assert_eq!(pending_bg_completions.len(), 1);
+    assert_eq!(next_bg_wake_request_id, 901);
+    assert!(
+        client_connections
+            .read()
+            .await
+            .get("conn_pending_priority")
+            .is_some_and(|info| info.is_processing)
+    );
+
+    let (done_id, result, _report) =
+        tokio::time::timeout(Duration::from_secs(1), processing_done_rx.recv())
+            .await
+            .expect("queued user turn should finish")
+            .expect("processing completion should be sent");
+    assert_eq!(done_id, 7);
+    assert!(result.is_ok());
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
 #[test]
