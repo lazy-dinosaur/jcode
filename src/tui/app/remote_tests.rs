@@ -9,6 +9,7 @@ use crate::protocol::{
     ServerEvent,
 };
 use crate::provider::Provider;
+use crate::tui::DisplayMessage;
 use crate::tui::info_widget::{MemoryState, StepStatus};
 use anyhow::Result;
 use std::sync::Arc;
@@ -547,6 +548,40 @@ fn message_end_without_done_finalizes_remote_ui_after_short_grace() {
         app.display_messages()
             .iter()
             .any(|msg| { msg.role == "assistant" && msg.content == "Done." })
+    );
+}
+
+#[test]
+fn terminal_auto_poke_notice_finalizes_orphaned_remote_processing_after_short_grace() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let _guard = rt.enter();
+    let mut app = create_test_app();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+    let stale = std::time::Duration::from_secs(6);
+
+    app.is_processing = true;
+    app.status = ProcessingStatus::Thinking(std::time::Instant::now() - stale);
+    app.current_message_id = Some(42);
+    app.processing_started = Some(std::time::Instant::now() - stale);
+    app.last_stream_activity = Some(std::time::Instant::now() - stale);
+    app.pending_soft_interrupts = vec!["27。좋아 다 끝난거야 뭐야?".to_string()];
+    app.pending_soft_interrupt_requests = vec![(55, "27。좋아 다 끝난거야 뭐야?".to_string())];
+    app.push_display_message(DisplayMessage::system(
+        "✅ Todos complete. Auto-poke finished.".to_string(),
+    ));
+
+    let redrew = rt.block_on(finalize_orphaned_message_end(&mut app, &mut remote));
+
+    assert!(redrew);
+    assert!(!app.is_processing);
+    assert!(matches!(app.status, ProcessingStatus::Idle));
+    assert!(app.current_message_id.is_none());
+    assert!(app.processing_started.is_none());
+    assert!(app.pending_soft_interrupts.is_empty());
+    assert!(app.pending_soft_interrupt_requests.is_empty());
+    assert_eq!(
+        app.interleave_message.as_deref(),
+        Some("27。좋아 다 끝난거야 뭐야?")
     );
 }
 

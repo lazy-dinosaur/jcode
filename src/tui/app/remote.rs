@@ -1052,8 +1052,9 @@ async fn finalize_orphaned_message_end(app: &mut App, remote: &mut RemoteConnect
     // the TUI used to stay `is_processing=true` forever even though the visible
     // response was complete, so further user input only showed as `queued`.
     const MESSAGE_END_FINALIZE_TIMEOUT: Duration = Duration::from_secs(5);
+    const TERMINAL_NOTICE_FINALIZE_TIMEOUT: Duration = Duration::from_secs(5);
 
-    if !app.is_processing || !app.stream_message_ended {
+    if !app.is_processing {
         return false;
     }
     if matches!(app.status, ProcessingStatus::RunningTool(_))
@@ -1066,6 +1067,49 @@ async fn finalize_orphaned_message_end(app: &mut App, remote: &mut RemoteConnect
         .last_stream_activity
         .map(|at| at.elapsed())
         .unwrap_or_default();
+
+    if !app.stream_message_ended {
+        let has_terminal_auto_poke_notice = app.display_messages.last().is_some_and(|message| {
+            message.role == "system"
+                && message
+                    .content
+                    .contains("Todos complete. Auto-poke finished.")
+        });
+        let no_visible_stream_in_progress = app.streaming_text.is_empty()
+            && app.stream_buffer.is_empty()
+            && app.streaming_tool_calls.is_empty();
+        if has_terminal_auto_poke_notice
+            && no_visible_stream_in_progress
+            && quiet_for >= TERMINAL_NOTICE_FINALIZE_TIMEOUT
+        {
+            crate::logging::warn(&format!(
+                "Remote turn showed terminal auto-poke notice but stayed processing for {:?}; finalizing client UI fail-open",
+                quiet_for
+            ));
+            app.clear_pending_remote_retry();
+            app.is_processing = false;
+            app.status = ProcessingStatus::Idle;
+            app.status_detail = None;
+            app.stream_message_ended = false;
+            app.processing_started = None;
+            app.replay_processing_started_ms = None;
+            app.replay_elapsed_override = None;
+            app.batch_progress = None;
+            app.current_message_id = None;
+            app.thought_line_inserted = false;
+            app.thinking_prefix_emitted = false;
+            app.thinking_buffer.clear();
+            remote.clear_pending();
+            remote.reset_call_output_tokens_seen();
+            app.clear_visible_turn_started();
+            if !recover_stranded_soft_interrupts(app, remote).await {
+                app.set_status_notice("Finalized completed auto-poke turn");
+            }
+            return true;
+        }
+        return false;
+    }
+
     if quiet_for < MESSAGE_END_FINALIZE_TIMEOUT {
         return false;
     }
