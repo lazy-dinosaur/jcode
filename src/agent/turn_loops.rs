@@ -822,6 +822,22 @@ impl Agent {
                         // Don't break yet - wait for SessionId which comes after MessageEnd
                         // (but stream close will also end the loop for providers without SessionId)
                     }
+                    StreamEvent::ContentReset => {
+                        logging::warn(
+                            "Provider restarted the response stream; discarding partial content",
+                        );
+                        if print_output && !text_content.is_empty() {
+                            println!("\n[connection lost; retrying response...]");
+                        }
+                        text_content.clear();
+                        tool_calls.clear();
+                        current_tool = None;
+                        current_tool_input.clear();
+                        reasoning_content.clear();
+                        stop_reason = None;
+                        saw_message_end = false;
+                        thinking_prefix_emitted = false;
+                    }
                     StreamEvent::SessionId(sid) => {
                         if trace {
                             eprintln!("[trace] session_id {}", sid);

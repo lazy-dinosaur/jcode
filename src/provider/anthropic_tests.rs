@@ -194,7 +194,7 @@ fn anthropic_message_stop_does_not_duplicate_message_delta_end() {
 fn anthropic_eof_emits_synthetic_message_end_when_terminal_event_missing() {
     assert!(matches!(
         anthropic_message_end_for_eof(true, false),
-        Some(StreamEvent::MessageEnd { stop_reason }) if stop_reason.is_none()
+        Some(StreamEvent::MessageEnd { stop_reason }) if stop_reason.as_deref() == Some("stream_truncated")
     ));
     assert!(anthropic_message_end_for_eof(true, true).is_none());
     assert!(anthropic_message_end_for_eof(false, false).is_none());

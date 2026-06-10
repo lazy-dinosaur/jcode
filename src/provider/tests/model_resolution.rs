@@ -1013,8 +1013,16 @@ fn test_parse_anthropic_model_catalog_reads_context_limits() {
 #[test]
 fn test_context_limit_claude() {
     with_clean_provider_test_env(|| {
-        assert_eq!(context_limit_for_model("claude-opus-4-6"), Some(200_000));
-        assert_eq!(context_limit_for_model("claude-sonnet-4-6"), Some(200_000));
+        // Opus 4.6 / Sonnet 4.6 have 1M context by default on current Claude
+        // API surfaces; the [1m] suffix remains as an explicit alias.
+        assert_eq!(
+            context_limit_for_model("claude-opus-4-6"),
+            Some(1_048_576)
+        );
+        assert_eq!(
+            context_limit_for_model("claude-sonnet-4-6"),
+            Some(1_048_576)
+        );
         assert_eq!(
             context_limit_for_model("claude-opus-4-6[1m]"),
             Some(1_048_576)
@@ -1023,6 +1031,8 @@ fn test_context_limit_claude() {
             context_limit_for_model("claude-sonnet-4-6[1m]"),
             Some(1_048_576)
         );
+        // Older models keep the 200K default.
+        assert_eq!(context_limit_for_model("claude-opus-4-5"), Some(200_000));
     });
 }
 

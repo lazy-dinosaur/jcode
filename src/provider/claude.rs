@@ -688,6 +688,9 @@ impl Provider for ClaudeProvider {
 
             for attempt in 0..MAX_RETRIES {
                 if attempt > 0 {
+                    // Drop partial content from the failed attempt before the
+                    // retried CLI run resends the response from the beginning.
+                    let _ = tx.send(Ok(StreamEvent::ContentReset)).await;
                     // Exponential backoff: 1s, 2s, 4s, 8s, 16s
                     let base_delay = RETRY_BASE_DELAY_MS * (1 << (attempt - 1));
                     // Add extra delay for transport errors (from last_error if available)

@@ -590,6 +590,10 @@ pub enum StreamEvent {
     ThinkingDone { duration_secs: f64 },
     /// Message complete (may have stop reason)
     MessageEnd { stop_reason: Option<String> },
+    /// Provider is restarting the response stream (mid-stream retry).
+    /// Consumers must discard any partial content accumulated for the
+    /// current response; the provider will resend it from the beginning.
+    ContentReset,
     /// Token usage update
     TokenUsage {
         input_tokens: Option<u64>,

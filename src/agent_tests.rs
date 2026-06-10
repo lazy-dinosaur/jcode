@@ -1122,6 +1122,60 @@ async fn interrupted_transcript_finalization_pairs_inflight_tool_use() {
 }
 
 #[tokio::test]
+async fn run_turn_streaming_mpsc_content_reset_discards_partial_content() {
+    let _guard = crate::storage::lock_test_env();
+    let (provider, _calls) = SequentialProvider::new(vec![vec![
+        StreamEvent::TextDelta("partial garbage that should be discarded".to_string()),
+        StreamEvent::ContentReset,
+        StreamEvent::TextDelta("clean final response".to_string()),
+        StreamEvent::MessageEnd {
+            stop_reason: Some("end_turn".to_string()),
+        },
+    ]]);
+    let provider: Arc<dyn Provider> = Arc::new(provider);
+    let registry = Registry::new(provider.clone()).await;
+    let mut agent = Agent::new(provider, registry);
+    agent.add_message(
+        Role::User,
+        vec![ContentBlock::Text {
+            text: "hello".to_string(),
+            cache_control: None,
+        }],
+    );
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    agent
+        .run_turn_streaming_mpsc(tx)
+        .await
+        .expect("turn should succeed");
+
+    let last_assistant_text = agent
+        .session
+        .messages
+        .iter()
+        .rev()
+        .find(|m| m.role == Role::Assistant)
+        .and_then(|m| {
+            m.content.iter().find_map(|block| match block {
+                ContentBlock::Text { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+        })
+        .expect("assistant message should exist");
+    assert_eq!(last_assistant_text, "clean final response");
+
+    // The UI should have received a TextReplace clearing partial output.
+    let mut saw_clear_replace = false;
+    while let Ok(event) = rx.try_recv() {
+        if let ServerEvent::TextReplace { text } = event {
+            if text.is_empty() {
+                saw_clear_replace = true;
+            }
+        }
+    }
+    assert!(saw_clear_replace, "expected empty TextReplace after reset");
+}
+
+#[tokio::test]
 async fn run_turn_streaming_mpsc_passes_turn_cancel_signal_to_tool_context() {
     let _guard = crate::storage::lock_test_env();
     let (provider, calls) = SequentialProvider::new(vec![

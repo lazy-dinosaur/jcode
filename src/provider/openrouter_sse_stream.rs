@@ -27,6 +27,9 @@ pub(super) async fn run_stream_with_retries(
 
     for attempt in 0..MAX_RETRIES {
         if attempt > 0 {
+            // Drop any partial content from the failed attempt before the
+            // retried stream resends the response from the beginning.
+            let _ = tx.send(Ok(StreamEvent::ContentReset)).await;
             let delay = RETRY_BASE_DELAY_MS * (1 << (attempt - 1));
             if let Some(signal) = cancel_signal.as_ref() {
                 tokio::select! {

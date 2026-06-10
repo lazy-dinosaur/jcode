@@ -725,6 +725,21 @@ impl App {
                                                 self.redraw_now(terminal)?;
                                             }
                                         }
+                                        StreamEvent::ContentReset => {
+                                            crate::logging::warn(
+                                                "Provider restarted the response stream; discarding partial content",
+                                            );
+                                            text_content.clear();
+                                            tool_calls.clear();
+                                            current_tool = None;
+                                            current_tool_input.clear();
+                                            reasoning_content.clear();
+                                            saw_message_end = false;
+                                            self.stream_buffer = StreamBuffer::new();
+                                            self.streaming_tool_calls.clear();
+                                            self.clear_streaming_render_state();
+                                            self.redraw_now(terminal)?;
+                                        }
                                         StreamEvent::SessionId(sid) => {
                                             self.provider_session_id = Some(sid);
                                             if saw_message_end {

@@ -1806,6 +1806,10 @@ async fn run_stream_with_retries(
 
     for attempt in 0..MAX_RETRIES {
         if attempt > 0 {
+            // A previous attempt may have already streamed partial content
+            // before failing; tell consumers to drop it so the retried
+            // response does not get appended after the partial one.
+            let _ = tx.send(Ok(StreamEvent::ContentReset)).await;
             // Exponential backoff: 1s, 2s, 4s
             let delay = RETRY_BASE_DELAY_MS * (1 << (attempt - 1));
             let _ = tx
@@ -2154,7 +2158,13 @@ fn anthropic_message_end_for_eof(
     saw_message_end: bool,
 ) -> Option<StreamEvent> {
     if saw_stream_event && !saw_message_end {
-        Some(StreamEvent::MessageEnd { stop_reason: None })
+        // The stream ended before the provider sent a terminal event, so the
+        // response is very likely truncated. Surface a synthetic stop reason
+        // that the agent's continuation logic recognizes ("trunc") instead of
+        // None, which would silently treat the cut-off response as complete.
+        Some(StreamEvent::MessageEnd {
+            stop_reason: Some("stream_truncated".to_string()),
+        })
     } else {
         None
     }

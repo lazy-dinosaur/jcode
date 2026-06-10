@@ -557,6 +557,23 @@ impl Agent {
                         }
                         let _ = event_tx.send(ServerEvent::MessageEnd);
                     }
+                    StreamEvent::ContentReset => {
+                        logging::warn(
+                            "Provider restarted the response stream; discarding partial content",
+                        );
+                        text_content.clear();
+                        text_wrapped_detected = false;
+                        tool_calls.clear();
+                        current_tool = None;
+                        current_tool_input.clear();
+                        reasoning_content.clear();
+                        stop_reason = None;
+                        saw_message_end = false;
+                        thinking_prefix_emitted = false;
+                        let _ = event_tx.send(ServerEvent::TextReplace {
+                            text: String::new(),
+                        });
+                    }
                     StreamEvent::SessionId(sid) => {
                         self.provider_session_id = Some(sid.clone());
                         self.session.provider_session_id = Some(sid.clone());

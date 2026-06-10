@@ -255,6 +255,9 @@ impl Agent {
             || reason.contains("length")
             || reason.contains("trunc")
             || reason.contains("commentary")
+            // Anthropic long-running turns: the server paused the turn and the
+            // client is expected to send the conversation back to resume.
+            || reason == "pause_turn"
     }
     fn continuation_prompt_for_stop_reason(stop_reason: &str) -> String {
         format!(
@@ -382,6 +385,22 @@ impl Agent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn should_continue_recognizes_truncation_and_pause_stop_reasons() {
+        assert!(Agent::should_continue_after_stop_reason("max_tokens"));
+        assert!(Agent::should_continue_after_stop_reason(
+            "max_output_tokens"
+        ));
+        assert!(Agent::should_continue_after_stop_reason("length"));
+        assert!(Agent::should_continue_after_stop_reason("stream_truncated"));
+        assert!(Agent::should_continue_after_stop_reason("pause_turn"));
+        assert!(!Agent::should_continue_after_stop_reason("end_turn"));
+        assert!(!Agent::should_continue_after_stop_reason("stop"));
+        assert!(!Agent::should_continue_after_stop_reason("tool_use"));
+        assert!(!Agent::should_continue_after_stop_reason("refusal"));
+        assert!(!Agent::should_continue_after_stop_reason("content_filter"));
+    }
 
     #[test]
     fn parse_xml_wrapped_bash_invoke_with_parameters() {
