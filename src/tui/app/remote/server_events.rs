@@ -852,25 +852,44 @@ pub(in crate::tui::app) fn handle_server_event(
             }
 
             let should_apply_history_payload = session_changed || !remote.has_loaded_history();
+            let history_ends_with_assistant_output = messages.last().is_some_and(|message| {
+                message.role == "assistant" && !message.content.trim().is_empty()
+            });
+
             if should_apply_history_payload {
                 if let Some(activity) = activity.filter(|activity| activity.is_processing) {
-                    let current_tool_name = activity.current_tool_name.clone();
-                    app.is_processing = true;
-                    if app.processing_started.is_none() {
-                        app.processing_started = Some(Instant::now());
+                    if history_ends_with_assistant_output && activity.current_tool_name.is_none() {
+                        crate::logging::warn(&format!(
+                            "Ignoring stale processing activity in History for session {} because history already ends with assistant output",
+                            session_id
+                        ));
+                        app.remote_resume_activity = None;
+                        app.is_processing = false;
+                        app.status = ProcessingStatus::Idle;
+                        app.status_detail = None;
+                        app.current_message_id = None;
+                        app.processing_started = None;
+                        app.last_stream_activity = None;
+                        app.stream_message_ended = false;
+                    } else {
+                        let current_tool_name = activity.current_tool_name.clone();
+                        app.is_processing = true;
+                        if app.processing_started.is_none() {
+                            app.processing_started = Some(Instant::now());
+                        }
+                        if app.last_stream_activity.is_none() {
+                            app.last_stream_activity = Some(Instant::now());
+                        }
+                        app.remote_resume_activity = Some(RemoteResumeActivity {
+                            session_id: session_id.clone(),
+                            observed_at: Instant::now(),
+                            current_tool_name: current_tool_name.clone(),
+                        });
+                        app.status = match current_tool_name {
+                            Some(tool_name) => ProcessingStatus::RunningTool(tool_name),
+                            None => ProcessingStatus::Thinking(Instant::now()),
+                        };
                     }
-                    if app.last_stream_activity.is_none() {
-                        app.last_stream_activity = Some(Instant::now());
-                    }
-                    app.remote_resume_activity = Some(RemoteResumeActivity {
-                        session_id: session_id.clone(),
-                        observed_at: Instant::now(),
-                        current_tool_name: current_tool_name.clone(),
-                    });
-                    app.status = match current_tool_name {
-                        Some(tool_name) => ProcessingStatus::RunningTool(tool_name),
-                        None => ProcessingStatus::Thinking(Instant::now()),
-                    };
                 } else {
                     app.remote_resume_activity = None;
                 }

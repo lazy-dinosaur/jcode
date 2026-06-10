@@ -850,6 +850,70 @@ fn test_handle_server_event_history_restores_active_resume_processing_state() {
 }
 
 #[test]
+fn test_history_ignores_stale_thinking_activity_when_assistant_output_is_complete() {
+    let _guard = crate::storage::lock_test_env();
+    let mut app = App::new_for_remote(Some("ses_resume_done".to_string()));
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+
+    app.handle_server_event(
+        crate::protocol::ServerEvent::History {
+            id: 1,
+            session_id: "ses_resume_done".to_string(),
+            messages: vec![crate::protocol::HistoryMessage {
+                role: "assistant".to_string(),
+                content: "완료했습니다.".to_string(),
+                tool_calls: None,
+                tool_data: None,
+            }],
+            images: vec![],
+            provider_name: Some("openai".to_string()),
+            provider_model: Some("gpt-5.5".to_string()),
+            subagent_model: None,
+            autoreview_enabled: None,
+            autojudge_enabled: None,
+            available_models: vec![],
+            available_model_routes: vec![],
+            mcp_servers: vec![],
+            skills: vec![],
+            total_tokens: None,
+            all_sessions: vec![],
+            client_count: None,
+            is_canary: None,
+            server_version: None,
+            server_name: None,
+            server_icon: None,
+            server_has_update: None,
+            was_interrupted: None,
+            reload_recovery: None,
+            connection_type: Some("websocket/persistent-reuse".to_string()),
+            status_detail: Some("reusing websocket".to_string()),
+            upstream_provider: None,
+            reasoning_effort: None,
+            service_tier: None,
+            working_dir: None,
+            compaction_mode: crate::config::CompactionMode::Reactive,
+            activity: Some(crate::protocol::SessionActivitySnapshot {
+                is_processing: true,
+                current_tool_name: None,
+            }),
+            side_panel: crate::side_panel::SidePanelSnapshot::default(),
+        },
+        &mut remote,
+    );
+
+    assert!(!app.is_processing());
+    assert!(matches!(app.status, ProcessingStatus::Idle));
+    assert!(app.processing_started.is_none());
+    assert!(app.last_stream_activity.is_none());
+    assert_eq!(
+        app.display_messages().last().map(|message| message.content.as_str()),
+        Some("완료했습니다.")
+    );
+}
+
+#[test]
 fn test_handle_server_event_side_panel_state_updates_snapshot() {
     let mut app = create_test_app();
     let rt = tokio::runtime::Runtime::new().unwrap();
