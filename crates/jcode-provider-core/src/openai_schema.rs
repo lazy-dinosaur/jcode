@@ -162,11 +162,52 @@ fn flatten_all_of_schema(mut map: serde_json::Map<String, Value>) -> Value {
     Value::Object(merged)
 }
 
+/// OpenAI's JSON-schema regex engine (used for `pattern` / `patternProperties`)
+/// does not support lookaround (lookahead/lookbehind) constructs. A `pattern`
+/// such as `^(?!undefined$|null$)` causes the whole request to be rejected with
+/// `invalid_json_schema: regex lookaround is not supported`. These constraints
+/// are advisory for tool-argument validation, so dropping the offending pattern
+/// keeps the tool usable instead of failing the entire turn.
+fn regex_pattern_has_lookaround(pattern: &str) -> bool {
+    let bytes = pattern.as_bytes();
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        // Skip escaped characters so `\(` is not treated as a group opener.
+        if bytes[i] == b'\\' {
+            i += 2;
+            continue;
+        }
+        if bytes[i] == b'(' && bytes[i + 1] == b'?' {
+            // Lookahead: (?= (?!   Lookbehind: (?<= (?<!
+            match bytes.get(i + 2) {
+                Some(b'=') | Some(b'!') => return true,
+                Some(b'<') => {
+                    if matches!(bytes.get(i + 3), Some(b'=') | Some(b'!')) {
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
 pub fn openai_compatible_schema(schema: &Value) -> Value {
     match schema {
         Value::Object(map) => {
             let mut out = serde_json::Map::new();
             for (key, value) in map {
+                // Strip `pattern` constraints that rely on lookaround, which the
+                // OpenAI schema validator rejects outright.
+                if key == "pattern" {
+                    if let Some(pattern) = value.as_str() {
+                        if regex_pattern_has_lookaround(pattern) {
+                            continue;
+                        }
+                    }
+                }
                 let normalized_key = if key == "oneOf" { "anyOf" } else { key };
                 out.insert(normalized_key.to_string(), openai_compatible_schema(value));
             }
@@ -502,5 +543,52 @@ mod tests {
             json!("integer")
         );
         assert_eq!(normalized["required"], json!(["file_path"]));
+    }
+
+    #[test]
+    fn openai_compatible_schema_strips_lookaround_patterns() {
+        // Mirrors the Figma MCP `fileKey` schema that breaks OpenAI strict mode:
+        // `invalid_json_schema: regex lookaround is not supported`.
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "fileKey": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^(?!undefined$|null$)"
+                },
+                "name": {
+                    "type": "string",
+                    "pattern": "^[a-z]+$"
+                }
+            },
+            "required": ["fileKey"]
+        });
+
+        let normalized = openai_compatible_schema(&schema);
+
+        // Lookahead pattern is dropped, but the rest of the field is preserved.
+        assert!(normalized["properties"]["fileKey"].get("pattern").is_none());
+        assert_eq!(normalized["properties"]["fileKey"]["type"], json!("string"));
+        assert_eq!(normalized["properties"]["fileKey"]["minLength"], json!(1));
+        // Plain patterns without lookaround are left intact.
+        assert_eq!(
+            normalized["properties"]["name"]["pattern"],
+            json!("^[a-z]+$")
+        );
+    }
+
+    #[test]
+    fn regex_pattern_lookaround_detection() {
+        use super::regex_pattern_has_lookaround as has;
+        assert!(has("^(?!undefined$|null$)"));
+        assert!(has("(?=foo)"));
+        assert!(has("(?<=bar)"));
+        assert!(has("(?<!baz)"));
+        assert!(!has("^[a-z]+$"));
+        assert!(!has("(?:non-capturing)"));
+        assert!(!has("(?i)case-insensitive-flag"));
+        // Escaped paren must not be treated as a group opener.
+        assert!(!has(r"\(?=literal"));
     }
 }
